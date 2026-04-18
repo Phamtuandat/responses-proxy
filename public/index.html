@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Responses Proxy Monitor</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <main class="panel">
+        <header class="hero">
+          <div class="hero-brand">
+            <img src="/logo.svg" alt="Responses Proxy" class="hero-logo" />
+          </div>
+          <h1>Responses Proxy</h1>
+          <p>Simple runtime controls for provider, model, and cache.</p>
+        </header>
+
+        <nav class="topnav" aria-label="Sections">
+          <a href="#/dashboard" data-route-link>Dashboard</a>
+          <a href="#/provider-edit" data-route-link>Provider Editor</a>
+          <a href="#/cache" data-route-link>Cache</a>
+        </nav>
+
+        <div class="screens">
+          <section id="screen-dashboard" class="screen">
+            <div class="section">
+              <div class="row">
+                <div>
+                  <h2>Overview</h2>
+                  <p>Inspect runtime providers and general cache usage.</p>
+                </div>
+                <div class="row-wrap">
+                  <a class="button-link button-link-muted" href="#/provider-edit">New provider</a>
+                </div>
+              </div>
+
+              <div class="mini-grid" style="margin-top:14px;">
+                <div class="mini-card"><span>Total providers</span><strong id="statProviders">-</strong></div>
+                <div class="mini-card"><span>Editable providers</span><strong id="statCustomProviders">-</strong></div>
+                <div class="mini-card"><span>Current model</span><strong id="statCurrentModel">-</strong></div>
+                <div class="mini-card"><span>Model mode</span><strong id="statModelMode">-</strong></div>
+                <div class="mini-card"><span>Cache status</span><strong id="statCacheStatus">-</strong></div>
+                <div class="mini-card"><span>Cached tokens</span><strong id="statCachedTokens">-</strong></div>
+                <div class="mini-card"><span>Latest cache saved</span><strong id="statCacheSaved">-</strong></div>
+                <div class="mini-card"><span>Hit streak</span><strong id="statCacheHitStreak">-</strong></div>
+                <div class="mini-card"><span>Last request</span><strong id="statLastRequestId">-</strong></div>
+              </div>
+
+              <div class="row" style="margin-top:18px;">
+                <div>
+                  <h3>Usage Stats</h3>
+                  <p>Daily and monthly cache usage from local session logs.</p>
+                </div>
+              </div>
+
+              <div class="stats-split" style="margin-top:14px;">
+                <section class="section section-nested">
+                  <h3>Today</h3>
+                  <div class="mini-grid compact-grid">
+                    <div class="mini-card"><span>Requests</span><strong id="statsTodayRequests">-</strong></div>
+                    <div class="mini-card"><span>Hits</span><strong id="statsTodayHits">-</strong></div>
+                    <div class="mini-card"><span>Hit rate</span><strong id="statsTodayHitRate">-</strong></div>
+                    <div class="mini-card"><span>Cached tokens</span><strong id="statsTodayCachedTokens">-</strong></div>
+                    <div class="mini-card"><span>Input tokens</span><strong id="statsTodayInputTokens">-</strong></div>
+                    <div class="mini-card"><span>Avg saved</span><strong id="statsTodayAvgSaved">-</strong></div>
+                  </div>
+                </section>
+                <section class="section section-nested">
+                  <h3>This Month</h3>
+                  <div class="mini-grid compact-grid">
+                    <div class="mini-card"><span>Requests</span><strong id="statsMonthRequests">-</strong></div>
+                    <div class="mini-card"><span>Hits</span><strong id="statsMonthHits">-</strong></div>
+                    <div class="mini-card"><span>Hit rate</span><strong id="statsMonthHitRate">-</strong></div>
+                    <div class="mini-card"><span>Cached tokens</span><strong id="statsMonthCachedTokens">-</strong></div>
+                    <div class="mini-card"><span>Input tokens</span><strong id="statsMonthInputTokens">-</strong></div>
+                    <div class="mini-card"><span>Avg saved</span><strong id="statsMonthAvgSaved">-</strong></div>
+                  </div>
+                </section>
+              </div>
+
+              <div style="margin-top:14px; overflow:auto;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Requests</th>
+                      <th>Hits</th>
+                      <th>Hit rate</th>
+                      <th>Cached tokens</th>
+                      <th>Avg saved</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dailyStatsTableBody">
+                    <tr>
+                      <td colspan="6" class="mono">Loading usage stats...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="row" style="margin-top:18px;">
+                <div>
+                  <h3>Providers</h3>
+                  <p>Standard access only needs the base URL and <span class="mono">Authorization: Bearer &lt;provider-api-key&gt;</span>. Advanced client-specific overrides are optional.</p>
+                </div>
+              </div>
+
+              <div style="margin-top:14px; overflow:auto;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Provider ID</th>
+                      <th>Base URL</th>
+                      <th>API Keys</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="providerTableBody">
+                    <tr>
+                      <td colspan="5" class="mono">Loading providers...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="meta" id="providerMeta">Endpoint: GET /api/providers</div>
+            </div>
+
+          </section>
+
+          <section id="screen-provider-edit" class="screen">
+            <div class="section">
+              <div class="row">
+                <div>
+                  <h2>Provider Editor</h2>
+                  <p>Create a provider or update one existing provider.</p>
+                </div>
+                <div id="providerEditorPill" class="pill">Create mode</div>
+              </div>
+              <div class="row-wrap" style="margin-top:14px;">
+                <div style="flex:1; min-width:180px;">
+                  <label for="customProviderName">Custom name</label>
+                  <input id="customProviderName" type="text" placeholder="custom" />
+                </div>
+                <div style="flex:2; min-width:260px;">
+                  <label for="customProviderBaseUrl">Custom base URL</label>
+                  <input id="customProviderBaseUrl" type="text" placeholder="https://host/v1" />
+                </div>
+              </div>
+              <div class="row-wrap" style="margin-top:12px;">
+                <div style="flex:1; min-width:260px;">
+                  <div class="row" style="align-items:flex-end;">
+                    <label for="customProviderApiKey">Provider API keys</label>
+                    <button id="addProviderApiKeyBtn" type="button" class="table-button">Add API key</button>
+                  </div>
+                  <div id="providerApiKeysList" class="api-key-list"></div>
+                  <template id="providerApiKeyTemplate">
+                    <div class="api-key-row">
+                      <input class="provider-api-key-input" type="password" placeholder="sk-..." />
+                      <button type="button" class="table-button provider-api-key-remove">Remove</button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <div class="row-wrap" style="margin-top:12px;">
+                <div>
+                  <button id="customProviderBtn" type="button">Save provider</button>
+                </div>
+                <div>
+                  <button id="providerDeleteBtn" type="button">Delete provider</button>
+                </div>
+                <div>
+                  <a class="button-link button-link-muted" href="#/dashboard">Back to dashboard</a>
+                </div>
+              </div>
+              <input id="providerEditorId" type="hidden" />
+              <div class="meta" id="providerEditorMeta">Endpoint: POST /api/providers, PUT /api/providers/:providerId</div>
+            </div>
+          </section>
+
+          <section id="screen-krouter" class="screen">
+            <div class="section">
+              <h2>KRouter Token Check</h2>
+              <p>Check usage without affecting the provider or model controls.</p>
+              <form id="check-form">
+                <div>
+                  <label for="apiKey">KRouter API key</label>
+                  <input id="apiKey" name="apiKey" type="password" placeholder="sk-..." autocomplete="off" required />
+                </div>
+                <button id="submitBtn" type="submit">Check token</button>
+              </form>
+              <div id="status" class="status" hidden></div>
+              <div class="cards">
+                <section class="card">
+                  <span>Allowed</span>
+                  <strong id="allowed">-</strong>
+                </section>
+                <section class="card">
+                  <span>Remaining</span>
+                  <strong id="remaining">-</strong>
+                </section>
+                <section class="card">
+                  <span>Used / Limit</span>
+                  <strong id="usedLimit">-</strong>
+                </section>
+              </div>
+              <div class="meta">Endpoint: POST /api/krouter/check-token</div>
+              <pre id="raw">{}</pre>
+            </div>
+          </section>
+
+          <section id="screen-cache" class="screen">
+            <div class="section">
+              <div class="row">
+                <div>
+                  <h2>Latest Cache Snapshot</h2>
+                  <p>Only refresh the cache screen while you are viewing it.</p>
+                </div>
+                <div id="cachePill" class="pill">Loading...</div>
+              </div>
+              <div class="mini-grid">
+                <div class="mini-card"><span>Request ID</span><strong id="cacheRequestId">-</strong></div>
+                <div class="mini-card"><span>Model</span><strong id="cacheModel">-</strong></div>
+                <div class="mini-card"><span>Prompt cache key</span><strong id="cacheKey">-</strong></div>
+                <div class="mini-card"><span>Retention</span><strong id="cacheRetention">-</strong></div>
+                <div class="mini-card"><span>Cached tokens</span><strong id="cacheTokens">-</strong></div>
+                <div class="mini-card"><span>Cache saved %</span><strong id="cacheSavedPercent">-</strong></div>
+                <div class="mini-card"><span>Consecutive hits</span><strong id="cacheHitStreak">-</strong></div>
+                <div class="mini-card"><span>Target / Stream</span><strong id="cacheTarget">-</strong></div>
+                <div class="mini-card"><span>Truncation</span><strong id="cacheTruncation">-</strong></div>
+                <div class="mini-card"><span>Reasoning / Text</span><strong id="cacheReasoning">-</strong></div>
+              </div>
+              <div class="meta">Endpoint: GET /api/debug/prompt-cache/latest</div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
