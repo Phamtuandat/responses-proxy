@@ -9,13 +9,18 @@ const envSchema = z.object({
   HOST: z.string().min(1).default("0.0.0.0"),
   UPSTREAM_BASE_URL: z.url(),
   UPSTREAM_API_KEY: z.string().optional(),
-  KROUTER_USAGE_CHECK_URL: z.url().default("https://krouter.net/api/keys/check-usage"),
-  KROUTER_USAGE_CHECK_ENABLED: z
+  PROVIDER_USAGE_CHECK_URL: z
+    .string()
+    .optional()
+    .transform((value) => (value?.trim() ? value.trim() : undefined))
+    .pipe(z.url().optional()),
+  PROVIDER_USAGE_CHECK_ENABLED: z
     .string()
     .optional()
     .transform((value) => value !== "false"),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
   STREAM_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(330_000),
+  REQUEST_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
@@ -51,12 +56,34 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value !== "false"),
   OPENCLAW_PROMPT_CACHE_RETENTION: z.string().min(1).default("24h"),
-  OPENCLAW_DEFAULT_TRUNCATION: z.enum(["auto", "disabled"]).default("auto"),
-  STRIP_MAX_OUTPUT_TOKENS_FOR_KROUTER: z
+  PROVIDER_PROMPT_CACHE_REDESIGN_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  PROVIDER_PROMPT_CACHE_STABLE_SUMMARIZATION_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  PROVIDER_PROMPT_CACHE_INFLIGHT_DEDUPE_ENABLED: z
     .string()
     .optional()
     .transform((value) => value !== "false"),
-  SANITIZE_REASONING_SUMMARY_FOR_KROUTER: z
+  PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  PROVIDER_PROMPT_CACHE_SUMMARY_TRIGGER_ITEMS: z.coerce.number().int().positive().default(14),
+  PROVIDER_PROMPT_CACHE_SUMMARY_KEEP_RECENT_ITEMS: z.coerce.number().int().positive().default(6),
+  PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY: z
+    .string()
+    .optional()
+    .transform(parsePromptCacheFamilyRetentionRules),
+  OPENCLAW_DEFAULT_TRUNCATION: z.enum(["auto", "disabled"]).default("auto"),
+  STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  SANITIZE_REASONING_SUMMARY_FOR_PROVIDER: z
     .string()
     .optional()
     .transform((value) => value !== "false"),
@@ -75,17 +102,11 @@ const envSchema = z.object({
   APP_DB_PATH: z.string().min(1).default("./logs/app.sqlite"),
   SESSION_LOG_DIR: z.string().min(1).default("./logs/sessions"),
   SESSION_LOG_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(14),
-  DEFAULT_MODEL_CONTEXT_LENGTH: z.coerce.number().int().positive().default(256_000),
-  MODEL_CONTEXT_LENGTH_MAP: z
-    .string()
-    .default(
-      "cx/gpt-5.4=1000000,gpt-5.4=1000000,cx/gpt-5.4-xhigh=1000000,gpt-5.4-xhigh=1000000,cx/gpt-5.4-mini=256000,gpt-5.4-mini=256000",
-    )
-    .transform(parseModelContextLengthMap),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {
   upstreamResponsesUrl: string;
+  PROVIDER_USAGE_CHECK_URL?: string;
   fallback?: {
     name: string;
     responsesUrl: string;
@@ -117,6 +138,33 @@ export function readConfig(env: NodeJS.ProcessEnv): AppConfig {
   };
 }
 
+function parsePromptCacheFamilyRetentionRules(
+  raw: string | undefined,
+): Array<{ prefix: string; retention: string }> {
+  if (!raw?.trim()) {
+    return [];
+  }
+
+  return raw
+    .split(",")
+    .map((entry) => {
+      const separatorIndex = entry.indexOf("=");
+      if (separatorIndex <= 0) {
+        return undefined;
+      }
+      const prefix = entry.slice(0, separatorIndex).trim();
+      const retention = entry.slice(separatorIndex + 1).trim();
+      if (!prefix || !retention) {
+        return undefined;
+      }
+      return {
+        prefix,
+        retention,
+      };
+    })
+    .filter((entry): entry is { prefix: string; retention: string } => Boolean(entry));
+}
+
 function parseFallbackStatusCodes(raw: string): number[] {
   const codes = raw
     .split(",")
@@ -124,26 +172,4 @@ function parseFallbackStatusCodes(raw: string): number[] {
     .filter((value) => Number.isInteger(value) && value >= 400 && value <= 599);
 
   return codes.length > 0 ? codes : [429, 500, 502, 503, 504];
-}
-
-function parseModelContextLengthMap(raw: string): Record<string, number> {
-  const entries = raw
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const separatorIndex = entry.indexOf("=");
-      if (separatorIndex <= 0) {
-        return undefined;
-      }
-      const model = entry.slice(0, separatorIndex).trim();
-      const value = Number(entry.slice(separatorIndex + 1).trim());
-      if (!model || !Number.isInteger(value) || value <= 0) {
-        return undefined;
-      }
-      return [model, value] as const;
-    })
-    .filter((entry): entry is readonly [string, number] => Array.isArray(entry));
-
-  return Object.fromEntries(entries);
 }

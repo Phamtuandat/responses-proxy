@@ -1,5 +1,6 @@
 import type { ProxyResponsesRequest } from "./schema.js";
 import { createHash } from "node:crypto";
+import { buildPromptCacheLayout, type PromptCacheLayout } from "./prompt-cache.js";
 
 type NormalizeRequestOptions = {
   openClawTokenOptimizationEnabled?: boolean;
@@ -12,6 +13,17 @@ type NormalizeRequestOptions = {
   defaultTruncation?: "auto" | "disabled";
   stripMaxOutputTokens?: boolean;
   sanitizeReasoningSummary?: boolean;
+  promptCacheRedesignEnabled?: boolean;
+  promptCacheStableSummarizationEnabled?: boolean;
+  promptCacheSummaryTriggerItems?: number;
+  promptCacheSummaryKeepRecentItems?: number;
+  promptCacheRetentionByFamilyEnabled?: boolean;
+  promptCacheRetentionByFamilyRules?: Array<{ prefix: string; retention: string }>;
+};
+
+export type NormalizedResponsesRequestResult = {
+  request: Record<string, unknown>;
+  cacheLayout: PromptCacheLayout;
 };
 
 type ResponsesInputPart = {
@@ -48,7 +60,7 @@ function normalizeInstructions(instructions: string | undefined): string | undef
   const trimmed = instructions
     ?.replace(/\r\n/g, "\n")
     .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n{2,}/g, "\n")
     .trim();
   return trimmed ? trimmed : undefined;
 }
@@ -279,6 +291,13 @@ export function normalizeResponsesRequest(
   body: ProxyResponsesRequest,
   options: NormalizeRequestOptions = {},
 ): Record<string, unknown> {
+  return normalizeResponsesRequestWithCache(body, options).request;
+}
+
+export function normalizeResponsesRequestWithCache(
+  body: ProxyResponsesRequest,
+  options: NormalizeRequestOptions = {},
+): NormalizedResponsesRequestResult {
   const normalizedBase =
     body.input !== undefined ? normalizeDirectInput(body) : convertMessagesToInput(body);
   const isOpenClaw = options.openClawTokenOptimizationEnabled
@@ -361,7 +380,9 @@ export function normalizeResponsesRequest(
   }
 
   if (body.metadata !== undefined) {
-    request.metadata = normalizeMetadata(body.metadata, { stripVolatileKeys: isOpenClaw });
+    request.metadata = normalizeMetadata(body.metadata, {
+      stripVolatileKeys: isOpenClaw || options.promptCacheRedesignEnabled,
+    });
   }
 
   if (body.user !== undefined) {
@@ -382,19 +403,46 @@ export function normalizeResponsesRequest(
     request.include = normalizeInclude(body.include);
   }
 
+  const cacheLayout = buildPromptCacheLayout(request, {
+    enabled: options.promptCacheRedesignEnabled,
+    stableSummarizationEnabled: options.promptCacheStableSummarizationEnabled,
+    summaryTriggerItems: options.promptCacheSummaryTriggerItems,
+    summaryKeepRecentItems: options.promptCacheSummaryKeepRecentItems,
+    defaultRetention: options.defaultPromptCacheRetention,
+    retentionByFamilyEnabled: options.promptCacheRetentionByFamilyEnabled,
+    familyRetentionRules: options.promptCacheRetentionByFamilyRules,
+  });
+
   if (body.prompt_cache_key !== undefined) {
     request.prompt_cache_key = body.prompt_cache_key;
+  } else if (cacheLayout.promptCacheKey) {
+    request.prompt_cache_key = cacheLayout.promptCacheKey;
   } else if (isOpenClaw && options.autoPromptCacheKey) {
     request.prompt_cache_key = buildOpenClawPromptCacheKey(body, request);
   }
 
   if (body.prompt_cache_retention !== undefined) {
     request.prompt_cache_retention = body.prompt_cache_retention;
+  } else if (cacheLayout.promptCacheRetention) {
+    request.prompt_cache_retention = cacheLayout.promptCacheRetention;
   } else if (request.prompt_cache_key !== undefined && options.defaultPromptCacheRetention) {
     request.prompt_cache_retention = options.defaultPromptCacheRetention;
   }
 
-  return request;
+  const finalCacheLayout: PromptCacheLayout = {
+    ...cacheLayout,
+    promptCacheKey:
+      typeof request.prompt_cache_key === "string" ? request.prompt_cache_key : cacheLayout.promptCacheKey,
+    promptCacheRetention:
+      typeof request.prompt_cache_retention === "string"
+        ? request.prompt_cache_retention
+        : cacheLayout.promptCacheRetention,
+  };
+
+  return {
+    request,
+    cacheLayout: finalCacheLayout,
+  };
 }
 
 function isLikelyHermesPayload(
@@ -513,13 +561,20 @@ function normalizeInputItem(item: unknown): unknown {
   const normalized = sortObjectKeys(item);
   if (normalized.role === "tool") {
     const output = readToolContent(normalized.content);
-    if (typeof normalized.tool_call_id === "string" && normalized.tool_call_id.trim() && output) {
+    if (typeof normalized.tool_call_id === "string" && normalized.tool_call_id.trim()) {
       return {
         type: "function_call_output",
         call_id: normalized.tool_call_id.trim(),
         output,
       };
     }
+
+    // Never let legacy `role: "tool"` leak upstream. If the call id is missing,
+    // downgrade the content into a plain assistant message instead of failing.
+    return {
+      role: "assistant",
+      content: output,
+    };
   }
 
   if (normalized.type === "function_call" && typeof normalized.arguments === "string") {

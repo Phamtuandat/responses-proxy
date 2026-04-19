@@ -1,19 +1,27 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
+import BetterSqlite3 from "better-sqlite3";
 import type { AppConfig } from "./config.js";
+type Database = InstanceType<typeof BetterSqlite3>;
 
-const moduleRequire = createRequire(import.meta.url);
-let sqlJsPromise: Promise<SqlJsStatic> | undefined;
+export type RuntimeProviderCapabilities = {
+  ownedBy?: string;
+  usageCheckEnabled: boolean;
+  usageCheckUrl?: string;
+  stripMaxOutputTokens: boolean;
+  sanitizeReasoningSummary: boolean;
+  stripModelPrefixes: string[];
+};
 
 export type RuntimeProviderPreset = {
   id: string;
   name: string;
   baseUrl: string;
   responsesUrl: string;
-  apiKeys: string[];
+  providerApiKeys: string[];
+  clientApiKeys: string[];
+  capabilities: RuntimeProviderCapabilities;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -36,15 +44,22 @@ export type RuntimeProviderInput = {
   baseUrl?: unknown;
   apiKey?: unknown;
   apiKeys?: unknown;
+  providerApiKeys?: unknown;
+  clientApiKeys?: unknown;
+  capabilities?: unknown;
 };
 
 export type RuntimeProviderView = {
   id: string;
   name: string;
   baseUrl: string;
-  hasApiKey: boolean;
-  apiKeys: string[];
-  apiKeysCount: number;
+  hasProviderApiKey: boolean;
+  providerApiKeys: string[];
+  providerApiKeysCount: number;
+  hasClientApiKey: boolean;
+  clientApiKeys: string[];
+  clientApiKeysCount: number;
+  capabilities: RuntimeProviderCapabilities;
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -59,7 +74,9 @@ export type ClientRouteView = {
 type ValidatedProviderInput = {
   name: string;
   baseUrl: string;
-  apiKeys: string[];
+  providerApiKeys: string[];
+  clientApiKeys: string[];
+  capabilities: RuntimeProviderCapabilities;
 };
 
 type RuntimeProviderRepositoryOptions = {
@@ -73,6 +90,12 @@ type ProviderRow = {
   name: string;
   base_url: string;
   responses_url: string;
+  owned_by: string | null;
+  usage_check_enabled: number | null;
+  usage_check_url: string | null;
+  strip_max_output_tokens: number | null;
+  sanitize_reasoning_summary: number | null;
+  strip_model_prefixes: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -137,8 +160,7 @@ export class RuntimeProviderRepository {
   static async create(
     options: RuntimeProviderRepositoryOptions,
   ): Promise<RuntimeProviderRepository> {
-    const SQL = await loadSqlJs();
-    const db = openDatabase(SQL, options.dbFile);
+    const db = openDatabase(options.dbFile);
     ensureSchema(db);
 
     const stateFromDb = readStateFromDatabase(db);
@@ -250,12 +272,24 @@ export class RuntimeProviderRepository {
     return this.providerPresets.find((provider) => provider.id === id);
   }
 
-  findProviderByApiKey(apiKey?: string): RuntimeProviderPreset | undefined {
+  findProviderByClientApiKey(apiKey?: string): RuntimeProviderPreset | undefined {
     const normalized = typeof apiKey === "string" ? apiKey.trim() : "";
     if (!normalized) {
       return undefined;
     }
-    return this.providerPresets.find((provider) => provider.apiKeys.includes(normalized));
+    return this.providerPresets.find((provider) => provider.clientApiKeys.includes(normalized));
+  }
+
+  findProviderByProviderApiKey(apiKey?: string): RuntimeProviderPreset | undefined {
+    const normalized = typeof apiKey === "string" ? apiKey.trim() : "";
+    if (!normalized) {
+      return undefined;
+    }
+    return this.providerPresets.find((provider) => provider.providerApiKeys.includes(normalized));
+  }
+
+  findProviderByAccessKey(apiKey?: string): RuntimeProviderPreset | undefined {
+    return this.findProviderByClientApiKey(apiKey) ?? this.findProviderByProviderApiKey(apiKey);
   }
 
   getProviderOrThrow(id?: string): RuntimeProviderPreset {
@@ -306,7 +340,9 @@ export class RuntimeProviderRepository {
       name: validated.name,
       baseUrl: validated.baseUrl,
       responsesUrl: toResponsesUrl(validated.baseUrl),
-      apiKeys: validated.apiKeys,
+      providerApiKeys: validated.providerApiKeys,
+      clientApiKeys: validated.clientApiKeys,
+      capabilities: validated.capabilities,
       createdAt: now,
       updatedAt: now,
     };
@@ -326,7 +362,9 @@ export class RuntimeProviderRepository {
       name: validated.name,
       baseUrl: validated.baseUrl,
       responsesUrl: toResponsesUrl(validated.baseUrl),
-      apiKeys: validated.apiKeys,
+      providerApiKeys: validated.providerApiKeys,
+      clientApiKeys: validated.clientApiKeys,
+      capabilities: validated.capabilities,
       updatedAt: new Date().toISOString(),
     };
     this.providerPresets = this.providerPresets.map((provider) =>
@@ -373,16 +411,29 @@ export class RuntimeProviderRepository {
       });
     }
 
-    const conflictingApiKey = input.apiKeys.find((apiKey) =>
+    const conflictingProviderApiKey = input.providerApiKeys.find((apiKey) =>
       this.providerPresets.some(
-        (provider) => provider.id !== ignoreId && provider.apiKeys.includes(apiKey),
+        (provider) => provider.id !== ignoreId && provider.providerApiKeys.includes(apiKey),
       ),
     );
-    if (conflictingApiKey) {
+    if (conflictingProviderApiKey) {
       throw new RuntimeProviderError(409, {
         type: "validation_error",
-        code: "API_KEY_ALREADY_EXISTS",
-        message: "An API key is already assigned to another provider",
+        code: "PROVIDER_API_KEY_ALREADY_EXISTS",
+        message: "A provider API key is already assigned to another provider",
+      });
+    }
+
+    const conflictingClientApiKey = input.clientApiKeys.find((apiKey) =>
+      this.providerPresets.some(
+        (provider) => provider.id !== ignoreId && provider.clientApiKeys.includes(apiKey),
+      ),
+    );
+    if (conflictingClientApiKey) {
+      throw new RuntimeProviderError(409, {
+        type: "validation_error",
+        code: "CLIENT_API_KEY_ALREADY_EXISTS",
+        message: "A client API key is already assigned to another provider",
       });
     }
   }
@@ -390,7 +441,12 @@ export class RuntimeProviderRepository {
   private parseProviderInput(body: RuntimeProviderInput): ValidatedProviderInput {
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
-    const apiKeys = normalizeApiKeysInput(body.apiKeys, body.apiKey);
+    const providerApiKeys = normalizeApiKeysInput(
+      body.providerApiKeys,
+      body.apiKeys,
+      body.apiKey,
+    );
+    const clientApiKeys = normalizeApiKeysInput(body.clientApiKeys);
 
     if (!name) {
       throw new RuntimeProviderError(400, {
@@ -414,7 +470,9 @@ export class RuntimeProviderRepository {
     return {
       name,
       baseUrl: parsedBaseUrl.toString().replace(/\/+$/, ""),
-      apiKeys,
+      providerApiKeys,
+      clientApiKeys: clientApiKeys.length > 0 ? clientApiKeys : [...providerApiKeys],
+      capabilities: parseProviderCapabilitiesInput(body.capabilities),
     };
   }
 
@@ -423,9 +481,13 @@ export class RuntimeProviderRepository {
       id: provider.id,
       name: provider.name,
       baseUrl: provider.baseUrl,
-      hasApiKey: provider.apiKeys.length > 0,
-      apiKeys: [...provider.apiKeys],
-      apiKeysCount: provider.apiKeys.length,
+      hasProviderApiKey: provider.providerApiKeys.length > 0,
+      providerApiKeys: [...provider.providerApiKeys],
+      providerApiKeysCount: provider.providerApiKeys.length,
+      hasClientApiKey: provider.clientApiKeys.length > 0,
+      clientApiKeys: [...provider.clientApiKeys],
+      clientApiKeysCount: provider.clientApiKeys.length,
+      capabilities: cloneCapabilities(provider.capabilities),
       createdAt: provider.createdAt ?? null,
       updatedAt: provider.updatedAt ?? null,
     };
@@ -463,20 +525,38 @@ export class RuntimeProviderRepository {
   }
 
   private persistRuntimeState(): void {
-    this.db.run("BEGIN");
+    this.db.exec("BEGIN");
     try {
-      this.db.run("DELETE FROM provider_api_keys");
-      this.db.run("DELETE FROM providers");
-      this.db.run("DELETE FROM client_routes");
-      this.db.run("DELETE FROM model_overrides");
-      this.db.run("DELETE FROM app_state");
+      this.db.exec("DELETE FROM provider_api_keys");
+      this.db.exec("DELETE FROM client_api_keys");
+      this.db.exec("DELETE FROM providers");
+      this.db.exec("DELETE FROM client_routes");
+      this.db.exec("DELETE FROM model_overrides");
+      this.db.exec("DELETE FROM app_state");
 
       const insertProvider = this.db.prepare(`
-        INSERT INTO providers (id, name, base_url, responses_url, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO providers (
+          id,
+          name,
+          base_url,
+          responses_url,
+          owned_by,
+          usage_check_enabled,
+          usage_check_url,
+          strip_max_output_tokens,
+          sanitize_reasoning_summary,
+          strip_model_prefixes,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertApiKey = this.db.prepare(`
         INSERT INTO provider_api_keys (provider_id, api_key, position)
+        VALUES (?, ?, ?)
+      `);
+      const insertClientApiKey = this.db.prepare(`
+        INSERT INTO client_api_keys (provider_id, api_key, position)
         VALUES (?, ?, ?)
       `);
       const insertClientRoute = this.db.prepare(`
@@ -493,40 +573,42 @@ export class RuntimeProviderRepository {
       `);
 
       for (const provider of this.providerPresets) {
-        insertProvider.run([
+        insertProvider.run(
           provider.id,
           provider.name,
           provider.baseUrl,
           provider.responsesUrl,
+          provider.capabilities.ownedBy ?? null,
+          provider.capabilities.usageCheckEnabled ? 1 : 0,
+          provider.capabilities.usageCheckUrl ?? null,
+          provider.capabilities.stripMaxOutputTokens ? 1 : 0,
+          provider.capabilities.sanitizeReasoningSummary ? 1 : 0,
+          JSON.stringify(provider.capabilities.stripModelPrefixes),
           provider.createdAt ?? null,
           provider.updatedAt ?? null,
-        ]);
-        provider.apiKeys.forEach((apiKey, index) => {
-          insertApiKey.run([provider.id, apiKey, index]);
+        );
+        provider.providerApiKeys.forEach((apiKey, index) => {
+          insertApiKey.run(provider.id, apiKey, index);
+        });
+        provider.clientApiKeys.forEach((apiKey, index) => {
+          insertClientApiKey.run(provider.id, apiKey, index);
         });
       }
 
       Object.entries(this.clientRoutes).forEach(([clientRoute, providerId]) => {
-        insertClientRoute.run([clientRoute, providerId]);
+        insertClientRoute.run(clientRoute, providerId);
       });
 
       Object.entries(this.modelOverrides).forEach(([clientRoute, model]) => {
-        insertModelOverride.run([clientRoute, model]);
+        insertModelOverride.run(clientRoute, model);
       });
 
-      insertAppState.run(["active_provider_id", this.activeProviderId]);
-      insertAppState.run(["model_override", this.modelOverrides.default ?? ""]);
+      insertAppState.run("active_provider_id", this.activeProviderId);
+      insertAppState.run("model_override", this.modelOverrides.default ?? "");
 
-      insertProvider.free();
-      insertApiKey.free();
-      insertClientRoute.free();
-      insertModelOverride.free();
-      insertAppState.free();
-
-      this.db.run("COMMIT");
-      persistDatabaseFile(this.dbFile, this.db);
+      this.db.exec("COMMIT");
     } catch (error) {
-      this.db.run("ROLLBACK");
+      this.db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -540,7 +622,9 @@ export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderP
       name: primaryIdentity.name,
       baseUrl: config.UPSTREAM_BASE_URL,
       responsesUrl: config.upstreamResponsesUrl,
-      apiKeys: normalizeApiKeys(config.UPSTREAM_API_KEY ? [config.UPSTREAM_API_KEY] : []),
+      providerApiKeys: normalizeApiKeys(config.UPSTREAM_API_KEY ? [config.UPSTREAM_API_KEY] : []),
+      clientApiKeys: normalizeApiKeys(config.UPSTREAM_API_KEY ? [config.UPSTREAM_API_KEY] : []),
+      capabilities: buildDefaultCapabilitiesFromConfig(config),
     },
   ];
 
@@ -552,41 +636,47 @@ export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderP
       name: fallbackIdentity.name,
       baseUrl: fallbackBaseUrl,
       responsesUrl: config.fallback.responsesUrl,
-      apiKeys: [],
+      providerApiKeys: [],
+      clientApiKeys: [],
+      capabilities: buildDefaultCapabilitiesFromConfig(config),
     });
   }
 
   return ensureUniqueProviderIds(presets);
 }
 
-async function loadSqlJs(): Promise<SqlJsStatic> {
-  sqlJsPromise ??= initSqlJs({
-    locateFile: (file: string) => moduleRequire.resolve(`sql.js/dist/${file}`),
-  });
-  return sqlJsPromise;
-}
-
-function openDatabase(SQL: SqlJsStatic, dbFile: string): Database {
+function openDatabase(dbFile: string): Database {
   mkdirSync(path.dirname(dbFile), { recursive: true });
-  if (existsSync(dbFile)) {
-    return new SQL.Database(readFileSync(dbFile));
-  }
-  return new SQL.Database();
+  return new BetterSqlite3(dbFile);
 }
 
 function ensureSchema(db: Database): void {
-  db.run("PRAGMA foreign_keys = ON");
-  db.run(`
+  db.pragma("foreign_keys = ON");
+  db.exec(`
     CREATE TABLE IF NOT EXISTS providers (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       base_url TEXT NOT NULL,
       responses_url TEXT NOT NULL,
+      owned_by TEXT,
+      usage_check_enabled INTEGER NOT NULL DEFAULT 0,
+      usage_check_url TEXT,
+      strip_max_output_tokens INTEGER NOT NULL DEFAULT 0,
+      sanitize_reasoning_summary INTEGER NOT NULL DEFAULT 0,
+      strip_model_prefixes TEXT NOT NULL DEFAULT '[]',
       created_at TEXT,
       updated_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS provider_api_keys (
+      provider_id TEXT NOT NULL,
+      api_key TEXT NOT NULL UNIQUE,
+      position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (provider_id, api_key),
+      FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS client_api_keys (
       provider_id TEXT NOT NULL,
       api_key TEXT NOT NULL UNIQUE,
       position INTEGER NOT NULL DEFAULT 0,
@@ -610,16 +700,40 @@ function ensureSchema(db: Database): void {
       value TEXT NOT NULL
     );
   `);
+  ensureProvidersColumn(db, "owned_by", "TEXT");
+  ensureProvidersColumn(db, "usage_check_enabled", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "usage_check_url", "TEXT");
+  ensureProvidersColumn(db, "strip_max_output_tokens", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "sanitize_reasoning_summary", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "strip_model_prefixes", "TEXT NOT NULL DEFAULT '[]'");
 }
 
 function readStateFromDatabase(db: Database): RuntimeProviderState {
   const providerRows = queryRows<ProviderRow>(
     db,
-    "SELECT id, name, base_url, responses_url, created_at, updated_at FROM providers ORDER BY name, id",
+    `SELECT
+      id,
+      name,
+      base_url,
+      responses_url,
+      owned_by,
+      usage_check_enabled,
+      usage_check_url,
+      strip_max_output_tokens,
+      sanitize_reasoning_summary,
+      strip_model_prefixes,
+      created_at,
+      updated_at
+    FROM providers
+    ORDER BY name, id`,
   );
   const apiKeyRows = queryRows<ApiKeyRow>(
     db,
     "SELECT provider_id, api_key FROM provider_api_keys ORDER BY provider_id, position, api_key",
+  );
+  const clientApiKeyRows = queryRows<ApiKeyRow>(
+    db,
+    "SELECT provider_id, api_key FROM client_api_keys ORDER BY provider_id, position, api_key",
   );
   const clientRouteRows = queryRows<RouteRow>(
     db,
@@ -634,11 +748,18 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
     "SELECT key, value FROM app_state ORDER BY key",
   );
 
-  const apiKeysByProvider = new Map<string, string[]>();
+  const providerApiKeysByProvider = new Map<string, string[]>();
   for (const row of apiKeyRows) {
-    const current = apiKeysByProvider.get(row.provider_id) ?? [];
+    const current = providerApiKeysByProvider.get(row.provider_id) ?? [];
     current.push(row.api_key);
-    apiKeysByProvider.set(row.provider_id, current);
+    providerApiKeysByProvider.set(row.provider_id, current);
+  }
+
+  const clientApiKeysByProvider = new Map<string, string[]>();
+  for (const row of clientApiKeyRows) {
+    const current = clientApiKeysByProvider.get(row.provider_id) ?? [];
+    current.push(row.api_key);
+    clientApiKeysByProvider.set(row.provider_id, current);
   }
 
   const providers = providerRows.map((row) => ({
@@ -646,7 +767,19 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
     name: row.name,
     baseUrl: row.base_url,
     responsesUrl: row.responses_url,
-    apiKeys: apiKeysByProvider.get(row.id) ?? [],
+    providerApiKeys: providerApiKeysByProvider.get(row.id) ?? [],
+    clientApiKeys:
+      clientApiKeysByProvider.get(row.id) ??
+      providerApiKeysByProvider.get(row.id) ??
+      [],
+    capabilities: {
+      ownedBy: row.owned_by ?? undefined,
+      usageCheckEnabled: row.usage_check_enabled === 1,
+      usageCheckUrl: row.usage_check_url?.trim() ? row.usage_check_url.trim() : undefined,
+      stripMaxOutputTokens: row.strip_max_output_tokens === 1,
+      sanitizeReasoningSummary: row.sanitize_reasoning_summary === 1,
+      stripModelPrefixes: normalizeStringList(row.strip_model_prefixes),
+    },
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
   }));
@@ -671,20 +804,7 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
 }
 
 function queryRows<T extends Record<string, unknown>>(db: Database, sql: string): T[] {
-  const result = db.exec(sql);
-  if (result.length === 0) {
-    return [];
-  }
-  const [table] = result;
-  const columns = table.columns;
-  return table.values.map((values: Array<string | number | null>) =>
-    Object.fromEntries(columns.map((column: string, index: number) => [column, values[index]])) as T,
-  );
-}
-
-function persistDatabaseFile(dbFile: string, db: Database): void {
-  mkdirSync(path.dirname(dbFile), { recursive: true });
-  writeFileSync(dbFile, Buffer.from(db.export()));
+  return db.prepare(sql).all() as T[];
 }
 
 function loadLegacyState(stateFile: string): RuntimeProviderState | undefined {
@@ -727,7 +847,12 @@ function sanitizeCustomProvider(value: unknown): RuntimeProviderPreset | undefin
   const id = typeof record.id === "string" ? record.id.trim() : "";
   const name = typeof record.name === "string" ? record.name.trim() : "";
   const baseUrl = typeof record.baseUrl === "string" ? record.baseUrl.trim() : "";
-  const apiKeys = normalizeApiKeysInput(record.apiKeys, record.apiKey);
+  const providerApiKeys = normalizeApiKeysInput(
+    record.providerApiKeys,
+    record.apiKeys,
+    record.apiKey,
+  );
+  const clientApiKeys = normalizeApiKeysInput(record.clientApiKeys);
   const createdAt =
     typeof record.createdAt === "string" && record.createdAt.trim()
       ? record.createdAt.trim()
@@ -736,6 +861,7 @@ function sanitizeCustomProvider(value: unknown): RuntimeProviderPreset | undefin
     typeof record.updatedAt === "string" && record.updatedAt.trim()
       ? record.updatedAt.trim()
       : undefined;
+  const capabilities = parseProviderCapabilitiesInput(record.capabilities);
 
   if (!id || !name || !baseUrl) {
     return undefined;
@@ -749,7 +875,9 @@ function sanitizeCustomProvider(value: unknown): RuntimeProviderPreset | undefin
       name,
       baseUrl: normalizedBaseUrl,
       responsesUrl: toResponsesUrl(normalizedBaseUrl),
-      apiKeys,
+      providerApiKeys,
+      clientApiKeys: clientApiKeys.length > 0 ? clientApiKeys : [...providerApiKeys],
+      capabilities,
       createdAt,
       updatedAt,
     };
@@ -804,17 +932,15 @@ function sanitizeModelOverrides(value: unknown): ClientModelOverrideMap {
   return next;
 }
 
-function normalizeApiKeysInput(apiKeysValue: unknown, legacyApiKeyValue?: unknown): string[] {
-  if (Array.isArray(apiKeysValue)) {
-    return normalizeApiKeys(apiKeysValue);
-  }
+function normalizeApiKeysInput(...values: unknown[]): string[] {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      return normalizeApiKeys(value);
+    }
 
-  if (typeof apiKeysValue === "string") {
-    return normalizeApiKeys(apiKeysValue.split(/\r?\n|,/g));
-  }
-
-  if (typeof legacyApiKeyValue === "string" && legacyApiKeyValue.trim()) {
-    return normalizeApiKeys([legacyApiKeyValue]);
+    if (typeof value === "string") {
+      return normalizeApiKeys(value.split(/\r?\n|,/g));
+    }
   }
 
   return [];
@@ -859,6 +985,7 @@ function migrateLegacyProvider(provider: RuntimeProviderPreset): RuntimeProvider
     ...provider,
     id: identity.id,
     name: identity.name,
+    capabilities: cloneCapabilities(provider.capabilities),
   };
 }
 
@@ -871,13 +998,6 @@ function inferProviderIdentity(
 } {
   try {
     const hostname = new URL(baseUrl).hostname.toLowerCase();
-    if (hostname === "api.krouter.net" || hostname === "krouter.net") {
-      return {
-        id: "krouter",
-        name: "krouter",
-      };
-    }
-
     const normalizedHost = hostname
       .replace(/^api\./, "")
       .replace(/^www\./, "")
@@ -947,7 +1067,10 @@ function shouldPersistSeededProviders(
       original.id !== provider.id ||
       original.name !== provider.name ||
       original.baseUrl !== provider.baseUrl ||
-      JSON.stringify(original.apiKeys) !== JSON.stringify(provider.apiKeys)
+      JSON.stringify(original.providerApiKeys) !== JSON.stringify(provider.providerApiKeys) ||
+      JSON.stringify(original.clientApiKeys) !== JSON.stringify(provider.clientApiKeys) ||
+      JSON.stringify(cloneCapabilities(original.capabilities)) !==
+        JSON.stringify(cloneCapabilities(provider.capabilities))
     );
   });
 }
@@ -958,4 +1081,104 @@ function normalizeProviderName(value: string): string {
 
 function toResponsesUrl(baseUrl: string): string {
   return baseUrl.endsWith("/v1") ? `${baseUrl}/responses` : `${baseUrl}/v1/responses`;
+}
+
+function buildDefaultCapabilitiesFromConfig(config: AppConfig): RuntimeProviderCapabilities {
+  return {
+    usageCheckEnabled: Boolean(
+      config.PROVIDER_USAGE_CHECK_ENABLED && config.PROVIDER_USAGE_CHECK_URL,
+    ),
+    usageCheckUrl: config.PROVIDER_USAGE_CHECK_URL,
+    stripMaxOutputTokens: config.STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER ?? false,
+    sanitizeReasoningSummary: config.SANITIZE_REASONING_SUMMARY_FOR_PROVIDER ?? false,
+    stripModelPrefixes: [],
+  };
+}
+
+function parseProviderCapabilitiesInput(value: unknown): RuntimeProviderCapabilities {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      usageCheckEnabled: false,
+      stripMaxOutputTokens: false,
+      sanitizeReasoningSummary: false,
+      stripModelPrefixes: [],
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  const ownedBy =
+    typeof record.ownedBy === "string" && record.ownedBy.trim()
+      ? record.ownedBy.trim()
+      : undefined;
+  const usageCheckUrl =
+    typeof record.usageCheckUrl === "string" && record.usageCheckUrl.trim()
+      ? normalizeOptionalUrl(record.usageCheckUrl)
+      : undefined;
+  return {
+    ownedBy,
+    usageCheckEnabled: coerceBoolean(record.usageCheckEnabled),
+    usageCheckUrl,
+    stripMaxOutputTokens: coerceBoolean(record.stripMaxOutputTokens),
+    sanitizeReasoningSummary: coerceBoolean(record.sanitizeReasoningSummary),
+    stripModelPrefixes: normalizeStringList(record.stripModelPrefixes),
+  };
+}
+
+function cloneCapabilities(
+  capabilities?: RuntimeProviderCapabilities,
+): RuntimeProviderCapabilities {
+  return {
+    ownedBy: capabilities?.ownedBy,
+    usageCheckEnabled: capabilities?.usageCheckEnabled ?? false,
+    usageCheckUrl: capabilities?.usageCheckUrl,
+    stripMaxOutputTokens: capabilities?.stripMaxOutputTokens ?? false,
+    sanitizeReasoningSummary: capabilities?.sanitizeReasoningSummary ?? false,
+    stripModelPrefixes: [...(capabilities?.stripModelPrefixes ?? [])],
+  };
+}
+
+function normalizeOptionalUrl(value: string): string {
+  try {
+    return new URL(value.trim()).toString();
+  } catch {
+    throw new RuntimeProviderError(400, {
+      type: "validation_error",
+      code: "INVALID_PROVIDER_CAPABILITIES",
+      message: "capabilities.usageCheckUrl must be a valid URL",
+    });
+  }
+}
+
+function coerceBoolean(value: unknown): boolean {
+  return value === true || value === "true" || value === 1 || value === "1";
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (Array.isArray(parsed)) {
+        return normalizeStringList(parsed);
+      }
+    } catch {
+      return normalizeApiKeys(value.split(/\r?\n|,/g));
+    }
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function ensureProvidersColumn(db: Database, columnName: string, sqlDefinition: string): void {
+  const columns = db.prepare("PRAGMA table_info(providers)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === columnName)) {
+    db.exec(`ALTER TABLE providers ADD COLUMN ${columnName} ${sqlDefinition}`);
+  }
 }

@@ -10,6 +10,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "check": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/**/*.test.ts",
     "app:install": "./scripts/install.sh",
     "app:start": "./scripts/start.sh",
     "app:stop": "./scripts/stop.sh",
@@ -21,11 +22,12 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "better-sqlite3": "^12.9.0",
     "fastify": "^5.6.1",
-    "sql.js": "^1.14.1",
     "zod": "^4.1.5"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"

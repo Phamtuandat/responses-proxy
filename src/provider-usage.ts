@@ -1,18 +1,18 @@
 import type { FastifyBaseLogger } from "fastify";
 
-export class KRouterUsageLimitError extends Error {
+export class ProviderUsageLimitError extends Error {
   readonly statusCode = 429;
-  readonly code = "KROUTER_TOKEN_LIMIT_REACHED";
-  readonly usage: KRouterUsageSnapshot;
+  readonly code = "PROVIDER_TOKEN_LIMIT_REACHED";
+  readonly usage: ProviderUsageSnapshot;
 
-  constructor(message: string, usage: KRouterUsageSnapshot) {
+  constructor(message: string, usage: ProviderUsageSnapshot) {
     super(message);
-    this.name = "KRouterUsageLimitError";
+    this.name = "ProviderUsageLimitError";
     this.usage = usage;
   }
 }
 
-export type KRouterUsageSnapshot = {
+export type ProviderUsageSnapshot = {
   allowed?: boolean;
   remaining?: number;
   limit?: number;
@@ -20,7 +20,7 @@ export type KRouterUsageSnapshot = {
   raw: unknown;
 };
 
-type CheckKRouterUsageArgs = {
+type CheckProviderUsageArgs = {
   apiKey?: string;
   requestId: string;
   logger: FastifyBaseLogger;
@@ -29,14 +29,14 @@ type CheckKRouterUsageArgs = {
   onEvent?: (entry: Record<string, unknown>) => Promise<void> | void;
 };
 
-export async function fetchKRouterUsage({
+export async function fetchProviderUsage({
   apiKey,
   requestId,
   logger,
   timeoutMs,
   url,
   onEvent,
-}: CheckKRouterUsageArgs): Promise<KRouterUsageSnapshot | undefined> {
+}: CheckProviderUsageArgs): Promise<ProviderUsageSnapshot | undefined> {
   if (!apiKey) {
     return undefined;
   }
@@ -65,10 +65,10 @@ export async function fetchKRouterUsage({
           usageCheckStatus: response.status,
           usageCheckBody: rawText,
         },
-        "krouter usage check request failed",
+        "provider usage check request failed",
       );
       await onEvent?.({
-        event: "krouter_usage_check_failed",
+        event: "provider_usage_check_failed",
         requestId,
         usageCheckStatus: response.status,
         usageCheckBody: rawText,
@@ -87,10 +87,10 @@ export async function fetchKRouterUsage({
         usageLimit: usage.limit,
         usageUsed: usage.used,
       },
-      "krouter usage check completed",
+      "provider usage check completed",
     );
     await onEvent?.({
-      event: "krouter_usage_checked",
+      event: "provider_usage_checked",
       requestId,
       usageCheckStatus: response.status,
       usageCheckMs: Date.now() - startedAt,
@@ -107,10 +107,10 @@ export async function fetchKRouterUsage({
         err: error,
         requestId,
       },
-      "krouter usage check skipped after request error",
+      "provider usage check skipped after request error",
     );
     await onEvent?.({
-      event: "krouter_usage_check_error",
+      event: "provider_usage_check_error",
       requestId,
       errorMessage: error instanceof Error ? error.message : "Unknown usage check error",
     });
@@ -120,27 +120,27 @@ export async function fetchKRouterUsage({
   }
 }
 
-export async function ensureKRouterUsageAvailable(
-  args: CheckKRouterUsageArgs,
-): Promise<KRouterUsageSnapshot | undefined> {
-  const usage = await fetchKRouterUsage(args);
+export async function ensureProviderUsageAvailable(
+  args: CheckProviderUsageArgs,
+): Promise<ProviderUsageSnapshot | undefined> {
+  const usage = await fetchProviderUsage(args);
 
   if (!usage) {
     return undefined;
   }
 
   if (usage.allowed === false) {
-    throw new KRouterUsageLimitError("KRouter API key is not allowed to make more requests", usage);
+    throw new ProviderUsageLimitError("Provider API key is not allowed to make more requests", usage);
   }
 
   if (usage.remaining !== undefined && usage.remaining <= 0) {
-    throw new KRouterUsageLimitError("KRouter token limit has been reached", usage);
+    throw new ProviderUsageLimitError("Provider token limit has been reached", usage);
   }
 
   return usage;
 }
 
-function extractUsageSnapshot(raw: unknown): KRouterUsageSnapshot {
+function extractUsageSnapshot(raw: unknown): ProviderUsageSnapshot {
   const limit = firstFiniteNumber(raw, [
     ["dailyTokenLimit"],
     ["limit"],
@@ -265,16 +265,6 @@ function firstBoolean(payload: unknown, paths: string[][]): boolean | undefined 
     if (typeof value === "boolean") {
       return value;
     }
-
-    if (typeof value === "string") {
-      const normalized = value.trim().toLowerCase();
-      if (normalized === "true") {
-        return true;
-      }
-      if (normalized === "false") {
-        return false;
-      }
-    }
   }
 
   return undefined;
@@ -282,14 +272,12 @@ function firstBoolean(payload: unknown, paths: string[][]): boolean | undefined 
 
 function readPath(payload: unknown, path: string[]): unknown {
   let current = payload;
-
   for (const key of path) {
     if (typeof current !== "object" || current === null || Array.isArray(current)) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[key];
   }
-
   return current;
 }
 
@@ -297,13 +285,9 @@ function toFiniteNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-
   if (typeof value === "string" && value.trim()) {
     const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    return Number.isFinite(parsed) ? parsed : undefined;
   }
-
   return undefined;
 }

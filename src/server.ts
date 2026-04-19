@@ -1,17 +1,18 @@
 import Fastify from "fastify";
 import type { FastifyBaseLogger } from "fastify";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
+import readline from "node:readline";
 import path from "node:path";
 import { readConfig } from "./config.js";
 import { buildUpstreamError, forwardJson, forwardSse } from "./forward.js";
 import {
-  KRouterUsageLimitError,
-  ensureKRouterUsageAvailable,
-  fetchKRouterUsage,
-} from "./krouter-usage.js";
-import { normalizeResponsesRequest } from "./normalize-request.js";
+  ProviderUsageLimitError,
+  ensureProviderUsageAvailable,
+  fetchProviderUsage,
+} from "./provider-usage.js";
+import { normalizeResponsesRequestWithCache } from "./normalize-request.js";
 import {
   type ClientRouteKey,
   buildBuiltinProviderPresets,
@@ -23,34 +24,19 @@ import {
 } from "./runtime-provider-repository.js";
 import { proxyResponsesRequestSchema } from "./schema.js";
 import { createSessionLogContext, deriveSessionKey } from "./session-log.js";
+import {
+  PromptCacheStateStore,
+  type PromptCacheObservation,
+} from "./prompt-cache-state.js";
 
 const config = readConfig(process.env);
-
-type PromptCacheObservation = {
-  requestId: string;
-  providerId?: string;
-  clientRoute?: ClientRouteKey;
-  model?: string;
-  promptCacheKey?: string;
-  promptCacheRetention?: string;
-  upstreamTarget?: string;
-  truncation?: string;
-  reasoningEffort?: string;
-  reasoningSummary?: string;
-  textVerbosity?: string;
-  cachedTokens?: number;
-  cacheSavedPercent?: number;
-  cacheHit?: boolean;
-  consecutiveCacheHits?: number;
-  stream: boolean;
-  timestamp: string;
-};
 
 const providerRepository = await RuntimeProviderRepository.create({
   dbFile: path.resolve(config.APP_DB_PATH),
   legacyStateFile: path.resolve(config.SESSION_LOG_DIR, "..", "runtime-state.json"),
   baseProviders: buildBuiltinProviderPresets(config),
 });
+const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
 const publicDir = path.resolve(process.cwd(), "public");
 const publicAssets = {
   indexHtml: readFileSync(path.join(publicDir, "index.html"), "utf8"),
@@ -59,13 +45,25 @@ const publicAssets = {
 };
 let latestPromptCacheObservation: PromptCacheObservation | undefined;
 const latestPromptCacheObservationByProvider = new Map<string, PromptCacheObservation>();
+const inflightJsonRequests = new Map<
+  string,
+  Promise<{
+    payload: unknown;
+    target: ForwardTarget;
+    upstreamStatus: number;
+  }>
+>();
 const DATE_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+hydratePromptCacheObservationsFromStore(promptCacheStateStore);
+await hydrateLatestPromptCacheObservations(path.resolve(config.SESSION_LOG_DIR));
 
 const app = Fastify({
   logger: {
     level: config.LOG_LEVEL,
   },
   requestTimeout: config.REQUEST_TIMEOUT_MS,
+  bodyLimit: config.REQUEST_BODY_LIMIT_BYTES,
   disableRequestLogging: true,
 });
 
@@ -353,10 +351,20 @@ app.get("/app.js", async (_request, reply) => {
   reply.type("application/javascript; charset=utf-8").send(publicAssets.appJs);
 });
 
-app.post("/api/krouter/check-token", async (request, reply) => {
+async function handleProviderUsageCheck(
+  request: {
+    body: unknown;
+    log: FastifyBaseLogger;
+  },
+  reply: {
+    code(statusCode: number): { send(payload: Record<string, unknown>): unknown };
+    send(payload: unknown): unknown;
+  },
+): Promise<unknown> {
   const requestId = randomUUID();
-  const body = request.body as { apiKey?: unknown } | undefined;
+  const body = request.body as { apiKey?: unknown; providerId?: unknown } | undefined;
   const apiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
+  const providerId = typeof body?.providerId === "string" ? body.providerId.trim() : "";
 
   if (!apiKey) {
     return reply.code(400).send({
@@ -368,20 +376,42 @@ app.post("/api/krouter/check-token", async (request, reply) => {
     });
   }
 
-  const usage = await fetchKRouterUsage({
+  const provider =
+    providerRepository.findProviderByProviderApiKey(apiKey) ||
+    (providerId ? providerRepository.getProvider(providerId) : undefined);
+  if (!provider) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "PROVIDER_NOT_FOUND",
+        message: "No provider matched the supplied API key or providerId",
+      },
+    });
+  }
+  if (!provider.capabilities.usageCheckEnabled || !provider.capabilities.usageCheckUrl) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "PROVIDER_USAGE_CHECK_UNSUPPORTED",
+        message: `Usage check is not configured for provider ${provider.id}`,
+      },
+    });
+  }
+
+  const usage = await fetchProviderUsage({
     apiKey,
     requestId,
     logger: request.log,
     timeoutMs: config.REQUEST_TIMEOUT_MS,
-    url: config.KROUTER_USAGE_CHECK_URL,
+    url: provider.capabilities.usageCheckUrl,
   });
 
   if (!usage) {
     return reply.code(502).send({
       error: {
         type: "proxy_error",
-        code: "KROUTER_USAGE_CHECK_FAILED",
-        message: "Could not fetch token usage from KRouter",
+        code: "PROVIDER_USAGE_CHECK_FAILED",
+        message: "Could not fetch provider token usage",
       },
     });
   }
@@ -391,30 +421,46 @@ app.post("/api/krouter/check-token", async (request, reply) => {
 
   return reply.send({
     ok: !isExhausted,
+    providerId: provider.id,
     usage: summarizeUsage(usage),
     raw: usage.raw,
   });
-});
+}
+
+app.post("/api/providers/check-usage", async (request, reply) =>
+  handleProviderUsageCheck(request, reply),
+);
 
 app.get("/v1/models", async (request, reply) => {
   const routingApiKey = readBearerToken(request.headers.authorization);
-  const selectedProvider = providerRepository.findProviderByApiKey(routingApiKey);
+  const selectedProvider = providerRepository.findProviderByAccessKey(routingApiKey);
 
   if (!selectedProvider) {
     return reply.code(401).send({
       error: {
         type: "authentication_error",
         code: "INVALID_ROUTING_API_KEY",
-        message: "Authorization Bearer token must match one of the configured provider API keys",
+        message:
+          "Authorization Bearer token must match one of the configured client or provider API keys",
       },
     });
   }
 
-  const data = buildAdvertisedModels(selectedProvider);
-  return reply.send({
-    object: "list",
-    data,
+  const providerApiKey = getDefaultProviderApiKey(selectedProvider);
+  const response = await fetch(`${selectedProvider.baseUrl.replace(/\/+$/, "")}/models`, {
+    headers: providerApiKey
+      ? {
+          Authorization: `Bearer ${providerApiKey}`,
+        }
+      : undefined,
   });
+
+  if (!response.ok) {
+    return reply.code(response.status).send(await response.text());
+  }
+
+  const payload = await response.json();
+  return reply.send(payload);
 });
 
 async function handleResponsesRequest(
@@ -448,6 +494,9 @@ async function handleResponsesRequest(
       config.SESSION_LOG_DIR,
       "invalid-request",
       config.SESSION_LOG_RETENTION_DAYS,
+      {
+        cacheMetricsStore: promptCacheStateStore,
+      },
     );
     request.log.warn(
       {
@@ -474,13 +523,14 @@ async function handleResponsesRequest(
 
   const clientRoute = resolveClientRoute(request.headers, parsed.data);
   const routingApiKey = readBearerToken(request.headers.authorization);
-  const selectedProvider = providerRepository.findProviderByApiKey(routingApiKey);
+  const selectedProvider = providerRepository.findProviderByAccessKey(routingApiKey);
   if (!selectedProvider) {
     return reply.code(401).send({
       error: {
         type: "authentication_error",
         code: "INVALID_ROUTING_API_KEY",
-        message: "Authorization Bearer token must match one of the configured provider API keys",
+        message:
+          "Authorization Bearer token must match one of the configured client or provider API keys",
       },
     });
   }
@@ -492,11 +542,7 @@ async function handleResponsesRequest(
       }
     : parsed.data;
 
-  const isKRouterProvider = shouldCheckKRouterUsage(
-    selectedProvider.baseUrl,
-    config.KROUTER_USAGE_CHECK_ENABLED,
-  );
-  const normalized = normalizeResponsesRequest(requestBody, {
+  const normalizedResult = normalizeResponsesRequestWithCache(requestBody, {
     openClawTokenOptimizationEnabled: config.OPENCLAW_TOKEN_OPTIMIZATION_ENABLED,
     defaultReasoningEffort: config.OPENCLAW_DEFAULT_REASONING_EFFORT,
     defaultReasoningSummary: config.OPENCLAW_DEFAULT_REASONING_SUMMARY,
@@ -504,23 +550,43 @@ async function handleResponsesRequest(
     defaultMaxOutputTokens: config.OPENCLAW_DEFAULT_MAX_OUTPUT_TOKENS,
     autoPromptCacheKey: config.OPENCLAW_AUTO_PROMPT_CACHE_KEY,
     defaultPromptCacheRetention: config.OPENCLAW_PROMPT_CACHE_RETENTION,
-    defaultTruncation: isKRouterProvider ? undefined : config.OPENCLAW_DEFAULT_TRUNCATION,
-    stripMaxOutputTokens: config.STRIP_MAX_OUTPUT_TOKENS_FOR_KROUTER && isKRouterProvider,
-    sanitizeReasoningSummary: config.SANITIZE_REASONING_SUMMARY_FOR_KROUTER && isKRouterProvider,
+    promptCacheRedesignEnabled: config.PROVIDER_PROMPT_CACHE_REDESIGN_ENABLED,
+    promptCacheStableSummarizationEnabled:
+      config.PROVIDER_PROMPT_CACHE_STABLE_SUMMARIZATION_ENABLED,
+    promptCacheSummaryTriggerItems: config.PROVIDER_PROMPT_CACHE_SUMMARY_TRIGGER_ITEMS,
+    promptCacheSummaryKeepRecentItems: config.PROVIDER_PROMPT_CACHE_SUMMARY_KEEP_RECENT_ITEMS,
+    promptCacheRetentionByFamilyEnabled:
+      config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY_ENABLED,
+    promptCacheRetentionByFamilyRules: config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY,
+    defaultTruncation: selectedProvider.capabilities.stripMaxOutputTokens
+      ? undefined
+      : config.OPENCLAW_DEFAULT_TRUNCATION,
+    stripMaxOutputTokens: selectedProvider.capabilities.stripMaxOutputTokens,
+    sanitizeReasoningSummary: selectedProvider.capabilities.sanitizeReasoningSummary,
   });
-  const isStream = normalized.stream === true;
-  const traceContext = buildTraceContext(parsed.data, normalized);
+  const normalized = normalizedResult.request;
   const activeProviderId = selectedProvider.id;
+  const isStream = normalized.stream === true;
+  const traceContext: Record<string, unknown> = {
+    ...buildTraceContext(parsed.data, normalized, normalizedResult.cacheLayout),
+    providerId: activeProviderId,
+  };
   const sessionLog = createSessionLogContext(
     config.SESSION_LOG_DIR,
     deriveSessionKey(parsed.data, traceContext),
     config.SESSION_LOG_RETENTION_DAYS,
+    {
+      cacheMetricsStore: promptCacheStateStore,
+    },
   );
   latestPromptCacheObservation = {
     requestId,
     providerId: activeProviderId,
     clientRoute,
     model: stringOrUndefined(normalized.model),
+    familyId: stringOrUndefined(traceContext.familyId),
+    staticKey: stringOrUndefined(traceContext.staticKey),
+    requestKey: stringOrUndefined(traceContext.requestKey),
     promptCacheKey: stringOrUndefined(normalized.prompt_cache_key),
     promptCacheRetention: stringOrUndefined(normalized.prompt_cache_retention),
     truncation: stringOrUndefined(traceContext.truncation),
@@ -557,6 +623,9 @@ async function handleResponsesRequest(
       setProxyResponseHeaders(reply.raw, {
         requestId,
         providerId: activeProviderId,
+        familyId: stringOrUndefined(traceContext.familyId),
+        staticKey: stringOrUndefined(traceContext.staticKey),
+        requestKey: stringOrUndefined(traceContext.requestKey),
         promptCacheKey: stringOrUndefined(traceContext.promptCacheKey),
         promptCacheRetention: stringOrUndefined(traceContext.promptCacheRetention),
       });
@@ -564,11 +633,13 @@ async function handleResponsesRequest(
       const streamTarget = await forwardSseWithFallback({
         requestId,
         clientRoute,
+        providerId: activeProviderId,
         routingApiKey,
         body: normalized,
         responseRaw: reply.raw,
         logger: request.log,
         sessionLog,
+        logContext: traceContext,
         onEvent: (entry) => updateLatestPromptCacheObservationFromEntry(entry),
       });
       latestPromptCacheObservation = {
@@ -605,16 +676,32 @@ async function handleResponsesRequest(
       return reply;
     }
 
-    const { upstream, target } = await forwardJsonWithFallback({
-      requestId,
-      clientRoute,
-      routingApiKey,
-      body: normalized,
-      logger: request.log,
-      sessionLog,
-    });
+    const dedupeKey = buildInflightDedupeKey(activeProviderId, normalized, traceContext);
+    const dedupeEnabled =
+      config.PROVIDER_PROMPT_CACHE_INFLIGHT_DEDUPE_ENABLED && typeof dedupeKey === "string";
+    if (dedupeEnabled && dedupeKey) {
+      await sessionLog.write({
+        event: "inflight_dedupe_candidate",
+        requestId,
+        clientRoute,
+        dedupeKey,
+        ...traceContext,
+      });
+    }
 
-    const payload = await upstream.json();
+    const { payload, target, upstreamStatus } = await runJsonRequestWithInflightDedupe(
+      dedupeKey,
+      {
+        requestId,
+        clientRoute,
+        providerId: activeProviderId,
+        routingApiKey,
+        body: normalized,
+        logger: request.log,
+        sessionLog,
+      },
+      dedupeEnabled,
+    );
     latestPromptCacheObservation = {
       ...(latestPromptCacheObservation ?? {
         requestId,
@@ -636,7 +723,7 @@ async function handleResponsesRequest(
         clientRoute,
         ...traceContext,
         upstreamTarget: target.name,
-        upstreamStatus: upstream.status,
+        upstreamStatus,
         totalMs: Date.now() - startedAt,
         responseId: readStringField(payload, "id"),
         responseStatus: readStringField(payload, "status"),
@@ -652,7 +739,7 @@ async function handleResponsesRequest(
       mode: "json",
       totalMs: Date.now() - startedAt,
       upstreamTarget: target.name,
-      upstreamStatus: upstream.status,
+      upstreamStatus,
       responseId: readStringField(payload, "id"),
       responseStatus: readStringField(payload, "status"),
       usage: readResponseUsage(payload),
@@ -664,7 +751,10 @@ async function handleResponsesRequest(
     reply.header("x-proxy-request-id", requestId);
     reply.header("x-proxy-provider-id", activeProviderId);
     reply.header("x-proxy-upstream-target", target.name);
-    reply.header("x-proxy-upstream-status", String(upstream.status));
+    reply.header("x-proxy-upstream-status", String(upstreamStatus));
+    reply.header("x-proxy-family-id", stringOrUndefined(traceContext.familyId) ?? "");
+    reply.header("x-proxy-static-key", stringOrUndefined(traceContext.staticKey) ?? "");
+    reply.header("x-proxy-request-key", stringOrUndefined(traceContext.requestKey) ?? "");
     reply.header("x-proxy-prompt-cache-key", stringOrUndefined(traceContext.promptCacheKey) ?? "");
     reply.header(
       "x-proxy-prompt-cache-retention",
@@ -691,7 +781,7 @@ async function handleResponsesRequest(
         ? (error as { body?: string }).body
         : undefined;
     const errorCode =
-      error instanceof KRouterUsageLimitError
+      error instanceof ProviderUsageLimitError
         ? error.code
         : statusCode >= 500
           ? "UPSTREAM_REQUEST_FAILED"
@@ -723,7 +813,7 @@ async function handleResponsesRequest(
         upstream_status: statusCode,
         upstream_body: upstreamBody,
         usage:
-          error instanceof KRouterUsageLimitError
+          error instanceof ProviderUsageLimitError
             ? summarizeUsage(error.usage)
             : undefined,
       },
@@ -779,6 +869,13 @@ function sendHijackedStreamError(
 function buildTraceContext(
   original: Record<string, unknown>,
   normalized: Record<string, unknown>,
+  cacheLayout?: {
+    familyId?: string;
+    staticKey?: string;
+    requestKey?: string;
+    summaryApplied?: boolean;
+    summaryItemCount?: number;
+  },
 ): Record<string, unknown> {
   return {
     model:
@@ -793,11 +890,17 @@ function buildTraceContext(
     inputItemsCount: Array.isArray(normalized.input) ? normalized.input.length : undefined,
     user: stringOrUndefined(original.user),
     previousResponseId: stringOrUndefined(original.previous_response_id),
+    familyId: stringOrUndefined(cacheLayout?.familyId),
+    staticKey: stringOrUndefined(cacheLayout?.staticKey),
+    requestKey: stringOrUndefined(cacheLayout?.requestKey),
     promptCacheKey:
       stringOrUndefined(normalized.prompt_cache_key) ?? stringOrUndefined(original.prompt_cache_key),
     promptCacheRetention:
       stringOrUndefined(normalized.prompt_cache_retention) ??
       stringOrUndefined(original.prompt_cache_retention),
+    stableSummaryApplied: cacheLayout?.summaryApplied === true,
+    stableSummaryItemCount:
+      typeof cacheLayout?.summaryItemCount === "number" ? cacheLayout.summaryItemCount : undefined,
     truncation: stringOrUndefined(normalized.truncation) ?? stringOrUndefined(original.truncation),
     reasoningEffort: readReasoningField(normalized.reasoning, "effort"),
     reasoningSummary: readReasoningField(normalized.reasoning, "summary"),
@@ -814,6 +917,9 @@ function setProxyResponseHeaders(
   headers: {
     requestId: string;
     providerId?: string;
+    familyId?: string;
+    staticKey?: string;
+    requestKey?: string;
     promptCacheKey?: string;
     promptCacheRetention?: string;
   },
@@ -821,6 +927,15 @@ function setProxyResponseHeaders(
   raw.setHeader?.("x-proxy-request-id", headers.requestId);
   if (headers.providerId) {
     raw.setHeader?.("x-proxy-provider-id", headers.providerId);
+  }
+  if (headers.familyId) {
+    raw.setHeader?.("x-proxy-family-id", headers.familyId);
+  }
+  if (headers.staticKey) {
+    raw.setHeader?.("x-proxy-static-key", headers.staticKey);
+  }
+  if (headers.requestKey) {
+    raw.setHeader?.("x-proxy-request-key", headers.requestKey);
   }
   if (headers.promptCacheKey) {
     raw.setHeader?.("x-proxy-prompt-cache-key", headers.promptCacheKey);
@@ -971,19 +1086,6 @@ function readBearerToken(value: unknown): string | undefined {
   return match?.[1]?.trim() || undefined;
 }
 
-function shouldCheckKRouterUsage(baseUrl: string, enabled: boolean): boolean {
-  if (!enabled) {
-    return false;
-  }
-
-  try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
-    return hostname === "api.krouter.net" || hostname === "krouter.net";
-  } catch {
-    return false;
-  }
-}
-
 type ForwardTarget = {
   name: string;
   url: string;
@@ -993,15 +1095,18 @@ type ForwardTarget = {
 async function resolveForwardTarget(args: {
   requestId: string;
   clientRoute: ClientRouteKey;
+  providerId?: string;
   routingApiKey?: string;
   logger: FastifyBaseLogger;
   sessionLog: ReturnType<typeof createSessionLogContext>;
 }): Promise<ForwardTarget> {
-  const activeProvider = requireProviderPresetForClient(args.clientRoute);
+  const activeProvider =
+    (args.providerId ? providerRepository.getProvider(args.providerId) : undefined) ??
+    requireProviderPresetForClient(args.clientRoute);
   const primaryTarget: ForwardTarget = {
     name: activeProvider.id,
     url: activeProvider.responsesUrl,
-    apiKey: args.routingApiKey,
+    apiKey: getDefaultProviderApiKey(activeProvider),
   };
 
   try {
@@ -1040,6 +1145,7 @@ async function resolveForwardTarget(args: {
 async function forwardJsonWithFallback(args: {
   requestId: string;
   clientRoute: ClientRouteKey;
+  providerId?: string;
   routingApiKey?: string;
   body: Record<string, unknown>;
   logger: FastifyBaseLogger;
@@ -1107,24 +1213,93 @@ async function forwardJsonWithFallback(args: {
   };
 }
 
+async function runJsonRequestWithInflightDedupe(
+  dedupeKey: string | undefined,
+  args: {
+    requestId: string;
+    clientRoute: ClientRouteKey;
+    providerId?: string;
+    routingApiKey?: string;
+    body: Record<string, unknown>;
+    logger: FastifyBaseLogger;
+    sessionLog: ReturnType<typeof createSessionLogContext>;
+  },
+  enabled: boolean,
+): Promise<{
+  payload: unknown;
+  target: ForwardTarget;
+  upstreamStatus: number;
+}> {
+  const execute = async (): Promise<{
+    payload: unknown;
+    target: ForwardTarget;
+    upstreamStatus: number;
+  }> => {
+    const { upstream, target } = await forwardJsonWithFallback(args);
+    return {
+      payload: await upstream.json(),
+      target,
+      upstreamStatus: upstream.status,
+    };
+  };
+
+  if (!enabled || !dedupeKey) {
+    return execute();
+  }
+
+  const existing = inflightJsonRequests.get(dedupeKey);
+  if (existing) {
+    args.logger.info(
+      {
+        requestId: args.requestId,
+        clientRoute: args.clientRoute,
+        dedupeKey,
+      },
+      "joined inflight JSON request",
+    );
+    await args.sessionLog.write({
+      event: "inflight_dedupe_joined",
+      requestId: args.requestId,
+      clientRoute: args.clientRoute,
+      dedupeKey,
+    });
+    return existing;
+  }
+
+  const promise = execute().finally(() => {
+    inflightJsonRequests.delete(dedupeKey);
+  });
+  inflightJsonRequests.set(dedupeKey, promise);
+  await args.sessionLog.write({
+    event: "inflight_dedupe_owner",
+    requestId: args.requestId,
+    clientRoute: args.clientRoute,
+    dedupeKey,
+  });
+  return promise;
+}
+
 async function runPrimaryPreflight(args: {
   requestId: string;
   clientRoute: ClientRouteKey;
+  providerId?: string;
   routingApiKey?: string;
   logger: FastifyBaseLogger;
   sessionLog: ReturnType<typeof createSessionLogContext>;
 }): Promise<void> {
-  const activeProvider = requireProviderPresetForClient(args.clientRoute);
-  if (!shouldCheckKRouterUsage(activeProvider.baseUrl, config.KROUTER_USAGE_CHECK_ENABLED)) {
+  const activeProvider =
+    (args.providerId ? providerRepository.getProvider(args.providerId) : undefined) ??
+    requireProviderPresetForClient(args.clientRoute);
+  if (!activeProvider.capabilities.usageCheckEnabled || !activeProvider.capabilities.usageCheckUrl) {
     return;
   }
 
-  await ensureKRouterUsageAvailable({
-    apiKey: args.routingApiKey,
+  await ensureProviderUsageAvailable({
+    apiKey: getDefaultProviderApiKey(activeProvider),
     requestId: args.requestId,
     logger: args.logger,
     timeoutMs: config.REQUEST_TIMEOUT_MS,
-    url: config.KROUTER_USAGE_CHECK_URL,
+    url: activeProvider.capabilities.usageCheckUrl,
     onEvent: (entry) => args.sessionLog.write(entry),
   });
 }
@@ -1166,7 +1341,7 @@ async function logFallbackAttempt(
 }
 
 function shouldFallbackFromError(error: unknown): boolean {
-  if (error instanceof KRouterUsageLimitError) {
+  if (error instanceof ProviderUsageLimitError) {
     return true;
   }
 
@@ -1185,6 +1360,7 @@ function shouldFallbackFromStatus(statusCode: number): boolean {
 async function forwardSseWithFallback(args: {
   requestId: string;
   clientRoute: ClientRouteKey;
+  providerId?: string;
   routingApiKey?: string;
   body: Record<string, unknown>;
   responseRaw: NodeJS.WritableStream & {
@@ -1196,6 +1372,7 @@ async function forwardSseWithFallback(args: {
   };
   logger: FastifyBaseLogger;
   sessionLog: ReturnType<typeof createSessionLogContext>;
+  logContext?: Record<string, unknown>;
   onEvent?: (entry: Record<string, unknown>) => void;
 }): Promise<ForwardTarget> {
   const primaryTarget = await resolveForwardTarget(args);
@@ -1216,7 +1393,10 @@ async function forwardSseWithFallback(args: {
       logger: args.logger,
       onEvent: (entry) => {
         args.onEvent?.(entry);
-        return args.sessionLog.write(entry);
+        return args.sessionLog.write({
+          ...args.logContext,
+          ...entry,
+        });
       },
     });
     return primaryTarget;
@@ -1242,7 +1422,10 @@ async function forwardSseWithFallback(args: {
       logger: args.logger,
       onEvent: (entry) => {
         args.onEvent?.(entry);
-        return args.sessionLog.write(entry);
+        return args.sessionLog.write({
+          ...args.logContext,
+          ...entry,
+        });
       },
     });
     return {
@@ -1316,41 +1499,21 @@ function getFallbackProviderPreset(): RuntimeProviderPreset | undefined {
 }
 
 function getDefaultProviderApiKey(provider: RuntimeProviderPreset): string | undefined {
-  return provider.apiKeys[0];
+  return provider.providerApiKeys[0];
 }
 
-function buildAdvertisedModels(provider: RuntimeProviderPreset): Array<Record<string, unknown>> {
-  const configuredModels = Object.keys(config.MODEL_CONTEXT_LENGTH_MAP);
-  const models = configuredModels.length > 0
-    ? configuredModels
-    : ["cx/gpt-5.4", "gpt-5.4", "cx/gpt-5.4-mini", "gpt-5.4-mini"];
+function buildInflightDedupeKey(
+  providerId: string,
+  normalized: Record<string, unknown>,
+  traceContext: Record<string, unknown>,
+): string | undefined {
+  const requestKey = stringOrUndefined(traceContext.requestKey);
+  const model = typeof normalized.model === "string" ? normalized.model : undefined;
+  if (!requestKey || !model) {
+    return undefined;
+  }
 
-  return [...new Set(models)].map((modelId) => buildAdvertisedModel(modelId, provider));
-}
-
-function buildAdvertisedModel(
-  modelId: string,
-  provider: RuntimeProviderPreset,
-): Record<string, unknown> {
-  const contextLength = resolveAdvertisedContextLength(modelId);
-  const ownedBy = shouldCheckKRouterUsage(provider.baseUrl, true) ? "krouter" : provider.name;
-
-  return {
-    id: modelId,
-    object: "model",
-    created: 0,
-    owned_by: ownedBy,
-    context_length: contextLength,
-    max_context_tokens: contextLength,
-    max_input_tokens: contextLength,
-    input_token_limit: contextLength,
-    max_output_tokens: Math.min(128_000, contextLength),
-    output_token_limit: Math.min(128_000, contextLength),
-  };
-}
-
-function resolveAdvertisedContextLength(modelId: string): number {
-  return config.MODEL_CONTEXT_LENGTH_MAP[modelId] ?? config.DEFAULT_MODEL_CONTEXT_LENGTH;
+  return `${providerId}:${model}:${requestKey}`;
 }
 
 function rewriteBodyForProvider(
@@ -1374,12 +1537,10 @@ function rewriteBodyForProvider(
 }
 
 function rewriteModelForProvider(model: string, provider: RuntimeProviderPreset): string {
-  if (shouldCheckKRouterUsage(provider.baseUrl, true)) {
-    return model;
-  }
-
-  if (model.startsWith("cx/")) {
-    return model.slice(3);
+  for (const prefix of provider.capabilities.stripModelPrefixes) {
+    if (prefix && model.startsWith(prefix)) {
+      return model.slice(prefix.length);
+    }
   }
 
   return model;
@@ -1497,24 +1658,139 @@ function updateLatestPromptCacheObservationFromEntry(entry: Record<string, unkno
 
 function setLatestPromptCacheObservation(observation: PromptCacheObservation): void {
   latestPromptCacheObservation = observation;
+  promptCacheStateStore.saveLatestObservation(observation);
   if (observation.providerId) {
     latestPromptCacheObservationByProvider.set(observation.providerId, observation);
   }
 }
 
+function hydratePromptCacheObservationsFromStore(store: PromptCacheStateStore): void {
+  const state = store.loadLatestObservations();
+  if (state.latest) {
+    latestPromptCacheObservation = state.latest;
+  }
+  for (const [providerId, observation] of state.byProvider) {
+    latestPromptCacheObservationByProvider.set(providerId, observation);
+  }
+}
+
+async function hydrateLatestPromptCacheObservations(logRoot: string): Promise<void> {
+  const latestDir = path.join(logRoot, "latest");
+  let files: string[] = [];
+  try {
+    files = await readdir(latestDir);
+  } catch {
+    return;
+  }
+
+  for (const file of files.filter((entry) => entry.endsWith(".jsonl"))) {
+    let raw: string;
+    try {
+      raw = await readFile(path.join(latestDir, file), "utf8");
+    } catch {
+      continue;
+    }
+
+    const lines = raw
+      .trim()
+      .split(/\r?\n/g)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      continue;
+    }
+
+    const lastLine = lines[lines.length - 1];
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(lastLine) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const observation = buildPromptCacheObservationFromLogEntry(entry);
+    if (!observation) {
+      continue;
+    }
+
+    if (
+      !latestPromptCacheObservation ||
+      (typeof observation.timestamp === "string" &&
+        typeof latestPromptCacheObservation.timestamp === "string" &&
+        observation.timestamp > latestPromptCacheObservation.timestamp)
+    ) {
+      latestPromptCacheObservation = observation;
+    }
+
+    if (observation.providerId) {
+      const existing = latestPromptCacheObservationByProvider.get(observation.providerId);
+      if (!existing || observation.timestamp > existing.timestamp) {
+        latestPromptCacheObservationByProvider.set(observation.providerId, observation);
+      }
+    }
+  }
+}
+
+function buildPromptCacheObservationFromLogEntry(
+  entry: Record<string, unknown>,
+): PromptCacheObservation | undefined {
+  const timestamp = readStringField(entry, "ts");
+  if (!timestamp) {
+    return undefined;
+  }
+
+  return {
+    requestId: readStringField(entry, "requestId") ?? "unknown-request",
+    providerId: readStringField(entry, "providerId"),
+    clientRoute: readStringField(entry, "clientRoute") as ClientRouteKey | undefined,
+    model: readStringField(entry, "model"),
+    familyId: readStringField(entry, "familyId"),
+    staticKey: readStringField(entry, "staticKey"),
+    requestKey: readStringField(entry, "requestKey"),
+    promptCacheKey: readStringField(entry, "promptCacheKey"),
+    promptCacheRetention: readStringField(entry, "promptCacheRetention"),
+    upstreamTarget: readStringField(entry, "upstreamTarget"),
+    truncation: readStringField(entry, "truncation"),
+    reasoningEffort: readStringField(entry, "reasoningEffort"),
+    reasoningSummary: readStringField(entry, "reasoningSummary"),
+    textVerbosity: readStringField(entry, "textVerbosity"),
+    cachedTokens: readFiniteNumber(entry.cachedTokens),
+    cacheSavedPercent: readFiniteNumber(entry.cacheSavedPercent),
+    cacheHit: typeof entry.cacheHit === "boolean" ? entry.cacheHit : undefined,
+    consecutiveCacheHits: readFiniteNumber(entry.consecutiveCacheHits),
+    stream: entry.stream === true,
+    timestamp,
+  };
+}
+
 type UsageStatsBucket = {
   requests: number;
   hits: number;
+  misses: number;
   hitRate: number;
+  unknownTelemetryRequests: number;
+  telemetryCoverage: number;
   totalCachedTokens: number;
   totalInputTokens: number;
   avgCacheSavedPercent: number;
+};
+
+type UsageDimensionBucket = UsageStatsBucket & {
+  key: string;
+  uniqueStaticKeys?: number;
+  uniqueRequestKeys?: number;
+  fragmentationScore?: number;
 };
 
 async function buildUsageStats(): Promise<{
   today: UsageStatsBucket;
   month: UsageStatsBucket;
   daily: Array<{ date: string } & UsageStatsBucket>;
+  byProvider: UsageDimensionBucket[];
+  byFamily: UsageDimensionBucket[];
+  byStaticKey: UsageDimensionBucket[];
+  byModel: UsageDimensionBucket[];
+  topUncachedFamilies: UsageDimensionBucket[];
 }> {
   const now = new Date();
   const todayKey = formatLocalDate(now);
@@ -1529,6 +1805,11 @@ async function buildUsageStats(): Promise<{
       today: emptyUsageStatsBucket(),
       month: emptyUsageStatsBucket(),
       daily: [],
+      byProvider: [],
+      byFamily: [],
+      byStaticKey: [],
+      byModel: [],
+      topUncachedFamilies: [],
     };
   }
 
@@ -1549,6 +1830,9 @@ async function buildUsageStats(): Promise<{
     (accumulator, entry) => mergeUsageStatsBuckets(accumulator, entry.stats),
     emptyUsageStatsAccumulator(),
   );
+  const monthDetail = await aggregateUsageStatsForDateDetailed(
+    relevantDates.map((date) => path.join(logRoot, date)),
+  );
 
   return {
     today,
@@ -1559,6 +1843,14 @@ async function buildUsageStats(): Promise<{
         ...entry.stats,
       }))
       .reverse(),
+    byProvider: buildDimensionBuckets(monthDetail.byProvider, false),
+    byFamily: buildDimensionBuckets(monthDetail.byFamily, true),
+    byStaticKey: buildDimensionBuckets(monthDetail.byStaticKey, false),
+    byModel: buildDimensionBuckets(monthDetail.byModel, false),
+    topUncachedFamilies: buildDimensionBuckets(monthDetail.byFamily, true)
+      .filter((entry) => entry.misses > 0)
+      .sort((left, right) => right.misses - left.misses || right.requests - left.requests)
+      .slice(0, 10),
   };
 }
 
@@ -1585,15 +1877,20 @@ async function aggregateUsageStatsForDate(dirPath: string): Promise<UsageStatsBu
 }
 
 async function aggregateUsageStatsForFile(filePath: string): Promise<UsageStatsAccumulator> {
-  let raw = "";
+  const accumulator = emptyUsageStatsAccumulator();
+  let stream: ReturnType<typeof createReadStream>;
   try {
-    raw = await readFile(filePath, "utf8");
+    stream = createReadStream(filePath, { encoding: "utf8" });
   } catch {
     return emptyUsageStatsAccumulator();
   }
 
-  const accumulator = emptyUsageStatsAccumulator();
-  for (const line of raw.split("\n")) {
+  const lineReader = readline.createInterface({
+    input: stream,
+    crlfDelay: Infinity,
+  });
+
+  for await (const line of lineReader) {
     const trimmed = line.trim();
     if (!trimmed) {
       continue;
@@ -1615,9 +1912,15 @@ async function aggregateUsageStatsForFile(filePath: string): Promise<UsageStatsA
     const inputTokens = readFiniteNumber(entry.inputTokens);
     const cacheSavedPercent = readFiniteNumber(entry.cacheSavedPercent);
 
-    if (typeof cachedTokens === "number" && cachedTokens > 0) {
-      accumulator.hits += 1;
-      accumulator.totalCachedTokens += cachedTokens;
+    if (typeof cachedTokens === "number") {
+      if (cachedTokens > 0) {
+        accumulator.hits += 1;
+        accumulator.totalCachedTokens += cachedTokens;
+      } else {
+        accumulator.misses += 1;
+      }
+    } else {
+      accumulator.unknownTelemetryRequests += 1;
     }
     if (typeof inputTokens === "number") {
       accumulator.totalInputTokens += inputTokens;
@@ -1634,16 +1937,32 @@ async function aggregateUsageStatsForFile(filePath: string): Promise<UsageStatsA
 type UsageStatsAccumulator = {
   requests: number;
   hits: number;
+  misses: number;
+  unknownTelemetryRequests: number;
   totalCachedTokens: number;
   totalInputTokens: number;
   cacheSavedPercentTotal: number;
   cacheSavedPercentCount: number;
 };
 
+type UsageDimensionAccumulator = UsageStatsAccumulator & {
+  staticKeys: Set<string>;
+  requestKeys: Set<string>;
+};
+
+type UsageDetailedAccumulator = {
+  byProvider: Map<string, UsageDimensionAccumulator>;
+  byFamily: Map<string, UsageDimensionAccumulator>;
+  byStaticKey: Map<string, UsageDimensionAccumulator>;
+  byModel: Map<string, UsageDimensionAccumulator>;
+};
+
 function emptyUsageStatsAccumulator(): UsageStatsAccumulator {
   return {
     requests: 0,
     hits: 0,
+    misses: 0,
+    unknownTelemetryRequests: 0,
     totalCachedTokens: 0,
     totalInputTokens: 0,
     cacheSavedPercentTotal: 0,
@@ -1655,10 +1974,22 @@ function emptyUsageStatsBucket(): UsageStatsBucket {
   return {
     requests: 0,
     hits: 0,
+    misses: 0,
     hitRate: 0,
+    unknownTelemetryRequests: 0,
+    telemetryCoverage: 0,
     totalCachedTokens: 0,
     totalInputTokens: 0,
     avgCacheSavedPercent: 0,
+  };
+}
+
+function emptyUsageDetailedAccumulator(): UsageDetailedAccumulator {
+  return {
+    byProvider: new Map(),
+    byFamily: new Map(),
+    byStaticKey: new Map(),
+    byModel: new Map(),
   };
 }
 
@@ -1669,6 +2000,10 @@ function mergeUsageStatsBuckets(
   return {
     requests: left.requests + right.requests,
     hits: left.hits + right.hits,
+    misses: left.misses + right.misses,
+    unknownTelemetryRequests:
+      left.unknownTelemetryRequests +
+      ("unknownTelemetryRequests" in right ? right.unknownTelemetryRequests : 0),
     totalCachedTokens: left.totalCachedTokens + right.totalCachedTokens,
     totalInputTokens: left.totalInputTokens + right.totalInputTokens,
     cacheSavedPercentTotal:
@@ -1683,10 +2018,20 @@ function mergeUsageStatsBuckets(
 }
 
 function finalizeUsageStatsAccumulator(accumulator: UsageStatsAccumulator): UsageStatsBucket {
+  const measuredRequests = accumulator.hits + accumulator.misses;
   return {
     requests: accumulator.requests,
     hits: accumulator.hits,
-    hitRate: accumulator.requests > 0 ? roundToSingleDecimal((accumulator.hits / accumulator.requests) * 100) : 0,
+    misses: accumulator.misses,
+    hitRate:
+      measuredRequests > 0
+        ? roundToSingleDecimal((accumulator.hits / measuredRequests) * 100)
+        : 0,
+    unknownTelemetryRequests: accumulator.unknownTelemetryRequests,
+    telemetryCoverage:
+      accumulator.requests > 0
+        ? roundToSingleDecimal((measuredRequests / accumulator.requests) * 100)
+        : 0,
     totalCachedTokens: accumulator.totalCachedTokens,
     totalInputTokens: accumulator.totalInputTokens,
     avgCacheSavedPercent:
@@ -1694,6 +2039,187 @@ function finalizeUsageStatsAccumulator(accumulator: UsageStatsAccumulator): Usag
         ? roundToSingleDecimal(accumulator.cacheSavedPercentTotal / accumulator.cacheSavedPercentCount)
         : 0,
   };
+}
+
+async function aggregateUsageStatsForDateDetailed(dirPaths: string[]): Promise<UsageDetailedAccumulator> {
+  const detailed = emptyUsageDetailedAccumulator();
+  for (const dirPath of dirPaths) {
+    let files: string[] = [];
+    try {
+      files = await readdir(dirPath);
+    } catch {
+      continue;
+    }
+
+    for (const entry of files.filter((item) => item.endsWith(".jsonl"))) {
+      await aggregateDetailedUsageForFile(path.join(dirPath, entry), detailed);
+    }
+  }
+  return detailed;
+}
+
+async function aggregateDetailedUsageForFile(
+  filePath: string,
+  detailed: UsageDetailedAccumulator,
+): Promise<void> {
+  let stream: ReturnType<typeof createReadStream>;
+  try {
+    stream = createReadStream(filePath, { encoding: "utf8" });
+  } catch {
+    return;
+  }
+
+  const lineReader = readline.createInterface({
+    input: stream,
+    crlfDelay: Infinity,
+  });
+
+  for await (const line of lineReader) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const event = typeof entry.event === "string" ? entry.event : "";
+    if (event !== "request_completed" && event !== "upstream_response_usage") {
+      continue;
+    }
+
+    const cachedTokens = readFiniteNumber(entry.cachedTokens);
+    const inputTokens =
+      readFiniteNumber(entry.inputTokens) ??
+      readFiniteNumber((entry.usage as Record<string, unknown> | undefined)?.input_tokens);
+    const cacheSavedPercent = readFiniteNumber(entry.cacheSavedPercent);
+    const providerId = readStringField(entry, "providerId");
+    const familyId = readStringField(entry, "familyId");
+    const staticKey = readStringField(entry, "staticKey");
+    const requestKey = readStringField(entry, "requestKey");
+    const model = readStringField(entry, "model");
+    const hit = typeof cachedTokens === "number" && cachedTokens > 0;
+    const hasCacheTelemetry = typeof cachedTokens === "number";
+
+    if (providerId) {
+      updateDimensionAccumulator(detailed.byProvider, providerId, {
+        hit,
+        hasCacheTelemetry,
+        cachedTokens,
+        inputTokens,
+        cacheSavedPercent,
+        staticKey,
+        requestKey,
+      });
+    }
+    if (familyId) {
+      updateDimensionAccumulator(detailed.byFamily, familyId, {
+        hit,
+        hasCacheTelemetry,
+        cachedTokens,
+        inputTokens,
+        cacheSavedPercent,
+        staticKey,
+        requestKey,
+      });
+    }
+    if (staticKey) {
+      updateDimensionAccumulator(detailed.byStaticKey, staticKey, {
+        hit,
+        hasCacheTelemetry,
+        cachedTokens,
+        inputTokens,
+        cacheSavedPercent,
+        staticKey,
+        requestKey,
+      });
+    }
+    if (model) {
+      updateDimensionAccumulator(detailed.byModel, model, {
+        hit,
+        hasCacheTelemetry,
+        cachedTokens,
+        inputTokens,
+        cacheSavedPercent,
+        staticKey,
+        requestKey,
+      });
+    }
+  }
+}
+
+function updateDimensionAccumulator(
+  target: Map<string, UsageDimensionAccumulator>,
+  key: string,
+  entry: {
+    hit: boolean;
+    hasCacheTelemetry: boolean;
+    cachedTokens?: number;
+    inputTokens?: number;
+    cacheSavedPercent?: number;
+    staticKey?: string;
+    requestKey?: string;
+  },
+): void {
+  const current = target.get(key) ?? {
+    ...emptyUsageStatsAccumulator(),
+    staticKeys: new Set<string>(),
+    requestKeys: new Set<string>(),
+  };
+  current.requests += 1;
+  if (entry.hasCacheTelemetry) {
+    if (entry.hit) {
+      current.hits += 1;
+    } else {
+      current.misses += 1;
+    }
+  } else {
+    current.unknownTelemetryRequests += 1;
+  }
+  if (typeof entry.cachedTokens === "number" && entry.cachedTokens > 0) {
+    current.totalCachedTokens += entry.cachedTokens;
+  }
+  if (typeof entry.inputTokens === "number") {
+    current.totalInputTokens += entry.inputTokens;
+  }
+  if (typeof entry.cacheSavedPercent === "number") {
+    current.cacheSavedPercentTotal += entry.cacheSavedPercent;
+    current.cacheSavedPercentCount += 1;
+  }
+  if (entry.staticKey) {
+    current.staticKeys.add(entry.staticKey);
+  }
+  if (entry.requestKey) {
+    current.requestKeys.add(entry.requestKey);
+  }
+  target.set(key, current);
+}
+
+function buildDimensionBuckets(
+  target: Map<string, UsageDimensionAccumulator>,
+  includeFragmentation: boolean,
+): UsageDimensionBucket[] {
+  return [...target.entries()]
+    .map(([key, accumulator]) => {
+      const base = finalizeUsageStatsAccumulator(accumulator);
+      const uniqueStaticKeys = accumulator.staticKeys.size;
+      const uniqueRequestKeys = accumulator.requestKeys.size;
+      return {
+        key,
+        ...base,
+        uniqueStaticKeys,
+        uniqueRequestKeys,
+        fragmentationScore: includeFragmentation && base.requests > 0
+          ? roundToSingleDecimal((uniqueStaticKeys / base.requests) * 100)
+          : undefined,
+      };
+    })
+    .sort((left, right) => right.requests - left.requests || right.hits - left.hits)
+    .slice(0, 50);
 }
 
 function readFiniteNumber(value: unknown): number | undefined {
@@ -1712,10 +2238,24 @@ function formatLocalDate(value: Date): string {
 }
 
 app.setErrorHandler((error, _request, reply) => {
-  reply.code(500).send({
+  const statusCode =
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    Number.isInteger((error as { statusCode?: unknown }).statusCode)
+      ? Number((error as { statusCode?: unknown }).statusCode)
+      : 500;
+  const code =
+    statusCode === 413
+      ? "REQUEST_BODY_TOO_LARGE"
+      : statusCode >= 400 && statusCode < 500
+        ? "PROXY_BAD_REQUEST"
+        : "PROXY_INTERNAL_ERROR";
+
+  reply.code(statusCode).send({
     error: {
-      type: "internal_error",
-      code: "PROXY_INTERNAL_ERROR",
+      type: statusCode >= 400 && statusCode < 500 ? "request_error" : "internal_error",
+      code,
       message: error instanceof Error ? error.message : "Unknown internal error",
     },
   });

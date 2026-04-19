@@ -21,6 +21,7 @@
         <nav class="topnav" aria-label="Sections">
           <a href="#/dashboard" data-route-link>Dashboard</a>
           <a href="#/provider-edit" data-route-link>Provider Editor</a>
+          <a href="#/usage" data-route-link>Usage</a>
           <a href="#/cache" data-route-link>Cache</a>
         </nav>
 
@@ -30,81 +31,89 @@
               <div class="row">
                 <div>
                   <h2>Overview</h2>
-                  <p>Inspect runtime providers and general cache usage.</p>
+                  <p>Quick runtime view for providers and cache health.</p>
                 </div>
                 <div class="row-wrap">
                   <a class="button-link button-link-muted" href="#/provider-edit">New provider</a>
                 </div>
               </div>
 
-              <div class="mini-grid" style="margin-top:14px;">
+              <div class="mini-grid compact-grid" style="margin-top:14px;">
                 <div class="mini-card"><span>Total providers</span><strong id="statProviders">-</strong></div>
-                <div class="mini-card"><span>Editable providers</span><strong id="statCustomProviders">-</strong></div>
                 <div class="mini-card"><span>Current model</span><strong id="statCurrentModel">-</strong></div>
-                <div class="mini-card"><span>Model mode</span><strong id="statModelMode">-</strong></div>
                 <div class="mini-card"><span>Cache status</span><strong id="statCacheStatus">-</strong></div>
                 <div class="mini-card"><span>Cached tokens</span><strong id="statCachedTokens">-</strong></div>
                 <div class="mini-card"><span>Latest cache saved</span><strong id="statCacheSaved">-</strong></div>
-                <div class="mini-card"><span>Hit streak</span><strong id="statCacheHitStreak">-</strong></div>
                 <div class="mini-card"><span>Last request</span><strong id="statLastRequestId">-</strong></div>
+                <div class="mini-card" hidden><span>Editable providers</span><strong id="statCustomProviders">-</strong></div>
+                <div class="mini-card" hidden><span>Model mode</span><strong id="statModelMode">-</strong></div>
+                <div class="mini-card" hidden><span>Hit streak</span><strong id="statCacheHitStreak">-</strong></div>
               </div>
 
-              <div class="row" style="margin-top:18px;">
-                <div>
-                  <h3>Usage Stats</h3>
-                  <p>Daily and monthly cache usage from local session logs.</p>
-                </div>
-              </div>
-
-              <div class="stats-split" style="margin-top:14px;">
+              <div class="stats-split dashboard-split" style="margin-top:18px;">
                 <section class="section section-nested">
                   <h3>Today</h3>
+                  <p>Current day cache efficiency.</p>
                   <div class="mini-grid compact-grid">
                     <div class="mini-card"><span>Requests</span><strong id="statsTodayRequests">-</strong></div>
-                    <div class="mini-card"><span>Hits</span><strong id="statsTodayHits">-</strong></div>
-                    <div class="mini-card"><span>Hit rate</span><strong id="statsTodayHitRate">-</strong></div>
+                    <div class="mini-card"><span>Measured hit rate</span><strong id="statsTodayHitRate">-</strong></div>
+                    <div class="mini-card"><span>Telemetry</span><strong id="statsTodayTelemetry">-</strong></div>
                     <div class="mini-card"><span>Cached tokens</span><strong id="statsTodayCachedTokens">-</strong></div>
-                    <div class="mini-card"><span>Input tokens</span><strong id="statsTodayInputTokens">-</strong></div>
                     <div class="mini-card"><span>Avg saved</span><strong id="statsTodayAvgSaved">-</strong></div>
+                    <div class="mini-card" hidden><span>Hits</span><strong id="statsTodayHits">-</strong></div>
+                    <div class="mini-card" hidden><span>Input tokens</span><strong id="statsTodayInputTokens">-</strong></div>
                   </div>
                 </section>
                 <section class="section section-nested">
                   <h3>This Month</h3>
+                  <p>Rolling monthly cache efficiency.</p>
                   <div class="mini-grid compact-grid">
                     <div class="mini-card"><span>Requests</span><strong id="statsMonthRequests">-</strong></div>
-                    <div class="mini-card"><span>Hits</span><strong id="statsMonthHits">-</strong></div>
-                    <div class="mini-card"><span>Hit rate</span><strong id="statsMonthHitRate">-</strong></div>
+                    <div class="mini-card"><span>Measured hit rate</span><strong id="statsMonthHitRate">-</strong></div>
+                    <div class="mini-card"><span>Telemetry</span><strong id="statsMonthTelemetry">-</strong></div>
                     <div class="mini-card"><span>Cached tokens</span><strong id="statsMonthCachedTokens">-</strong></div>
-                    <div class="mini-card"><span>Input tokens</span><strong id="statsMonthInputTokens">-</strong></div>
                     <div class="mini-card"><span>Avg saved</span><strong id="statsMonthAvgSaved">-</strong></div>
+                    <div class="mini-card" hidden><span>Hits</span><strong id="statsMonthHits">-</strong></div>
+                    <div class="mini-card" hidden><span>Input tokens</span><strong id="statsMonthInputTokens">-</strong></div>
                   </div>
                 </section>
               </div>
 
-              <div style="margin-top:14px; overflow:auto;">
+              <div class="section section-nested section-divider">
+                <div class="row">
+                  <div>
+                    <h3>Provider Cache Summary</h3>
+                    <p>Quick comparison across routed providers.</p>
+                  </div>
+                  <a class="button-link button-link-muted" href="#/cache">Open cache monitor</a>
+                </div>
+                <div style="margin-top:14px; overflow:auto;">
                 <table>
                   <thead>
                     <tr>
-                      <th>Date</th>
+                      <th>Provider</th>
                       <th>Requests</th>
                       <th>Hits</th>
-                      <th>Hit rate</th>
+                      <th>Misses</th>
+                      <th>Measured hit rate</th>
+                      <th>Telemetry</th>
                       <th>Cached tokens</th>
                       <th>Avg saved</th>
                     </tr>
                   </thead>
-                  <tbody id="dailyStatsTableBody">
+                  <tbody id="providerStatsTableBody">
                     <tr>
-                      <td colspan="6" class="mono">Loading usage stats...</td>
+                      <td colspan="8" class="mono">Loading provider stats...</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
+              </div>
 
-              <div class="row" style="margin-top:18px;">
+              <div class="row section-divider">
                 <div>
                   <h3>Providers</h3>
-                  <p>Standard access only needs the base URL and <span class="mono">Authorization: Bearer &lt;provider-api-key&gt;</span>. Advanced client-specific overrides are optional.</p>
+                  <p>Provider inventory and routing keys.</p>
                 </div>
               </div>
 
@@ -115,13 +124,24 @@
                       <th>Name</th>
                       <th>Provider ID</th>
                       <th>Base URL</th>
-                      <th>API Keys</th>
+                      <th>Capabilities</th>
+                      <th>Provider Keys</th>
+                      <th>Client Keys</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody id="providerTableBody">
                     <tr>
-                      <td colspan="5" class="mono">Loading providers...</td>
+                      <td colspan="7" class="mono">Loading providers...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div hidden style="margin-top:14px; overflow:auto;">
+                <table>
+                  <tbody id="dailyStatsTableBody">
+                    <tr>
+                      <td colspan="6" class="mono">Loading usage stats...</td>
                     </tr>
                   </tbody>
                 </table>
@@ -153,7 +173,7 @@
               <div class="row-wrap" style="margin-top:12px;">
                 <div style="flex:1; min-width:260px;">
                   <div class="row" style="align-items:flex-end;">
-                    <label for="customProviderApiKey">Provider API keys</label>
+                    <label for="customProviderApiKey">Upstream Provider API Keys</label>
                     <button id="addProviderApiKeyBtn" type="button" class="table-button">Add API key</button>
                   </div>
                   <div id="providerApiKeysList" class="api-key-list"></div>
@@ -163,6 +183,40 @@
                       <button type="button" class="table-button provider-api-key-remove">Remove</button>
                     </div>
                   </template>
+                </div>
+                <div style="flex:1; min-width:260px;">
+                  <div class="row" style="align-items:flex-end;">
+                    <label for="customClientApiKey">Proxy Client API Keys</label>
+                    <button id="addClientApiKeyBtn" type="button" class="table-button">Add API key</button>
+                  </div>
+                  <div id="clientApiKeysList" class="api-key-list"></div>
+                  <template id="clientApiKeyTemplate">
+                    <div class="api-key-row">
+                      <input class="client-api-key-input" type="password" placeholder="client-..." />
+                      <button type="button" class="table-button client-api-key-remove">Remove</button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <div class="row-wrap" style="margin-top:12px;">
+                <div style="flex:1; min-width:220px;">
+                  <label for="providerOwnedBy">Owned By Label</label>
+                  <input id="providerOwnedBy" type="text" placeholder="optional" />
+                </div>
+                <div style="flex:2; min-width:260px;">
+                  <label for="providerUsageCheckUrl">Usage check URL</label>
+                  <input id="providerUsageCheckUrl" type="text" placeholder="https://host/check-usage" />
+                </div>
+              </div>
+              <div class="row-wrap" style="margin-top:12px;">
+                <label><input id="providerUsageCheckEnabled" type="checkbox" /> Enable usage check</label>
+                <label><input id="providerStripMaxOutputTokens" type="checkbox" /> Strip max output tokens</label>
+                <label><input id="providerSanitizeReasoningSummary" type="checkbox" /> Sanitize reasoning summary</label>
+              </div>
+              <div class="row-wrap" style="margin-top:12px;">
+                <div style="flex:1; min-width:260px;">
+                  <label for="providerStripModelPrefixes">Strip model prefixes</label>
+                  <input id="providerStripModelPrefixes" type="text" placeholder="cx/, vendor/" />
                 </div>
               </div>
               <div class="row-wrap" style="margin-top:12px;">
@@ -181,16 +235,16 @@
             </div>
           </section>
 
-          <section id="screen-krouter" class="screen">
+          <section id="screen-usage" class="screen">
             <div class="section">
-              <h2>KRouter Token Check</h2>
-              <p>Check usage without affecting the provider or model controls.</p>
+              <h2>Provider Usage Check</h2>
+              <p>Check an upstream provider API key without changing proxy routing or model settings.</p>
               <form id="check-form">
                 <div>
-                  <label for="apiKey">KRouter API key</label>
+                  <label for="apiKey">Upstream Provider API Key</label>
                   <input id="apiKey" name="apiKey" type="password" placeholder="sk-..." autocomplete="off" required />
                 </div>
-                <button id="submitBtn" type="submit">Check token</button>
+                <button id="submitBtn" type="submit">Check usage</button>
               </form>
               <div id="status" class="status" hidden></div>
               <div class="cards">
@@ -207,7 +261,7 @@
                   <strong id="usedLimit">-</strong>
                 </section>
               </div>
-              <div class="meta">Endpoint: POST /api/krouter/check-token</div>
+              <div class="meta">Endpoint: POST /api/providers/check-usage</div>
               <pre id="raw">{}</pre>
             </div>
           </section>
@@ -216,12 +270,22 @@
             <div class="section">
               <div class="row">
                 <div>
-                  <h2>Latest Cache Snapshot</h2>
-                  <p>Only refresh the cache screen while you are viewing it.</p>
+                  <h2>Provider Cache Monitor</h2>
+                  <p>Inspect the latest cache snapshot and cache efficiency for a specific provider.</p>
                 </div>
                 <div id="cachePill" class="pill">Loading...</div>
               </div>
+              <div class="section section-nested section-divider">
+                <div class="row-wrap">
+                  <div style="min-width: 220px; flex: 1 1 320px;">
+                    <label for="cacheProviderSelect">Provider</label>
+                    <select id="cacheProviderSelect"></select>
+                  </div>
+                  <div class="pill" id="cacheProviderStatsPill">No provider selected</div>
+                </div>
+              </div>
               <div class="mini-grid">
+                <div class="mini-card"><span>Provider / Upstream</span><strong id="cacheProviderName">-</strong></div>
                 <div class="mini-card"><span>Request ID</span><strong id="cacheRequestId">-</strong></div>
                 <div class="mini-card"><span>Model</span><strong id="cacheModel">-</strong></div>
                 <div class="mini-card"><span>Prompt cache key</span><strong id="cacheKey">-</strong></div>
@@ -233,7 +297,41 @@
                 <div class="mini-card"><span>Truncation</span><strong id="cacheTruncation">-</strong></div>
                 <div class="mini-card"><span>Reasoning / Text</span><strong id="cacheReasoning">-</strong></div>
               </div>
-              <div class="meta">Endpoint: GET /api/debug/prompt-cache/latest</div>
+              <div class="section section-nested section-divider">
+                <h3>Selected Provider Efficiency</h3>
+                <div class="mini-grid compact-grid">
+                <div class="mini-card"><span>Requests</span><strong id="cacheProviderRequests">-</strong></div>
+                <div class="mini-card"><span>Hits</span><strong id="cacheProviderHits">-</strong></div>
+                <div class="mini-card"><span>Misses</span><strong id="cacheProviderMisses">-</strong></div>
+                <div class="mini-card"><span>Measured hit rate</span><strong id="cacheProviderHitRate">-</strong></div>
+                <div class="mini-card"><span>Telemetry</span><strong id="cacheProviderTelemetry">-</strong></div>
+                <div class="mini-card"><span>Cached tokens</span><strong id="cacheProviderCachedTokens">-</strong></div>
+                <div class="mini-card"><span>Avg saved</span><strong id="cacheProviderAvgSaved">-</strong></div>
+              </div>
+              </div>
+              <div class="section section-nested section-divider">
+                <h3>All Providers</h3>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Provider</th>
+                      <th>Requests</th>
+                      <th>Hits</th>
+                      <th>Misses</th>
+                      <th>Measured hit rate</th>
+                      <th>Telemetry</th>
+                      <th>Cached tokens</th>
+                      <th>Avg saved</th>
+                    </tr>
+                  </thead>
+                  <tbody id="cacheProviderTableBody">
+                    <tr>
+                      <td colspan="8" class="mono">Loading provider cache stats...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="meta">Endpoints: GET /api/debug/prompt-cache/latest?providerId=... and GET /api/stats/usage</div>
             </div>
           </section>
         </div>
