@@ -13,6 +13,7 @@ import {
   fetchProviderUsage,
 } from "./provider-usage.js";
 import { normalizeResponsesRequestWithCache } from "./normalize-request.js";
+import { resolveRequestTimeoutMs } from "./request-timeout-policy.js";
 import {
   type ClientRouteKey,
   buildBuiltinProviderPresets,
@@ -1156,12 +1157,17 @@ async function forwardJsonWithFallback(args: {
   const usingFallbackAsPrimary = fallbackProvider
     ? primaryTarget.name === fallbackProvider.id
     : false;
+  const timeoutMs = resolveRequestTimeoutMs(args.body, {
+    defaultTimeoutMs: config.REQUEST_TIMEOUT_MS,
+    summaryTimeoutMs: config.SUMMARY_REQUEST_TIMEOUT_MS,
+    extendHermesSummaryTimeout: config.HERMES_EXTEND_SUMMARY_TIMEOUT,
+  });
   const primaryResponse = await forwardJson({
     requestId: args.requestId,
     url: primaryTarget.url,
     body: args.body,
     apiKey: primaryTarget.apiKey,
-    timeoutMs: config.REQUEST_TIMEOUT_MS,
+    timeoutMs,
     logger: args.logger,
     onEvent: (entry) => args.sessionLog.write(entry),
   }).catch((error: unknown) => error);
@@ -1194,7 +1200,7 @@ async function forwardJsonWithFallback(args: {
     url: fallbackProvider.responsesUrl,
     body: rewriteBodyForProvider(args.body, fallbackProvider),
     apiKey: getDefaultProviderApiKey(fallbackProvider),
-    timeoutMs: config.REQUEST_TIMEOUT_MS,
+    timeoutMs,
     logger: args.logger,
     onEvent: (entry) => args.sessionLog.write(entry),
   });
@@ -1380,6 +1386,11 @@ async function forwardSseWithFallback(args: {
   const usingFallbackAsPrimary = fallbackProvider
     ? primaryTarget.name === fallbackProvider.id
     : false;
+  const timeoutMs = resolveRequestTimeoutMs(args.body, {
+    defaultTimeoutMs: config.REQUEST_TIMEOUT_MS,
+    summaryTimeoutMs: config.SUMMARY_REQUEST_TIMEOUT_MS,
+    extendHermesSummaryTimeout: config.HERMES_EXTEND_SUMMARY_TIMEOUT,
+  });
 
   try {
     await forwardSse({
@@ -1387,7 +1398,7 @@ async function forwardSseWithFallback(args: {
       url: primaryTarget.url,
       body: args.body,
       apiKey: primaryTarget.apiKey,
-      timeoutMs: config.REQUEST_TIMEOUT_MS,
+      timeoutMs,
       idleTimeoutMs: config.STREAM_IDLE_TIMEOUT_MS,
       responseRaw: args.responseRaw,
       logger: args.logger,
@@ -1416,7 +1427,7 @@ async function forwardSseWithFallback(args: {
       url: fallbackProvider.responsesUrl,
       body: rewriteBodyForProvider(args.body, fallbackProvider),
       apiKey: getDefaultProviderApiKey(fallbackProvider),
-      timeoutMs: config.REQUEST_TIMEOUT_MS,
+      timeoutMs,
       idleTimeoutMs: config.STREAM_IDLE_TIMEOUT_MS,
       responseRaw: args.responseRaw,
       logger: args.logger,

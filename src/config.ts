@@ -19,7 +19,12 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value !== "false"),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
+  SUMMARY_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(900_000),
   STREAM_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(330_000),
+  HERMES_EXTEND_SUMMARY_TIMEOUT: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
   REQUEST_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
