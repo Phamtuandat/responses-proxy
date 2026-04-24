@@ -26,6 +26,8 @@ export type PromptCacheObservation = {
   cacheSavedPercent?: number;
   cacheHit?: boolean;
   consecutiveCacheHits?: number;
+  rtkApplied?: boolean;
+  rtkCharsSaved?: number;
   stream: boolean;
   timestamp: string;
 };

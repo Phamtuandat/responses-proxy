@@ -3,6 +3,17 @@ import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import BetterSqlite3 from "better-sqlite3";
 import type { AppConfig } from "./config.js";
+import {
+  cloneProviderRequestParameterPolicy,
+  parseProviderRequestParameterPolicyInput,
+  resolveMaxOutputTokensRule,
+  type ProviderRequestParameterPolicy,
+} from "./provider-request-parameters.js";
+import {
+  cloneRtkLayerPolicy,
+  parseRtkLayerPolicyInput,
+  type RtkLayerPolicy,
+} from "./rtk-layer.js";
 type Database = InstanceType<typeof BetterSqlite3>;
 
 export type RuntimeProviderCapabilities = {
@@ -10,8 +21,26 @@ export type RuntimeProviderCapabilities = {
   usageCheckEnabled: boolean;
   usageCheckUrl?: string;
   stripMaxOutputTokens: boolean;
+  requestParameterPolicy: ProviderRequestParameterPolicy;
   sanitizeReasoningSummary: boolean;
   stripModelPrefixes: string[];
+  rtkPolicy?: RtkLayerPolicy;
+  errorPolicy?: ProviderErrorPolicy;
+};
+
+export type ProviderErrorPolicyRule = {
+  statusCodes?: number[];
+  upstreamCodes?: string[];
+  upstreamTypes?: string[];
+  messageIncludes?: string[];
+  bodyIncludes?: string[];
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+};
+
+export type ProviderErrorPolicy = {
+  rules: ProviderErrorPolicyRule[];
 };
 
 export type RuntimeProviderPreset = {
@@ -30,6 +59,8 @@ export const BUILTIN_CLIENT_ROUTE_KEYS = ["default"] as const;
 export type ClientRouteKey = string;
 export type ClientRouteMap = Record<string, string>;
 export type ClientModelOverrideMap = Record<string, string>;
+export type ClientRtkPolicyMap = Record<string, RtkLayerPolicy>;
+export type ClientRouteApiKeyMap = Record<string, string[]>;
 
 type RuntimeProviderState = {
   providers: RuntimeProviderPreset[];
@@ -37,6 +68,8 @@ type RuntimeProviderState = {
   modelOverride?: string;
   modelOverrides?: ClientModelOverrideMap;
   clientRoutes?: ClientRouteMap;
+  clientRouteRtkPolicies?: ClientRtkPolicyMap;
+  clientRouteApiKeys?: ClientRouteApiKeyMap;
 };
 
 export type RuntimeProviderInput = {
@@ -69,6 +102,8 @@ export type ClientRouteView = {
   providerId: string | null;
   providerName: string | null;
   modelOverride: string | null;
+  rtkPolicy: RtkLayerPolicy | null;
+  apiKeys: string[];
 };
 
 type ValidatedProviderInput = {
@@ -94,8 +129,11 @@ type ProviderRow = {
   usage_check_enabled: number | null;
   usage_check_url: string | null;
   strip_max_output_tokens: number | null;
+  request_parameter_policy: string | null;
   sanitize_reasoning_summary: number | null;
   strip_model_prefixes: string | null;
+  rtk_policy: string | null;
+  error_policy: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -113,6 +151,11 @@ type RouteRow = {
 type ModelOverrideRow = {
   client_route: string;
   model: string;
+};
+
+type ClientRouteRtkPolicyRow = {
+  client_route: string;
+  policy: string;
 };
 
 type AppStateRow = {
@@ -138,6 +181,8 @@ export class RuntimeProviderRepository {
   private activeProviderId: string;
   private modelOverrides: ClientModelOverrideMap;
   private clientRoutes: ClientRouteMap;
+  private clientRouteRtkPolicies: ClientRtkPolicyMap;
+  private clientRouteApiKeys: ClientRouteApiKeyMap;
 
   private constructor(
     private readonly dbFile: string,
@@ -155,6 +200,8 @@ export class RuntimeProviderRepository {
     this.activeProviderId = this.resolveActiveProviderId(state.activeProviderId);
     this.modelOverrides = this.resolveModelOverrides(state.modelOverrides, state.modelOverride);
     this.clientRoutes = this.resolveClientRoutes(state.clientRoutes);
+    this.clientRouteRtkPolicies = this.resolveClientRouteRtkPolicies(state.clientRouteRtkPolicies);
+    this.clientRouteApiKeys = this.resolveClientRouteApiKeys(state.clientRouteApiKeys);
   }
 
   static async create(
@@ -162,6 +209,7 @@ export class RuntimeProviderRepository {
   ): Promise<RuntimeProviderRepository> {
     const db = openDatabase(options.dbFile);
     ensureSchema(db);
+    backfillLegacyRequestParameterPolicies(db);
 
     const stateFromDb = readStateFromDatabase(db);
     const hasDbState = stateFromDb.providers.length > 0;
@@ -200,6 +248,8 @@ export class RuntimeProviderRepository {
         providerId,
         providerName: provider?.name ?? null,
         modelOverride: this.getModelOverride(key) ?? null,
+        rtkPolicy: cloneRtkLayerPolicy(this.getClientRouteRtkPolicy(key)) ?? null,
+        apiKeys: [...(this.clientRouteApiKeys[key] ?? [])],
       };
     });
   }
@@ -211,6 +261,29 @@ export class RuntimeProviderRepository {
 
   getProviderForClient(client: ClientRouteKey): RuntimeProviderPreset | undefined {
     return this.getProvider(this.getProviderIdForClient(client));
+  }
+
+  getClientRouteRtkPolicy(client: ClientRouteKey = "default"): RtkLayerPolicy | undefined {
+    return this.clientRouteRtkPolicies[normalizeClientRouteKey(client)];
+  }
+
+  getClientRouteApiKeys(client: ClientRouteKey = "default"): string[] {
+    return [...(this.clientRouteApiKeys[normalizeClientRouteKey(client)] ?? [])];
+  }
+
+  findClientRouteByApiKey(apiKey?: string): ClientRouteKey | undefined {
+    const normalizedApiKey = typeof apiKey === "string" ? apiKey.trim() : "";
+    if (!normalizedApiKey) {
+      return undefined;
+    }
+
+    for (const clientRoute of this.listClientRouteKeys()) {
+      if ((this.clientRouteApiKeys[clientRoute] ?? []).includes(normalizedApiKey)) {
+        return clientRoute;
+      }
+    }
+
+    return undefined;
   }
 
   setClientRoute(client: ClientRouteKey, providerId?: string): string {
@@ -238,6 +311,39 @@ export class RuntimeProviderRepository {
     return this.getModelOverride(routeKey);
   }
 
+  setClientRouteRtkPolicy(
+    client: ClientRouteKey,
+    policy?: RtkLayerPolicy,
+  ): RtkLayerPolicy | undefined {
+    const routeKey = normalizeClientRouteKey(client);
+    const normalized = cloneRtkLayerPolicy(policy);
+    if (
+      normalized &&
+      (normalized.enabled !== undefined ||
+        normalized.toolOutputEnabled !== undefined ||
+        normalized.maxChars !== undefined ||
+        normalized.maxLines !== undefined)
+    ) {
+      this.clientRouteRtkPolicies[routeKey] = normalized;
+    } else {
+      delete this.clientRouteRtkPolicies[routeKey];
+    }
+    this.persistRuntimeState();
+    return this.getClientRouteRtkPolicy(routeKey);
+  }
+
+  setClientRouteApiKeys(client: ClientRouteKey, apiKeys?: string[]): string[] {
+    const routeKey = normalizeClientRouteKey(client);
+    const normalized = normalizeApiKeys(apiKeys ?? []);
+    if (normalized.length > 0) {
+      this.clientRouteApiKeys[routeKey] = normalized;
+    } else {
+      delete this.clientRouteApiKeys[routeKey];
+    }
+    this.persistRuntimeState();
+    return this.getClientRouteApiKeys(routeKey);
+  }
+
   addClientRoute(client: ClientRouteKey, providerId?: string): string {
     const routeKey = normalizeClientRouteKey(client);
     if (this.listClientRouteKeys().includes(routeKey)) {
@@ -256,8 +362,16 @@ export class RuntimeProviderRepository {
         ...BUILTIN_CLIENT_ROUTE_KEYS,
         ...Object.keys(this.clientRoutes),
         ...Object.keys(this.modelOverrides),
+        ...Object.keys(this.clientRouteRtkPolicies),
+        ...Object.keys(this.clientRouteApiKeys),
       ]),
     ];
+  }
+
+  private resolveClientRouteApiKeys(value?: ClientRouteApiKeyMap): ClientRouteApiKeyMap {
+    const next = sanitizeClientRouteApiKeys(value);
+    delete next.default;
+    return next;
   }
 
   listProviders(): RuntimeProviderPreset[] {
@@ -524,6 +638,19 @@ export class RuntimeProviderRepository {
     return resolved;
   }
 
+  private resolveClientRouteRtkPolicies(
+    policies?: ClientRtkPolicyMap,
+  ): ClientRtkPolicyMap {
+    if (!policies) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(policies)
+        .map(([clientRoute, policy]) => [normalizeClientRouteKey(clientRoute), cloneRtkLayerPolicy(policy)] as const)
+        .filter((entry): entry is [string, RtkLayerPolicy] => Boolean(entry[1])),
+    );
+  }
+
   private persistRuntimeState(): void {
     this.db.exec("BEGIN");
     try {
@@ -532,6 +659,7 @@ export class RuntimeProviderRepository {
       this.db.exec("DELETE FROM providers");
       this.db.exec("DELETE FROM client_routes");
       this.db.exec("DELETE FROM model_overrides");
+      this.db.exec("DELETE FROM client_route_rtk_policies");
       this.db.exec("DELETE FROM app_state");
 
       const insertProvider = this.db.prepare(`
@@ -544,12 +672,15 @@ export class RuntimeProviderRepository {
           usage_check_enabled,
           usage_check_url,
           strip_max_output_tokens,
+          request_parameter_policy,
           sanitize_reasoning_summary,
           strip_model_prefixes,
+          rtk_policy,
+          error_policy,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertApiKey = this.db.prepare(`
         INSERT INTO provider_api_keys (provider_id, api_key, position)
@@ -567,6 +698,10 @@ export class RuntimeProviderRepository {
         INSERT INTO model_overrides (client_route, model)
         VALUES (?, ?)
       `);
+      const insertClientRouteRtkPolicy = this.db.prepare(`
+        INSERT INTO client_route_rtk_policies (client_route, policy)
+        VALUES (?, ?)
+      `);
       const insertAppState = this.db.prepare(`
         INSERT INTO app_state (key, value)
         VALUES (?, ?)
@@ -582,8 +717,13 @@ export class RuntimeProviderRepository {
           provider.capabilities.usageCheckEnabled ? 1 : 0,
           provider.capabilities.usageCheckUrl ?? null,
           provider.capabilities.stripMaxOutputTokens ? 1 : 0,
+          JSON.stringify(
+            cloneProviderRequestParameterPolicy(provider.capabilities.requestParameterPolicy),
+          ),
           provider.capabilities.sanitizeReasoningSummary ? 1 : 0,
           JSON.stringify(provider.capabilities.stripModelPrefixes),
+          JSON.stringify(cloneRtkLayerPolicy(provider.capabilities.rtkPolicy) ?? {}),
+          JSON.stringify(cloneProviderErrorPolicy(provider.capabilities.errorPolicy) ?? {}),
           provider.createdAt ?? null,
           provider.updatedAt ?? null,
         );
@@ -602,9 +742,16 @@ export class RuntimeProviderRepository {
       Object.entries(this.modelOverrides).forEach(([clientRoute, model]) => {
         insertModelOverride.run(clientRoute, model);
       });
+      Object.entries(this.clientRouteRtkPolicies).forEach(([clientRoute, policy]) => {
+        insertClientRouteRtkPolicy.run(
+          clientRoute,
+          JSON.stringify(cloneRtkLayerPolicy(policy) ?? {}),
+        );
+      });
 
       insertAppState.run("active_provider_id", this.activeProviderId);
       insertAppState.run("model_override", this.modelOverrides.default ?? "");
+      insertAppState.run("client_route_api_keys", JSON.stringify(this.clientRouteApiKeys));
 
       this.db.exec("COMMIT");
     } catch (error) {
@@ -615,7 +762,7 @@ export class RuntimeProviderRepository {
 }
 
 export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderPreset[] {
-  const primaryIdentity = inferProviderIdentity(config.UPSTREAM_BASE_URL, "upstream");
+  const primaryIdentity = inferProviderIdentity(config.UPSTREAM_BASE_URL, "");
   const presets: RuntimeProviderPreset[] = [
     {
       id: primaryIdentity.id,
@@ -662,8 +809,11 @@ function ensureSchema(db: Database): void {
       usage_check_enabled INTEGER NOT NULL DEFAULT 0,
       usage_check_url TEXT,
       strip_max_output_tokens INTEGER NOT NULL DEFAULT 0,
+      request_parameter_policy TEXT NOT NULL DEFAULT '{}',
       sanitize_reasoning_summary INTEGER NOT NULL DEFAULT 0,
       strip_model_prefixes TEXT NOT NULL DEFAULT '[]',
+      rtk_policy TEXT NOT NULL DEFAULT '{}',
+      error_policy TEXT NOT NULL DEFAULT '{}',
       created_at TEXT,
       updated_at TEXT
     );
@@ -695,6 +845,11 @@ function ensureSchema(db: Database): void {
       model TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS client_route_rtk_policies (
+      client_route TEXT PRIMARY KEY,
+      policy TEXT NOT NULL DEFAULT '{}'
+    );
+
     CREATE TABLE IF NOT EXISTS app_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -704,8 +859,11 @@ function ensureSchema(db: Database): void {
   ensureProvidersColumn(db, "usage_check_enabled", "INTEGER NOT NULL DEFAULT 0");
   ensureProvidersColumn(db, "usage_check_url", "TEXT");
   ensureProvidersColumn(db, "strip_max_output_tokens", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "request_parameter_policy", "TEXT NOT NULL DEFAULT '{}'");
   ensureProvidersColumn(db, "sanitize_reasoning_summary", "INTEGER NOT NULL DEFAULT 0");
   ensureProvidersColumn(db, "strip_model_prefixes", "TEXT NOT NULL DEFAULT '[]'");
+  ensureProvidersColumn(db, "rtk_policy", "TEXT NOT NULL DEFAULT '{}'");
+  ensureProvidersColumn(db, "error_policy", "TEXT NOT NULL DEFAULT '{}'");
 }
 
 function readStateFromDatabase(db: Database): RuntimeProviderState {
@@ -720,8 +878,11 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       usage_check_enabled,
       usage_check_url,
       strip_max_output_tokens,
+      request_parameter_policy,
       sanitize_reasoning_summary,
       strip_model_prefixes,
+      rtk_policy,
+      error_policy,
       created_at,
       updated_at
     FROM providers
@@ -742,6 +903,10 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
   const modelOverrideRows = queryRows<ModelOverrideRow>(
     db,
     "SELECT client_route, model FROM model_overrides ORDER BY client_route",
+  );
+  const clientRouteRtkPolicyRows = queryRows<ClientRouteRtkPolicyRow>(
+    db,
+    "SELECT client_route, policy FROM client_route_rtk_policies ORDER BY client_route",
   );
   const appStateRows = queryRows<AppStateRow>(
     db,
@@ -777,8 +942,14 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       usageCheckEnabled: row.usage_check_enabled === 1,
       usageCheckUrl: row.usage_check_url?.trim() ? row.usage_check_url.trim() : undefined,
       stripMaxOutputTokens: row.strip_max_output_tokens === 1,
+      requestParameterPolicy: normalizeStoredRequestParameterPolicy(
+        row.request_parameter_policy,
+        row.strip_max_output_tokens === 1,
+      ),
       sanitizeReasoningSummary: row.sanitize_reasoning_summary === 1,
       stripModelPrefixes: normalizeStringList(row.strip_model_prefixes),
+      rtkPolicy: parseRtkLayerPolicyInput(safeJsonParse(row.rtk_policy ?? "{}")),
+      errorPolicy: parseProviderErrorPolicyInput(safeJsonParse(row.error_policy ?? "{}")),
     },
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
@@ -791,8 +962,16 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
   const modelOverrides = Object.fromEntries(
     modelOverrideRows.map((row) => [row.client_route, row.model]),
   ) as ClientModelOverrideMap;
+  const clientRouteRtkPolicies = Object.fromEntries(
+    clientRouteRtkPolicyRows
+      .map((row) => [row.client_route, parseRtkLayerPolicyInput(safeJsonParse(row.policy))] as const)
+      .filter((entry): entry is [string, RtkLayerPolicy] => Boolean(entry[1])),
+  ) as ClientRtkPolicyMap;
 
   const modelOverride = appState.get("model_override");
+  const clientRouteApiKeys = sanitizeClientRouteApiKeys(
+    safeJsonParse(appState.get("client_route_api_keys") ?? "{}"),
+  );
 
   return {
     providers,
@@ -800,6 +979,8 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
     modelOverride: modelOverride?.trim() ? modelOverride : undefined,
     modelOverrides,
     clientRoutes,
+    clientRouteRtkPolicies,
+    clientRouteApiKeys,
   };
 }
 
@@ -833,6 +1014,8 @@ function loadLegacyState(stateFile: string): RuntimeProviderState | undefined {
           : undefined,
       modelOverrides: sanitizeModelOverrides(parsed.modelOverrides),
       clientRoutes: sanitizeClientRoutes(parsed.clientRoutes),
+      clientRouteRtkPolicies: sanitizeClientRouteRtkPolicies(parsed.clientRouteRtkPolicies),
+      clientRouteApiKeys: sanitizeClientRouteApiKeys(parsed.clientRouteApiKeys),
     };
   } catch {
     return undefined;
@@ -932,6 +1115,40 @@ function sanitizeModelOverrides(value: unknown): ClientModelOverrideMap {
   return next;
 }
 
+function sanitizeClientRouteRtkPolicies(value: unknown): ClientRtkPolicyMap {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  const next: ClientRtkPolicyMap = {};
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const key = normalizeClientRouteKey(rawKey);
+    const policy = parseRtkLayerPolicyInput(rawValue);
+    if (policy) {
+      next[key] = policy;
+    }
+  }
+  return next;
+}
+
+function sanitizeClientRouteApiKeys(value: unknown): ClientRouteApiKeyMap {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  const next: ClientRouteApiKeyMap = {};
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const key = normalizeClientRouteKey(rawKey);
+    const apiKeys = normalizeApiKeysInput(rawValue);
+    if (apiKeys.length > 0) {
+      next[key] = apiKeys;
+    }
+  }
+  return next;
+}
+
 function normalizeApiKeysInput(...values: unknown[]): string[] {
   for (const value of values) {
     if (Array.isArray(value)) {
@@ -969,9 +1186,6 @@ export function normalizeClientRouteKey(value: string): string {
       code: "INVALID_CLIENT_ROUTE",
       message: "client route is required",
     });
-  }
-  if (normalized === "codex" || normalized === "hermes" || normalized === "openclaw") {
-    return "default";
   }
   return normalized;
 }
@@ -1041,16 +1255,31 @@ function mergeBaseProviders(
 ): RuntimeProviderPreset[] {
   const merged = [...runtimeProviders];
   for (const baseProvider of baseProviders) {
-    const exists = merged.some(
+    const matchingIndex = merged.findIndex(
       (provider) =>
+        provider.id === baseProvider.id ||
         provider.baseUrl === baseProvider.baseUrl ||
         normalizeProviderName(provider.name) === normalizeProviderName(baseProvider.name),
     );
-    if (!exists) {
+    if (matchingIndex === -1) {
       merged.push(baseProvider);
+      continue;
+    }
+
+    const existing = merged[matchingIndex];
+    if (isUnmodifiedSeededProvider(existing)) {
+      merged[matchingIndex] = {
+        ...baseProvider,
+        createdAt: existing.createdAt,
+        updatedAt: existing.updatedAt,
+      };
     }
   }
   return merged;
+}
+
+function isUnmodifiedSeededProvider(provider: RuntimeProviderPreset): boolean {
+  return !provider.createdAt && !provider.updatedAt;
 }
 
 function shouldPersistSeededProviders(
@@ -1084,14 +1313,46 @@ function toResponsesUrl(baseUrl: string): string {
 }
 
 function buildDefaultCapabilitiesFromConfig(config: AppConfig): RuntimeProviderCapabilities {
+  const requestParameterPolicyInput =
+    config.MAX_OUTPUT_TOKENS_PARAMETER_MODE_FOR_PROVIDER
+      ? {
+          maxOutputTokens: {
+            mode: config.MAX_OUTPUT_TOKENS_PARAMETER_MODE_FOR_PROVIDER,
+            ...(config.MAX_OUTPUT_TOKENS_PARAMETER_MODE_FOR_PROVIDER === "rename" &&
+            config.MAX_OUTPUT_TOKENS_PARAMETER_TARGET_FOR_PROVIDER?.trim()
+              ? {
+                  target: config.MAX_OUTPUT_TOKENS_PARAMETER_TARGET_FOR_PROVIDER.trim(),
+                }
+              : {}),
+          },
+        }
+      : {};
+  const maxOutputTokensRule = resolveMaxOutputTokensRule({
+    stripMaxOutputTokens: config.STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER ?? false,
+    requestParameterPolicy: requestParameterPolicyInput,
+  });
+  const requestParameterPolicy = cloneProviderRequestParameterPolicy({
+    maxOutputTokens: maxOutputTokensRule,
+  });
   return {
     usageCheckEnabled: Boolean(
       config.PROVIDER_USAGE_CHECK_ENABLED && config.PROVIDER_USAGE_CHECK_URL,
     ),
     usageCheckUrl: config.PROVIDER_USAGE_CHECK_URL,
-    stripMaxOutputTokens: config.STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER ?? false,
+    stripMaxOutputTokens: maxOutputTokensRule.mode === "strip",
+    requestParameterPolicy,
     sanitizeReasoningSummary: config.SANITIZE_REASONING_SUMMARY_FOR_PROVIDER ?? false,
     stripModelPrefixes: [],
+    rtkPolicy: cloneRtkLayerPolicy({
+      enabled: config.RTK_LAYER_ENABLED,
+      toolOutputEnabled: config.RTK_LAYER_TOOL_OUTPUT_ENABLED,
+      maxChars: config.RTK_LAYER_TOOL_OUTPUT_MAX_CHARS,
+      maxLines: config.RTK_LAYER_TOOL_OUTPUT_MAX_LINES,
+      tailLines: config.RTK_LAYER_TOOL_OUTPUT_TAIL_LINES,
+      tailChars: config.RTK_LAYER_TOOL_OUTPUT_TAIL_CHARS,
+      detectFormat: config.RTK_LAYER_TOOL_OUTPUT_DETECT_FORMAT,
+    }),
+    errorPolicy: inferDefaultProviderErrorPolicy(config.UPSTREAM_BASE_URL),
   };
 }
 
@@ -1100,6 +1361,7 @@ function parseProviderCapabilitiesInput(value: unknown): RuntimeProviderCapabili
     return {
       usageCheckEnabled: false,
       stripMaxOutputTokens: false,
+      requestParameterPolicy: {},
       sanitizeReasoningSummary: false,
       stripModelPrefixes: [],
     };
@@ -1114,26 +1376,42 @@ function parseProviderCapabilitiesInput(value: unknown): RuntimeProviderCapabili
     typeof record.usageCheckUrl === "string" && record.usageCheckUrl.trim()
       ? normalizeOptionalUrl(record.usageCheckUrl)
       : undefined;
+  const requestParameterPolicy = parseProviderRequestParameterPolicyInput(
+    record.requestParameterPolicy ?? record.request_parameter_policy,
+  );
+  const maxOutputTokensRule = resolveMaxOutputTokensRule({
+    stripMaxOutputTokens: coerceBoolean(record.stripMaxOutputTokens),
+    requestParameterPolicy,
+  });
   return {
     ownedBy,
     usageCheckEnabled: coerceBoolean(record.usageCheckEnabled),
     usageCheckUrl,
-    stripMaxOutputTokens: coerceBoolean(record.stripMaxOutputTokens),
+    stripMaxOutputTokens: maxOutputTokensRule.mode === "strip",
+    requestParameterPolicy,
     sanitizeReasoningSummary: coerceBoolean(record.sanitizeReasoningSummary),
     stripModelPrefixes: normalizeStringList(record.stripModelPrefixes),
+    rtkPolicy: parseRtkLayerPolicyInput(record.rtkPolicy ?? record.rtk_policy),
+    errorPolicy: parseProviderErrorPolicyInput(record.errorPolicy ?? record.error_policy),
   };
 }
 
 function cloneCapabilities(
   capabilities?: RuntimeProviderCapabilities,
 ): RuntimeProviderCapabilities {
+  const maxOutputTokensRule = resolveMaxOutputTokensRule(capabilities);
   return {
     ownedBy: capabilities?.ownedBy,
     usageCheckEnabled: capabilities?.usageCheckEnabled ?? false,
     usageCheckUrl: capabilities?.usageCheckUrl,
-    stripMaxOutputTokens: capabilities?.stripMaxOutputTokens ?? false,
+    stripMaxOutputTokens: maxOutputTokensRule.mode === "strip",
+    requestParameterPolicy: cloneProviderRequestParameterPolicy({
+      maxOutputTokens: maxOutputTokensRule,
+    }),
     sanitizeReasoningSummary: capabilities?.sanitizeReasoningSummary ?? false,
     stripModelPrefixes: [...(capabilities?.stripModelPrefixes ?? [])],
+    rtkPolicy: cloneRtkLayerPolicy(capabilities?.rtkPolicy),
+    errorPolicy: cloneProviderErrorPolicy(capabilities?.errorPolicy),
   };
 }
 
@@ -1176,9 +1454,162 @@ function normalizeStringList(value: unknown): string[] {
   ];
 }
 
+function normalizeStoredRequestParameterPolicy(
+  raw: string | null,
+  stripMaxOutputTokens: boolean,
+): ProviderRequestParameterPolicy {
+  const parsed = raw?.trim() ? safeJsonParse(raw) : undefined;
+  const parsedPolicy = parseProviderRequestParameterPolicyInput(parsed);
+  return cloneProviderRequestParameterPolicy(
+    parsedPolicy.maxOutputTokens
+      ? parsedPolicy
+      : parseProviderRequestParameterPolicyInput({
+      maxOutputTokens: stripMaxOutputTokens ? "strip" : "forward",
+        }),
+  );
+}
+
+function cloneProviderErrorPolicy(policy?: ProviderErrorPolicy): ProviderErrorPolicy | undefined {
+  if (!policy || !Array.isArray(policy.rules) || policy.rules.length === 0) {
+    return undefined;
+  }
+  return {
+    rules: policy.rules.map((rule) => ({
+      statusCodes:
+        Array.isArray(rule.statusCodes) && rule.statusCodes.length > 0
+          ? rule.statusCodes.filter((value) => Number.isInteger(value))
+          : undefined,
+      upstreamCodes: normalizeStringList(rule.upstreamCodes),
+      upstreamTypes: normalizeStringList(rule.upstreamTypes),
+      messageIncludes: normalizeStringList(rule.messageIncludes),
+      bodyIncludes: normalizeStringList(rule.bodyIncludes),
+      code: typeof rule.code === "string" && rule.code.trim() ? rule.code.trim() : undefined,
+      message:
+        typeof rule.message === "string" && rule.message.trim() ? rule.message.trim() : undefined,
+      retryable: typeof rule.retryable === "boolean" ? rule.retryable : undefined,
+    })),
+  };
+}
+
+function parseProviderErrorPolicyInput(value: unknown): ProviderErrorPolicy | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const rulesInput = Array.isArray(record.rules) ? record.rules : [];
+  const rules = rulesInput
+    .map((item) => parseProviderErrorPolicyRuleInput(item))
+    .filter((item): item is ProviderErrorPolicyRule => Boolean(item));
+  if (rules.length === 0) {
+    return undefined;
+  }
+  return { rules };
+}
+
+function parseProviderErrorPolicyRuleInput(value: unknown): ProviderErrorPolicyRule | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const statusCodes = normalizeIntegerList(record.statusCodes ?? record.status_codes);
+  const upstreamCodes = normalizeStringList(record.upstreamCodes ?? record.upstream_codes);
+  const upstreamTypes = normalizeStringList(record.upstreamTypes ?? record.upstream_types);
+  const messageIncludes = normalizeStringList(record.messageIncludes ?? record.message_includes);
+  const bodyIncludes = normalizeStringList(record.bodyIncludes ?? record.body_includes);
+  const code = typeof record.code === "string" && record.code.trim() ? record.code.trim() : undefined;
+  const message =
+    typeof record.message === "string" && record.message.trim() ? record.message.trim() : undefined;
+  const retryable = typeof record.retryable === "boolean" ? record.retryable : undefined;
+
+  if (
+    statusCodes.length === 0 &&
+    upstreamCodes.length === 0 &&
+    upstreamTypes.length === 0 &&
+    messageIncludes.length === 0 &&
+    bodyIncludes.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    statusCodes: statusCodes.length > 0 ? statusCodes : undefined,
+    upstreamCodes: upstreamCodes.length > 0 ? upstreamCodes : undefined,
+    upstreamTypes: upstreamTypes.length > 0 ? upstreamTypes : undefined,
+    messageIncludes: messageIncludes.length > 0 ? messageIncludes : undefined,
+    bodyIncludes: bodyIncludes.length > 0 ? bodyIncludes : undefined,
+    code,
+    message,
+    retryable,
+  };
+}
+
+function normalizeIntegerList(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value.filter((item) => Number.isInteger(item)).map((item) => Number(item)))];
+}
+
+function inferDefaultProviderErrorPolicy(baseUrl: string): ProviderErrorPolicy | undefined {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    if (hostname === "krouter.net" || hostname === "api.krouter.net") {
+      return {
+        rules: [
+          {
+            statusCodes: [413],
+            code: "UPSTREAM_REQUEST_TOO_LARGE",
+            message:
+              "Upstream rejected the request because the serialized prompt body is too large",
+            retryable: false,
+          },
+          {
+            bodyIncludes: ["request body is too large"],
+            code: "UPSTREAM_REQUEST_TOO_LARGE",
+            message:
+              "Upstream rejected the request because the serialized prompt body is too large",
+            retryable: false,
+          },
+          {
+            statusCodes: [429],
+            code: "UPSTREAM_RATE_LIMITED",
+            message: "Upstream rate limit reached",
+            retryable: true,
+          },
+        ],
+      };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 function ensureProvidersColumn(db: Database, columnName: string, sqlDefinition: string): void {
   const columns = db.prepare("PRAGMA table_info(providers)").all() as Array<{ name: string }>;
   if (!columns.some((column) => column.name === columnName)) {
     db.exec(`ALTER TABLE providers ADD COLUMN ${columnName} ${sqlDefinition}`);
   }
+}
+
+function backfillLegacyRequestParameterPolicies(db: Database): void {
+  db.exec(`
+    UPDATE providers
+    SET request_parameter_policy = CASE
+      WHEN strip_max_output_tokens = 1
+        THEN '{"maxOutputTokens":{"mode":"strip"}}'
+      ELSE '{"maxOutputTokens":{"mode":"forward"}}'
+    END
+    WHERE request_parameter_policy IS NULL
+      OR TRIM(request_parameter_policy) = ''
+      OR TRIM(request_parameter_policy) = '{}'
+  `);
 }

@@ -11,6 +11,10 @@ type NormalizeRequestOptions = {
   autoPromptCacheKey?: boolean;
   defaultPromptCacheRetention?: string;
   defaultTruncation?: "auto" | "disabled";
+  maxOutputTokensPolicy?: {
+    mode: "forward" | "strip" | "rename";
+    target?: string;
+  };
   stripMaxOutputTokens?: boolean;
   sanitizeReasoningSummary?: boolean;
   promptCacheRedesignEnabled?: boolean;
@@ -311,6 +315,8 @@ export function normalizeResponsesRequestWithCache(
     stream: body.stream ?? false,
     parallel_tool_calls: body.parallel_tool_calls ?? true,
   };
+  const maxOutputTokensMode =
+    options.maxOutputTokensPolicy?.mode ?? (options.stripMaxOutputTokens ? "strip" : "forward");
 
   if (normalizedBase.instructions) {
     request.instructions = normalizedBase.instructions;
@@ -326,7 +332,7 @@ export function normalizeResponsesRequestWithCache(
     request.tool_choice = normalizeToolChoice(body.tool_choice);
   }
 
-  if (body.reasoning !== undefined) {
+  if (body.reasoning != null) {
     const reasoning = isOpenClaw
       ? {
           ...body.reasoning,
@@ -346,7 +352,7 @@ export function normalizeResponsesRequestWithCache(
     }, options);
   }
 
-  if (body.text !== undefined) {
+  if (body.text != null) {
     request.text =
       isOpenClaw && body.text.verbosity === undefined && options.defaultTextVerbosity
         ? {
@@ -361,9 +367,9 @@ export function normalizeResponsesRequestWithCache(
     };
   }
 
-  if (body.max_output_tokens !== undefined && !options.stripMaxOutputTokens) {
+  if (body.max_output_tokens !== undefined && maxOutputTokensMode !== "strip") {
     request.max_output_tokens = body.max_output_tokens;
-  } else if (isOpenClaw && options.defaultMaxOutputTokens !== undefined) {
+  } else if (isOpenClaw && options.defaultMaxOutputTokens !== undefined && maxOutputTokensMode !== "strip") {
     request.max_output_tokens = options.defaultMaxOutputTokens;
   }
 

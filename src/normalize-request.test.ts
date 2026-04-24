@@ -194,6 +194,24 @@ test("family retention rules apply by family prefix", () => {
   assert.equal(normalized.request.prompt_cache_retention, "72h");
 });
 
+test("strip policy removes max_output_tokens including injected defaults", () => {
+  const normalized = normalizeResponsesRequestWithCache(
+    {
+      model: "cx/gpt-5.4-xhigh",
+      input: [{ role: "user", content: "Hello" }],
+    },
+    {
+      openClawTokenOptimizationEnabled: true,
+      defaultMaxOutputTokens: 1200,
+      maxOutputTokensPolicy: {
+        mode: "strip",
+      },
+    },
+  );
+
+  assert.equal("max_output_tokens" in normalized.request, false);
+});
+
 test("direct input with legacy tool role is normalized before forwarding", () => {
   const normalized = normalizeResponsesRequestWithCache({
     model: "cx/gpt-5.4-xhigh",
@@ -240,4 +258,16 @@ test("legacy tool role without tool_call_id falls back to assistant content", ()
       content: "orphaned tool output",
     },
   ]);
+});
+
+test("ignores nullable reasoning and text fields", () => {
+  const normalized = normalizeResponsesRequestWithCache({
+    model: "cx/gpt-5.4-xhigh",
+    input: [{ role: "user", content: "Hello" }],
+    reasoning: null,
+    text: null,
+  } as never);
+
+  assert.equal("reasoning" in normalized.request, false);
+  assert.equal("text" in normalized.request, false);
 });

@@ -83,7 +83,26 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform(parsePromptCacheFamilyRetentionRules),
+  RTK_LAYER_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  RTK_LAYER_TOOL_OUTPUT_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  RTK_LAYER_TOOL_OUTPUT_MAX_CHARS: z.coerce.number().int().positive().default(4000),
+  RTK_LAYER_TOOL_OUTPUT_MAX_LINES: z.coerce.number().int().positive().default(120),
+  RTK_LAYER_TOOL_OUTPUT_TAIL_LINES: z.coerce.number().int().nonnegative().default(0),
+  RTK_LAYER_TOOL_OUTPUT_TAIL_CHARS: z.coerce.number().int().nonnegative().default(0),
+  RTK_LAYER_TOOL_OUTPUT_DETECT_FORMAT: z
+    .enum(["auto", "plain", "json", "stack", "command"])
+    .default("auto"),
   OPENCLAW_DEFAULT_TRUNCATION: z.enum(["auto", "disabled"]).default("auto"),
+  MAX_OUTPUT_TOKENS_PARAMETER_MODE_FOR_PROVIDER: z
+    .enum(["forward", "strip", "rename"])
+    .optional(),
+  MAX_OUTPUT_TOKENS_PARAMETER_TARGET_FOR_PROVIDER: z.string().optional(),
   STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER: z
     .string()
     .optional()

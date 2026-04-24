@@ -12,7 +12,15 @@ import {
   ensureProviderUsageAvailable,
   fetchProviderUsage,
 } from "./provider-usage.js";
+import {
+  defaultProxyErrorCode,
+  resolveProxyError,
+} from "./error-response.js";
 import { normalizeResponsesRequestWithCache } from "./normalize-request.js";
+import {
+  applyProviderRequestParameterPolicy,
+  resolveMaxOutputTokensRule,
+} from "./provider-request-parameters.js";
 import { resolveRequestTimeoutMs } from "./request-timeout-policy.js";
 import {
   type ClientRouteKey,
@@ -29,6 +37,7 @@ import {
   PromptCacheStateStore,
   type PromptCacheObservation,
 } from "./prompt-cache-state.js";
+import { applyRtkLayer, parseRtkLayerPolicyInput, resolveRtkLayerPolicy } from "./rtk-layer.js";
 
 const config = readConfig(process.env);
 
@@ -39,10 +48,26 @@ const providerRepository = await RuntimeProviderRepository.create({
 });
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
 const publicDir = path.resolve(process.cwd(), "public");
+const publicAssetFiles = [
+  "app.css",
+  "app.js",
+  "favicon.svg",
+  "logo.svg",
+  "app-icon.svg",
+  "dashboard-illustration.svg",
+  "providers-illustration.svg",
+] as const;
 const publicAssets = {
   indexHtml: readFileSync(path.join(publicDir, "index.html"), "utf8"),
-  appCss: readFileSync(path.join(publicDir, "app.css"), "utf8"),
-  appJs: readFileSync(path.join(publicDir, "app.js"), "utf8"),
+  files: Object.fromEntries(
+    publicAssetFiles.map((fileName) => [
+      fileName,
+      {
+        body: readFileSync(path.join(publicDir, fileName), "utf8"),
+        contentType: resolvePublicAssetContentType(fileName),
+      },
+    ]),
+  ) as Record<(typeof publicAssetFiles)[number], { body: string; contentType: string }>,
 };
 let latestPromptCacheObservation: PromptCacheObservation | undefined;
 const latestPromptCacheObservationByProvider = new Map<string, PromptCacheObservation>();
@@ -173,6 +198,61 @@ app.post("/api/model-override", async (request, reply) => {
     client,
     mode: modelOverride ? "override" : "default",
     model: modelOverride ?? null,
+  });
+});
+
+app.post("/api/rtk-policies", async (request, reply) => {
+  const body = request.body as { client?: unknown; policy?: unknown } | undefined;
+  if (typeof body?.client !== "string" || !body.client.trim()) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_CLIENT_ROUTE",
+        message: "client route is required",
+      },
+    });
+  }
+
+  const client = normalizeClientRouteKey(body.client);
+  const policy = parseRtkLayerPolicyInput(body.policy);
+  const resolved = providerRepository.setClientRouteRtkPolicy(client, policy);
+  return reply.send({
+    ok: true,
+    client,
+    rtkPolicy: resolved ?? null,
+    clientRoutes: providerRepository.getClientRoutesForUi(),
+  });
+});
+
+app.post("/api/client-route-keys", async (request, reply) => {
+  const body = request.body as { client?: unknown; apiKeys?: unknown } | undefined;
+  if (typeof body?.client !== "string" || !body.client.trim()) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_CLIENT_ROUTE",
+        message: "client route is required",
+      },
+    });
+  }
+
+  const client = normalizeClientRouteKey(body.client);
+  const apiKeys = Array.isArray(body.apiKeys)
+    ? body.apiKeys
+    : typeof body?.apiKeys === "string"
+      ? body.apiKeys.split(/\r?\n|,/g)
+      : [];
+  const resolved = providerRepository.setClientRouteApiKeys(
+    client,
+    apiKeys
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter(Boolean),
+  );
+  return reply.send({
+    ok: true,
+    client,
+    apiKeys: resolved,
+    clientRoutes: providerRepository.getClientRoutesForUi(),
   });
 });
 
@@ -344,12 +424,15 @@ app.get("/", async (_request, reply) => {
   reply.type("text/html; charset=utf-8").send(publicAssets.indexHtml);
 });
 
-app.get("/app.css", async (_request, reply) => {
-  reply.type("text/css; charset=utf-8").send(publicAssets.appCss);
-});
+for (const [fileName, asset] of Object.entries(publicAssets.files)) {
+  app.get(`/${fileName}`, async (_request, reply) => {
+    reply.type(asset.contentType).send(asset.body);
+  });
+}
 
-app.get("/app.js", async (_request, reply) => {
-  reply.type("application/javascript; charset=utf-8").send(publicAssets.appJs);
+app.get("/favicon.ico", async (_request, reply) => {
+  const favicon = publicAssets.files["favicon.svg"];
+  reply.type(favicon.contentType).send(favicon.body);
 });
 
 async function handleProviderUsageCheck(
@@ -522,8 +605,8 @@ async function handleResponsesRequest(
     });
   }
 
-  const clientRoute = resolveClientRoute(request.headers, parsed.data);
   const routingApiKey = readBearerToken(request.headers.authorization);
+  const clientRoute = resolveClientRoute(request.headers, parsed.data, routingApiKey);
   const selectedProvider = providerRepository.findProviderByAccessKey(routingApiKey);
   if (!selectedProvider) {
     return reply.code(401).send({
@@ -536,14 +619,31 @@ async function handleResponsesRequest(
     });
   }
   const currentModelOverride = providerRepository.getModelOverride(clientRoute);
+  const clientRouteRtkPolicy = providerRepository.getClientRouteRtkPolicy(clientRoute);
+  const maxOutputTokensRule = resolveMaxOutputTokensRule(selectedProvider.capabilities);
   const requestBody = currentModelOverride
     ? {
         ...parsed.data,
         model: currentModelOverride,
       }
     : parsed.data;
+  const resolvedRtkPolicy = resolveRtkLayerPolicy(
+    {
+      enabled: config.RTK_LAYER_ENABLED,
+      toolOutputEnabled: config.RTK_LAYER_TOOL_OUTPUT_ENABLED,
+      maxChars: config.RTK_LAYER_TOOL_OUTPUT_MAX_CHARS,
+      maxLines: config.RTK_LAYER_TOOL_OUTPUT_MAX_LINES,
+      tailLines: config.RTK_LAYER_TOOL_OUTPUT_TAIL_LINES,
+      tailChars: config.RTK_LAYER_TOOL_OUTPUT_TAIL_CHARS,
+      detectFormat: config.RTK_LAYER_TOOL_OUTPUT_DETECT_FORMAT,
+    },
+    selectedProvider.capabilities.rtkPolicy,
+    clientRouteRtkPolicy,
+  );
+  const rtkLayerResult = applyRtkLayer(requestBody, resolvedRtkPolicy);
+  const effectiveRequestBody = rtkLayerResult.body;
 
-  const normalizedResult = normalizeResponsesRequestWithCache(requestBody, {
+  const normalizedResult = normalizeResponsesRequestWithCache(effectiveRequestBody, {
     openClawTokenOptimizationEnabled: config.OPENCLAW_TOKEN_OPTIMIZATION_ENABLED,
     defaultReasoningEffort: config.OPENCLAW_DEFAULT_REASONING_EFFORT,
     defaultReasoningSummary: config.OPENCLAW_DEFAULT_REASONING_SUMMARY,
@@ -559,22 +659,26 @@ async function handleResponsesRequest(
     promptCacheRetentionByFamilyEnabled:
       config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY_ENABLED,
     promptCacheRetentionByFamilyRules: config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY,
-    defaultTruncation: selectedProvider.capabilities.stripMaxOutputTokens
-      ? undefined
-      : config.OPENCLAW_DEFAULT_TRUNCATION,
-    stripMaxOutputTokens: selectedProvider.capabilities.stripMaxOutputTokens,
+    defaultTruncation:
+      maxOutputTokensRule.mode === "strip" ? undefined : config.OPENCLAW_DEFAULT_TRUNCATION,
+    maxOutputTokensPolicy: maxOutputTokensRule,
     sanitizeReasoningSummary: selectedProvider.capabilities.sanitizeReasoningSummary,
   });
   const normalized = normalizedResult.request;
   const activeProviderId = selectedProvider.id;
   const isStream = normalized.stream === true;
   const traceContext: Record<string, unknown> = {
-    ...buildTraceContext(parsed.data, normalized, normalizedResult.cacheLayout),
+    ...buildTraceContext(
+      effectiveRequestBody,
+      normalized,
+      normalizedResult.cacheLayout,
+      rtkLayerResult.stats,
+    ),
     providerId: activeProviderId,
   };
   const sessionLog = createSessionLogContext(
     config.SESSION_LOG_DIR,
-    deriveSessionKey(parsed.data, traceContext),
+    deriveSessionKey(effectiveRequestBody, traceContext),
     config.SESSION_LOG_RETENTION_DAYS,
     {
       cacheMetricsStore: promptCacheStateStore,
@@ -594,6 +698,8 @@ async function handleResponsesRequest(
     reasoningEffort: stringOrUndefined(traceContext.reasoningEffort),
     reasoningSummary: stringOrUndefined(traceContext.reasoningSummary),
     textVerbosity: stringOrUndefined(traceContext.textVerbosity),
+    rtkApplied: rtkLayerResult.stats.applied,
+    rtkCharsSaved: rtkLayerResult.stats.charsSaved,
     stream: isStream,
     timestamp: new Date().toISOString(),
   };
@@ -612,6 +718,7 @@ async function handleResponsesRequest(
     requestId,
     clientRoute,
     route: routePath,
+    rtk: rtkLayerResult.stats,
     ...traceContext,
   });
 
@@ -629,6 +736,8 @@ async function handleResponsesRequest(
         requestKey: stringOrUndefined(traceContext.requestKey),
         promptCacheKey: stringOrUndefined(traceContext.promptCacheKey),
         promptCacheRetention: stringOrUndefined(traceContext.promptCacheRetention),
+        rtkApplied: rtkLayerResult.stats.applied,
+        rtkCharsSaved: rtkLayerResult.stats.charsSaved,
       });
       reply.hijack();
       const streamTarget = await forwardSseWithFallback({
@@ -761,6 +870,8 @@ async function handleResponsesRequest(
       "x-proxy-prompt-cache-retention",
       stringOrUndefined(traceContext.promptCacheRetention) ?? "",
     );
+    reply.header("x-proxy-rtk-applied", rtkLayerResult.stats.applied ? "1" : "0");
+    reply.header("x-proxy-rtk-chars-saved", String(rtkLayerResult.stats.charsSaved));
     reply.send(payload);
   } catch (error) {
     request.log.error(
@@ -797,28 +908,33 @@ async function handleResponsesRequest(
       ...traceContext,
     });
 
+    const resolvedError = resolveProxyError({
+      statusCode,
+      message: error instanceof Error ? error.message : "Unknown proxy error",
+      requestId,
+      upstreamBody,
+      usage: error instanceof ProviderUsageLimitError ? error.usage : undefined,
+      defaultCode: errorCode,
+      errorType: "proxy_error",
+      providerErrorPolicy: selectedProvider.capabilities.errorPolicy,
+    });
+
     if (isStream) {
       sendHijackedStreamError(reply.raw, {
         statusCode,
         message: error instanceof Error ? error.message : "Unknown proxy error",
+        requestId,
         upstreamBody,
+        usage: error instanceof ProviderUsageLimitError ? error.usage : undefined,
+        defaultCode: errorCode,
+        providerErrorPolicy: selectedProvider.capabilities.errorPolicy,
       });
       return reply;
     }
 
-    return reply.code(statusCode).send({
-      error: {
-        type: "proxy_error",
-        code: errorCode,
-        message: error instanceof Error ? error.message : "Unknown proxy error",
-        upstream_status: statusCode,
-        upstream_body: upstreamBody,
-        usage:
-          error instanceof ProviderUsageLimitError
-            ? summarizeUsage(error.usage)
-            : undefined,
-      },
-    });
+    reply.header("x-proxy-error-code", resolvedError.errorCode);
+    reply.header("x-proxy-retryable", resolvedError.retryable ? "1" : "0");
+    return reply.code(statusCode).send(resolvedError.envelope);
   }
 }
 
@@ -840,7 +956,17 @@ function sendHijackedStreamError(
   payload: {
     statusCode: number;
     message: string;
+    requestId?: string;
     upstreamBody?: string;
+    usage?: {
+      allowed?: boolean;
+      remaining?: number;
+      limit?: number;
+      used?: number;
+      raw: unknown;
+    };
+    defaultCode?: string;
+    providerErrorPolicy?: RuntimeProviderPreset["capabilities"]["errorPolicy"];
   },
 ): void {
   if (raw.writableEnded || raw.writableFinished) {
@@ -850,17 +976,19 @@ function sendHijackedStreamError(
   if (!raw.headersSent) {
     raw.statusCode = payload.statusCode;
     raw.setHeader?.("Content-Type", "application/json; charset=utf-8");
-    raw.end(
-      JSON.stringify({
-        error: {
-          type: "proxy_error",
-          code: payload.statusCode >= 500 ? "UPSTREAM_REQUEST_FAILED" : "UPSTREAM_BAD_REQUEST",
-          message: payload.message,
-          upstream_status: payload.statusCode,
-          upstream_body: payload.upstreamBody,
-        },
-      }),
-    );
+    const resolvedError = resolveProxyError({
+      statusCode: payload.statusCode,
+      message: payload.message,
+      requestId: payload.requestId,
+      upstreamBody: payload.upstreamBody,
+      usage: payload.usage,
+      defaultCode: payload.defaultCode,
+      errorType: "proxy_error",
+      providerErrorPolicy: payload.providerErrorPolicy,
+    });
+    raw.setHeader?.("x-proxy-error-code", resolvedError.errorCode);
+    raw.setHeader?.("x-proxy-retryable", resolvedError.retryable ? "1" : "0");
+    raw.end(JSON.stringify(resolvedError.envelope));
     return;
   }
 
@@ -876,6 +1004,15 @@ function buildTraceContext(
     requestKey?: string;
     summaryApplied?: boolean;
     summaryItemCount?: number;
+  },
+  rtkStats?: {
+    enabled?: boolean;
+    applied?: boolean;
+    toolOutputsSeen?: number;
+    toolOutputsReduced?: number;
+    charsBefore?: number;
+    charsAfter?: number;
+    charsSaved?: number;
   },
 ): Record<string, unknown> {
   return {
@@ -902,6 +1039,18 @@ function buildTraceContext(
     stableSummaryApplied: cacheLayout?.summaryApplied === true,
     stableSummaryItemCount:
       typeof cacheLayout?.summaryItemCount === "number" ? cacheLayout.summaryItemCount : undefined,
+    rtkEnabled: rtkStats?.enabled === true,
+    rtkApplied: rtkStats?.applied === true,
+    rtkToolOutputsSeen:
+      typeof rtkStats?.toolOutputsSeen === "number" ? rtkStats.toolOutputsSeen : undefined,
+    rtkToolOutputsReduced:
+      typeof rtkStats?.toolOutputsReduced === "number" ? rtkStats.toolOutputsReduced : undefined,
+    rtkCharsBefore:
+      typeof rtkStats?.charsBefore === "number" ? rtkStats.charsBefore : undefined,
+    rtkCharsAfter:
+      typeof rtkStats?.charsAfter === "number" ? rtkStats.charsAfter : undefined,
+    rtkCharsSaved:
+      typeof rtkStats?.charsSaved === "number" ? rtkStats.charsSaved : undefined,
     truncation: stringOrUndefined(normalized.truncation) ?? stringOrUndefined(original.truncation),
     reasoningEffort: readReasoningField(normalized.reasoning, "effort"),
     reasoningSummary: readReasoningField(normalized.reasoning, "summary"),
@@ -923,6 +1072,8 @@ function setProxyResponseHeaders(
     requestKey?: string;
     promptCacheKey?: string;
     promptCacheRetention?: string;
+    rtkApplied?: boolean;
+    rtkCharsSaved?: number;
   },
 ): void {
   raw.setHeader?.("x-proxy-request-id", headers.requestId);
@@ -943,6 +1094,12 @@ function setProxyResponseHeaders(
   }
   if (headers.promptCacheRetention) {
     raw.setHeader?.("x-proxy-prompt-cache-retention", headers.promptCacheRetention);
+  }
+  if (typeof headers.rtkApplied === "boolean") {
+    raw.setHeader?.("x-proxy-rtk-applied", headers.rtkApplied ? "1" : "0");
+  }
+  if (typeof headers.rtkCharsSaved === "number") {
+    raw.setHeader?.("x-proxy-rtk-chars-saved", String(headers.rtkCharsSaved));
   }
 }
 
@@ -1049,6 +1206,7 @@ function clipText(value: string, maxLength = 160): string {
 function resolveClientRoute(
   headers: Record<string, unknown>,
   body: Record<string, unknown>,
+  routingApiKey?: string,
 ): ClientRouteKey {
   const headerValue = readHeaderString(headers["x-client-route"]);
   if (headerValue) {
@@ -1058,6 +1216,11 @@ function resolveClientRoute(
   const metadataValue = readMetadataClientRoute(body.metadata);
   if (metadataValue) {
     return normalizeClientRouteKey(metadataValue);
+  }
+
+  const routedByApiKey = providerRepository.findClientRouteByApiKey(routingApiKey);
+  if (routedByApiKey) {
+    return routedByApiKey;
   }
 
   return "default";
@@ -1076,6 +1239,19 @@ function readHeaderString(value: unknown): string | undefined {
     return typeof first === "string" ? first.trim() : undefined;
   }
   return undefined;
+}
+
+function resolvePublicAssetContentType(fileName: string): string {
+  if (fileName.endsWith(".css")) {
+    return "text/css; charset=utf-8";
+  }
+  if (fileName.endsWith(".js")) {
+    return "application/javascript; charset=utf-8";
+  }
+  if (fileName.endsWith(".svg")) {
+    return "image/svg+xml; charset=utf-8";
+  }
+  return "application/octet-stream";
 }
 
 function readBearerToken(value: unknown): string | undefined {
@@ -1531,20 +1707,19 @@ function rewriteBodyForProvider(
   body: Record<string, unknown>,
   provider: RuntimeProviderPreset,
 ): Record<string, unknown> {
+  let nextBody = body;
   const model = typeof body.model === "string" ? body.model.trim() : "";
-  if (!model) {
-    return body;
+  if (model) {
+    const rewrittenModel = rewriteModelForProvider(model, provider);
+    if (rewrittenModel !== model) {
+      nextBody = {
+        ...nextBody,
+        model: rewrittenModel,
+      };
+    }
   }
 
-  const rewrittenModel = rewriteModelForProvider(model, provider);
-  if (rewrittenModel === model) {
-    return body;
-  }
-
-  return {
-    ...body,
-    model: rewrittenModel,
-  };
+  return applyProviderRequestParameterPolicy(nextBody, provider.capabilities);
 }
 
 function rewriteModelForProvider(model: string, provider: RuntimeProviderPreset): string {
@@ -1662,6 +1837,12 @@ function updateLatestPromptCacheObservationFromEntry(entry: Record<string, unkno
       typeof entry.consecutiveCacheHits === "number" && Number.isFinite(entry.consecutiveCacheHits)
         ? entry.consecutiveCacheHits
         : latestPromptCacheObservation.consecutiveCacheHits,
+    rtkApplied:
+      typeof entry.rtkApplied === "boolean" ? entry.rtkApplied : latestPromptCacheObservation.rtkApplied,
+    rtkCharsSaved:
+      typeof entry.rtkCharsSaved === "number" && Number.isFinite(entry.rtkCharsSaved)
+        ? entry.rtkCharsSaved
+        : latestPromptCacheObservation.rtkCharsSaved,
     timestamp: new Date().toISOString(),
   };
   setLatestPromptCacheObservation(latestPromptCacheObservation);
@@ -1769,6 +1950,8 @@ function buildPromptCacheObservationFromLogEntry(
     cacheSavedPercent: readFiniteNumber(entry.cacheSavedPercent),
     cacheHit: typeof entry.cacheHit === "boolean" ? entry.cacheHit : undefined,
     consecutiveCacheHits: readFiniteNumber(entry.consecutiveCacheHits),
+    rtkApplied: entry.rtkApplied === true,
+    rtkCharsSaved: readFiniteNumber(entry.rtkCharsSaved),
     stream: entry.stream === true,
     timestamp,
   };
@@ -1784,6 +1967,15 @@ type UsageStatsBucket = {
   totalCachedTokens: number;
   totalInputTokens: number;
   avgCacheSavedPercent: number;
+  rtkRequests: number;
+  rtkAppliedRequests: number;
+  rtkAppliedRate: number;
+  rtkToolOutputsSeen: number;
+  rtkToolOutputsReduced: number;
+  rtkCharsBefore: number;
+  rtkCharsAfter: number;
+  rtkCharsSaved: number;
+  rtkAvgCharsSaved: number;
 };
 
 type UsageDimensionBucket = UsageStatsBucket & {
@@ -1798,6 +1990,7 @@ async function buildUsageStats(): Promise<{
   month: UsageStatsBucket;
   daily: Array<{ date: string } & UsageStatsBucket>;
   byProvider: UsageDimensionBucket[];
+  byClientRoute: UsageDimensionBucket[];
   byFamily: UsageDimensionBucket[];
   byStaticKey: UsageDimensionBucket[];
   byModel: UsageDimensionBucket[];
@@ -1817,6 +2010,7 @@ async function buildUsageStats(): Promise<{
       month: emptyUsageStatsBucket(),
       daily: [],
       byProvider: [],
+      byClientRoute: [],
       byFamily: [],
       byStaticKey: [],
       byModel: [],
@@ -1855,6 +2049,7 @@ async function buildUsageStats(): Promise<{
       }))
       .reverse(),
     byProvider: buildDimensionBuckets(monthDetail.byProvider, false),
+    byClientRoute: buildDimensionBuckets(monthDetail.byClientRoute, false),
     byFamily: buildDimensionBuckets(monthDetail.byFamily, true),
     byStaticKey: buildDimensionBuckets(monthDetail.byStaticKey, false),
     byModel: buildDimensionBuckets(monthDetail.byModel, false),
@@ -1914,31 +2109,34 @@ async function aggregateUsageStatsForFile(filePath: string): Promise<UsageStatsA
       continue;
     }
 
-    if (entry.event !== "upstream_response_usage") {
-      continue;
-    }
+    const event = typeof entry.event === "string" ? entry.event : "";
+    if (event === "upstream_response_usage") {
+      accumulator.requests += 1;
+      const cachedTokens = readFiniteNumber(entry.cachedTokens);
+      const inputTokens = readFiniteNumber(entry.inputTokens);
+      const cacheSavedPercent = readFiniteNumber(entry.cacheSavedPercent);
 
-    accumulator.requests += 1;
-    const cachedTokens = readFiniteNumber(entry.cachedTokens);
-    const inputTokens = readFiniteNumber(entry.inputTokens);
-    const cacheSavedPercent = readFiniteNumber(entry.cacheSavedPercent);
-
-    if (typeof cachedTokens === "number") {
-      if (cachedTokens > 0) {
-        accumulator.hits += 1;
-        accumulator.totalCachedTokens += cachedTokens;
+      if (typeof cachedTokens === "number") {
+        if (cachedTokens > 0) {
+          accumulator.hits += 1;
+          accumulator.totalCachedTokens += cachedTokens;
+        } else {
+          accumulator.misses += 1;
+        }
       } else {
-        accumulator.misses += 1;
+        accumulator.unknownTelemetryRequests += 1;
       }
-    } else {
-      accumulator.unknownTelemetryRequests += 1;
+      if (typeof inputTokens === "number") {
+        accumulator.totalInputTokens += inputTokens;
+      }
+      if (typeof cacheSavedPercent === "number") {
+        accumulator.cacheSavedPercentTotal += cacheSavedPercent;
+        accumulator.cacheSavedPercentCount += 1;
+      }
     }
-    if (typeof inputTokens === "number") {
-      accumulator.totalInputTokens += inputTokens;
-    }
-    if (typeof cacheSavedPercent === "number") {
-      accumulator.cacheSavedPercentTotal += cacheSavedPercent;
-      accumulator.cacheSavedPercentCount += 1;
+
+    if (event === "request_started") {
+      updateRtkStatsAccumulator(accumulator, entry);
     }
   }
 
@@ -1954,6 +2152,13 @@ type UsageStatsAccumulator = {
   totalInputTokens: number;
   cacheSavedPercentTotal: number;
   cacheSavedPercentCount: number;
+  rtkRequests: number;
+  rtkAppliedRequests: number;
+  rtkToolOutputsSeen: number;
+  rtkToolOutputsReduced: number;
+  rtkCharsBefore: number;
+  rtkCharsAfter: number;
+  rtkCharsSaved: number;
 };
 
 type UsageDimensionAccumulator = UsageStatsAccumulator & {
@@ -1963,6 +2168,7 @@ type UsageDimensionAccumulator = UsageStatsAccumulator & {
 
 type UsageDetailedAccumulator = {
   byProvider: Map<string, UsageDimensionAccumulator>;
+  byClientRoute: Map<string, UsageDimensionAccumulator>;
   byFamily: Map<string, UsageDimensionAccumulator>;
   byStaticKey: Map<string, UsageDimensionAccumulator>;
   byModel: Map<string, UsageDimensionAccumulator>;
@@ -1978,6 +2184,13 @@ function emptyUsageStatsAccumulator(): UsageStatsAccumulator {
     totalInputTokens: 0,
     cacheSavedPercentTotal: 0,
     cacheSavedPercentCount: 0,
+    rtkRequests: 0,
+    rtkAppliedRequests: 0,
+    rtkToolOutputsSeen: 0,
+    rtkToolOutputsReduced: 0,
+    rtkCharsBefore: 0,
+    rtkCharsAfter: 0,
+    rtkCharsSaved: 0,
   };
 }
 
@@ -1992,12 +2205,22 @@ function emptyUsageStatsBucket(): UsageStatsBucket {
     totalCachedTokens: 0,
     totalInputTokens: 0,
     avgCacheSavedPercent: 0,
+    rtkRequests: 0,
+    rtkAppliedRequests: 0,
+    rtkAppliedRate: 0,
+    rtkToolOutputsSeen: 0,
+    rtkToolOutputsReduced: 0,
+    rtkCharsBefore: 0,
+    rtkCharsAfter: 0,
+    rtkCharsSaved: 0,
+    rtkAvgCharsSaved: 0,
   };
 }
 
 function emptyUsageDetailedAccumulator(): UsageDetailedAccumulator {
   return {
     byProvider: new Map(),
+    byClientRoute: new Map(),
     byFamily: new Map(),
     byStaticKey: new Map(),
     byModel: new Map(),
@@ -2025,6 +2248,18 @@ function mergeUsageStatsBuckets(
     cacheSavedPercentCount:
       left.cacheSavedPercentCount +
       ("cacheSavedPercentCount" in right ? right.cacheSavedPercentCount : right.requests),
+    rtkRequests: left.rtkRequests + ("rtkRequests" in right ? right.rtkRequests : 0),
+    rtkAppliedRequests:
+      left.rtkAppliedRequests + ("rtkAppliedRequests" in right ? right.rtkAppliedRequests : 0),
+    rtkToolOutputsSeen:
+      left.rtkToolOutputsSeen + ("rtkToolOutputsSeen" in right ? right.rtkToolOutputsSeen : 0),
+    rtkToolOutputsReduced:
+      left.rtkToolOutputsReduced +
+      ("rtkToolOutputsReduced" in right ? right.rtkToolOutputsReduced : 0),
+    rtkCharsBefore:
+      left.rtkCharsBefore + ("rtkCharsBefore" in right ? right.rtkCharsBefore : 0),
+    rtkCharsAfter: left.rtkCharsAfter + ("rtkCharsAfter" in right ? right.rtkCharsAfter : 0),
+    rtkCharsSaved: left.rtkCharsSaved + ("rtkCharsSaved" in right ? right.rtkCharsSaved : 0),
   };
 }
 
@@ -2048,6 +2283,21 @@ function finalizeUsageStatsAccumulator(accumulator: UsageStatsAccumulator): Usag
     avgCacheSavedPercent:
       accumulator.cacheSavedPercentCount > 0
         ? roundToSingleDecimal(accumulator.cacheSavedPercentTotal / accumulator.cacheSavedPercentCount)
+        : 0,
+    rtkRequests: accumulator.rtkRequests,
+    rtkAppliedRequests: accumulator.rtkAppliedRequests,
+    rtkAppliedRate:
+      accumulator.rtkRequests > 0
+        ? roundToSingleDecimal((accumulator.rtkAppliedRequests / accumulator.rtkRequests) * 100)
+        : 0,
+    rtkToolOutputsSeen: accumulator.rtkToolOutputsSeen,
+    rtkToolOutputsReduced: accumulator.rtkToolOutputsReduced,
+    rtkCharsBefore: accumulator.rtkCharsBefore,
+    rtkCharsAfter: accumulator.rtkCharsAfter,
+    rtkCharsSaved: accumulator.rtkCharsSaved,
+    rtkAvgCharsSaved:
+      accumulator.rtkAppliedRequests > 0
+        ? roundToSingleDecimal(accumulator.rtkCharsSaved / accumulator.rtkAppliedRequests)
         : 0,
   };
 }
@@ -2099,7 +2349,7 @@ async function aggregateDetailedUsageForFile(
     }
 
     const event = typeof entry.event === "string" ? entry.event : "";
-    if (event !== "request_completed" && event !== "upstream_response_usage") {
+    if (event !== "request_started" && event !== "request_completed" && event !== "upstream_response_usage") {
       continue;
     }
 
@@ -2109,12 +2359,14 @@ async function aggregateDetailedUsageForFile(
       readFiniteNumber((entry.usage as Record<string, unknown> | undefined)?.input_tokens);
     const cacheSavedPercent = readFiniteNumber(entry.cacheSavedPercent);
     const providerId = readStringField(entry, "providerId");
+    const clientRoute = readStringField(entry, "clientRoute");
     const familyId = readStringField(entry, "familyId");
     const staticKey = readStringField(entry, "staticKey");
     const requestKey = readStringField(entry, "requestKey");
     const model = readStringField(entry, "model");
     const hit = typeof cachedTokens === "number" && cachedTokens > 0;
     const hasCacheTelemetry = typeof cachedTokens === "number";
+    const rtkStats = event === "request_started" ? readRtkStatsFromEntry(entry) : undefined;
 
     if (providerId) {
       updateDimensionAccumulator(detailed.byProvider, providerId, {
@@ -2125,6 +2377,19 @@ async function aggregateDetailedUsageForFile(
         cacheSavedPercent,
         staticKey,
         requestKey,
+        rtk: rtkStats,
+      });
+    }
+    if (clientRoute) {
+      updateDimensionAccumulator(detailed.byClientRoute, clientRoute, {
+        hit,
+        hasCacheTelemetry,
+        cachedTokens,
+        inputTokens,
+        cacheSavedPercent,
+        staticKey,
+        requestKey,
+        rtk: rtkStats,
       });
     }
     if (familyId) {
@@ -2136,6 +2401,7 @@ async function aggregateDetailedUsageForFile(
         cacheSavedPercent,
         staticKey,
         requestKey,
+        rtk: rtkStats,
       });
     }
     if (staticKey) {
@@ -2147,6 +2413,7 @@ async function aggregateDetailedUsageForFile(
         cacheSavedPercent,
         staticKey,
         requestKey,
+        rtk: rtkStats,
       });
     }
     if (model) {
@@ -2158,6 +2425,7 @@ async function aggregateDetailedUsageForFile(
         cacheSavedPercent,
         staticKey,
         requestKey,
+        rtk: rtkStats,
       });
     }
   }
@@ -2174,6 +2442,7 @@ function updateDimensionAccumulator(
     cacheSavedPercent?: number;
     staticKey?: string;
     requestKey?: string;
+    rtk?: ReturnType<typeof readRtkStatsFromEntry>;
   },
 ): void {
   const current = target.get(key) ?? {
@@ -2207,7 +2476,87 @@ function updateDimensionAccumulator(
   if (entry.requestKey) {
     current.requestKeys.add(entry.requestKey);
   }
+  mergeRtkStatsIntoAccumulator(current, entry.rtk);
   target.set(key, current);
+}
+
+function updateRtkStatsAccumulator(
+  accumulator: UsageStatsAccumulator,
+  entry: Record<string, unknown>,
+): void {
+  mergeRtkStatsIntoAccumulator(accumulator, readRtkStatsFromEntry(entry));
+}
+
+function mergeRtkStatsIntoAccumulator(
+  accumulator: UsageStatsAccumulator,
+  rtk: ReturnType<typeof readRtkStatsFromEntry> | undefined,
+): void {
+  if (!rtk) {
+    return;
+  }
+  accumulator.rtkRequests += 1;
+  if (rtk.applied) {
+    accumulator.rtkAppliedRequests += 1;
+  }
+  accumulator.rtkToolOutputsSeen += rtk.toolOutputsSeen;
+  accumulator.rtkToolOutputsReduced += rtk.toolOutputsReduced;
+  accumulator.rtkCharsBefore += rtk.charsBefore;
+  accumulator.rtkCharsAfter += rtk.charsAfter;
+  accumulator.rtkCharsSaved += rtk.charsSaved;
+}
+
+function readRtkStatsFromEntry(entry: Record<string, unknown>):
+  | {
+      applied: boolean;
+      toolOutputsSeen: number;
+      toolOutputsReduced: number;
+      charsBefore: number;
+      charsAfter: number;
+      charsSaved: number;
+    }
+  | undefined {
+  const nested = typeof entry.rtk === "object" && entry.rtk !== null && !Array.isArray(entry.rtk)
+    ? (entry.rtk as Record<string, unknown>)
+    : undefined;
+  const enabled = readFiniteBoolean(
+    nested?.enabled ?? entry.rtkEnabled,
+  );
+  if (enabled === false) {
+    return undefined;
+  }
+
+  const toolOutputsSeen = readFiniteNumber(nested?.toolOutputsSeen ?? entry.rtkToolOutputsSeen) ?? 0;
+  const toolOutputsReduced =
+    readFiniteNumber(nested?.toolOutputsReduced ?? entry.rtkToolOutputsReduced) ?? 0;
+  const charsBefore = readFiniteNumber(nested?.charsBefore ?? entry.rtkCharsBefore) ?? 0;
+  const charsAfter = readFiniteNumber(nested?.charsAfter ?? entry.rtkCharsAfter) ?? 0;
+  const charsSaved = readFiniteNumber(nested?.charsSaved ?? entry.rtkCharsSaved) ?? 0;
+  const applied = (nested?.applied ?? entry.rtkApplied) === true;
+
+  if (
+    enabled !== true &&
+    !applied &&
+    toolOutputsSeen === 0 &&
+    toolOutputsReduced === 0 &&
+    charsBefore === 0 &&
+    charsAfter === 0 &&
+    charsSaved === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    applied,
+    toolOutputsSeen,
+    toolOutputsReduced,
+    charsBefore,
+    charsAfter,
+    charsSaved,
+  };
+}
+
+function readFiniteBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function buildDimensionBuckets(
@@ -2257,19 +2606,21 @@ app.setErrorHandler((error, _request, reply) => {
       ? Number((error as { statusCode?: unknown }).statusCode)
       : 500;
   const code =
-    statusCode === 413
-      ? "REQUEST_BODY_TOO_LARGE"
-      : statusCode >= 400 && statusCode < 500
-        ? "PROXY_BAD_REQUEST"
-        : "PROXY_INTERNAL_ERROR";
+    statusCode >= 500
+      ? "PROXY_INTERNAL_ERROR"
+      : statusCode === 413
+        ? defaultProxyErrorCode(statusCode)
+        : "PROXY_BAD_REQUEST";
 
-  reply.code(statusCode).send({
-    error: {
-      type: statusCode >= 400 && statusCode < 500 ? "request_error" : "internal_error",
-      code,
-      message: error instanceof Error ? error.message : "Unknown internal error",
-    },
+  const resolvedError = resolveProxyError({
+    statusCode,
+    message: error instanceof Error ? error.message : "Unknown internal error",
+    defaultCode: code,
+    errorType: statusCode >= 400 && statusCode < 500 ? "request_error" : "internal_error",
   });
+  reply.header("x-proxy-error-code", resolvedError.errorCode);
+  reply.header("x-proxy-retryable", resolvedError.retryable ? "1" : "0");
+  reply.code(statusCode).send(resolvedError.envelope);
 });
 
 async function main(): Promise<void> {

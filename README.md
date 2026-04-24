@@ -147,6 +147,7 @@ curl -X POST http://127.0.0.1:8318/api/providers/check-usage \
 The proxy can reduce token burn for Hermes-style requests by:
 
 - forwarding prompt/cache/continuation fields that were previously dropped
+- optionally applying an RTK-style request transform layer that canonicalizes and truncates oversized tool output before prompt construction
 - auto-generating a stable `prompt_cache_key` for Hermes when the client does not send one
 - optionally redesigning cache keys into `family_id`, `static_key`, and `request_key`
 - splitting request construction into a reusable `stable_prefix` and a `dynamic_tail`
@@ -174,9 +175,27 @@ Environment variables:
 - `PROVIDER_PROMPT_CACHE_SUMMARY_TRIGGER_ITEMS=14`
 - `PROVIDER_PROMPT_CACHE_SUMMARY_KEEP_RECENT_ITEMS=6`
 - `PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY=family-prefix=72h,...`
+- `RTK_LAYER_ENABLED=false`
+- `RTK_LAYER_TOOL_OUTPUT_ENABLED=true`
+- `RTK_LAYER_TOOL_OUTPUT_MAX_CHARS=4000`
+- `RTK_LAYER_TOOL_OUTPUT_MAX_LINES=120`
+- `RTK_LAYER_TOOL_OUTPUT_TAIL_LINES=0`
+- `RTK_LAYER_TOOL_OUTPUT_TAIL_CHARS=0`
+- `RTK_LAYER_TOOL_OUTPUT_DETECT_FORMAT=auto`
 - `OPENCLAW_DEFAULT_TRUNCATION=auto`
+- `MAX_OUTPUT_TOKENS_PARAMETER_MODE_FOR_PROVIDER=forward|strip|rename`
+- `MAX_OUTPUT_TOKENS_PARAMETER_TARGET_FOR_PROVIDER=max_completion_tokens`
 - `STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER=false`
 - `SANITIZE_REASONING_SUMMARY_FOR_PROVIDER=false`
+
+`STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER` is kept for backward compatibility. Prefer the generic
+parameter policy variables above for new setups.
+
+For KRouter specifically:
+
+- use `UPSTREAM_BASE_URL=https://krouter.net/v1`
+- set `MAX_OUTPUT_TOKENS_PARAMETER_MODE_FOR_PROVIDER=strip` because
+  `krouter.net/v1/responses` rejects `max_output_tokens`
 
 For cache observability, every proxied response now includes:
 
@@ -185,6 +204,88 @@ For cache observability, every proxied response now includes:
 - `x-proxy-request-key`
 - `x-proxy-prompt-cache-key`
 - `x-proxy-prompt-cache-retention`
+- `x-proxy-rtk-applied`
+- `x-proxy-rtk-chars-saved`
+
+## Error handling
+
+Proxy errors stay backward compatible with the existing shape:
+
+```json
+{
+  "error": {
+    "type": "proxy_error",
+    "code": "UPSTREAM_BAD_REQUEST",
+    "message": "[req_123] upstream rejected request (429 Too Many Requests): Rate limit reached",
+    "request_id": "req_123",
+    "upstream_status": 429,
+    "upstream_body": "{\"error\":{\"message\":\"Rate limit reached\"}}",
+    "upstream_error": {
+      "message": "Rate limit reached",
+      "type": "rate_limit_error",
+      "code": "rate_limit"
+    },
+    "retryable": true
+  }
+}
+```
+
+Notes:
+
+- `upstream_body` is still returned for compatibility, but is now trimmed when extremely large
+- `upstream_error` is extracted when the upstream body is JSON and contains structured error fields
+- `retryable=true` is set for `408`, `409`, `429`, and all `5xx` statuses
+- stream-mode failures and normal JSON failures now use the same error envelope
+- error responses also include `x-proxy-error-code` and `x-proxy-retryable` headers for quick debugging
+- providers can define `capabilities.errorPolicy.rules[]` to remap verbose upstream failures into cleaner proxy error codes/messages
+
+The RTK-style layer is intentionally narrow in this repo:
+
+- it only rewrites `tool` / `function_call_output` content
+- it strips ANSI noise, normalizes line endings, removes repeated adjacent lines, and clips oversized outputs deterministically
+- it can detect `json`, `stack`, and `command` output and truncate with different markers/budgets
+- it does not rewrite user intent, provider routing, or upstream responses
+- it is feature-flagged so existing deployments remain backward compatible
+
+RTK policy can now be resolved on two levels:
+
+- provider default via `capabilities.rtkPolicy`
+- client route override via `POST /api/rtk-policies`
+- optional `tailLines` keeps ending log/error lines when truncation happens
+- optional `tailChars` reserves character budget for the output tail
+- optional `detectFormat` can be `auto`, `plain`, `json`, `stack`, or `command`
+
+Resolution order is:
+
+1. environment defaults
+2. provider RTK policy
+3. client route RTK policy
+
+This makes it possible to run different RTK intensity for routes such as Hermes vs Codex while still sharing the same upstream provider.
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8318/api/rtk-policies \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "client": "hermes",
+    "policy": {
+      "enabled": true,
+      "toolOutputEnabled": true,
+      "maxChars": 1200,
+      "maxLines": 40,
+      "tailLines": 8,
+      "tailChars": 400,
+      "detectFormat": "command"
+    }
+  }'
+```
+
+The dashboard now exposes separate RTK stats alongside cache stats so operators can distinguish:
+
+- prompt reduction before request construction
+- upstream provider-side prompt cache reuse after request construction
 
 Latest observed cache metadata is also available at:
 
