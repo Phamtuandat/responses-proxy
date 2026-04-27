@@ -168,8 +168,11 @@
                 <div class="provider-card-header">
                   <div>
                     <h3>Clients</h3>
+                    <p>Routing, keys, and token budget posture for each client route.</p>
                   </div>
                 </div>
+                <div class="client-token-limit-overview" id="clientTokenLimitOverview"></div>
+                <div class="client-token-limit-summary" id="clientTokenLimitSummary"></div>
                 <div class="client-route-list" id="clientCrudList"></div>
               </section>
 
@@ -189,6 +192,7 @@
               </div>
 
               <section class="section section-nested provider-card">
+                <div class="client-edit-summary" id="clientCrudSummary"></div>
                 <div class="form-grid">
                   <div class="field">
                     <label for="clientCrudName">Client name</label>
@@ -206,9 +210,44 @@
                     <label for="clientCrudApiKeys">Client API keys</label>
                     <textarea id="clientCrudApiKeys" rows="6" placeholder="Required. One key per line"></textarea>
                   </div>
+                  <div class="field field-span-full">
+                    <section class="client-limit-panel" id="clientLimitPanel">
+                      <div class="client-limit-panel-header">
+                        <div>
+                          <div class="eyebrow">Quota</div>
+                          <h3>Client token budget</h3>
+                        </div>
+                        <div class="client-limit-toggle-row">
+                          <label class="client-limit-toggle"><input id="clientTokenLimitEnabled" type="checkbox" /> <span>Enabled</span></label>
+                          <label class="client-limit-toggle"><input id="clientTokenLimitHardBlock" type="checkbox" /> <span>Hard block</span></label>
+                        </div>
+                      </div>
+                      <div class="client-limit-preview" id="clientTokenLimitPreview"></div>
+                      <div class="client-limit-grid">
+                        <div class="field">
+                          <label for="clientTokenLimitValue">Token limit</label>
+                          <input id="clientTokenLimitValue" type="number" min="1" step="1" placeholder="100000" />
+                        </div>
+                        <div class="field">
+                          <label for="clientTokenLimitWindowType">Window</label>
+                          <select id="clientTokenLimitWindowType">
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="fixed">Fixed seconds</option>
+                          </select>
+                        </div>
+                        <div class="field" id="clientTokenLimitWindowSizeField" hidden>
+                          <label for="clientTokenLimitWindowSize">Fixed window seconds</label>
+                          <input id="clientTokenLimitWindowSize" type="number" min="1" step="1" placeholder="3600" />
+                        </div>
+                      </div>
+                    </section>
+                  </div>
                 </div>
                 <div class="row-wrap" style="margin-top:14px;">
                   <button type="button" id="saveClientCrudBtn">Create client</button>
+                  <button type="button" class="button-link-muted" id="resetClientTokenUsageBtn">Reset usage</button>
                   <button type="button" class="button-link-muted" id="clearClientCrudBtn">Clear</button>
                   <button type="button" class="table-button-danger-soft" id="deleteClientCrudBtn">Delete</button>
                 </div>

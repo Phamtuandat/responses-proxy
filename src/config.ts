@@ -1,8 +1,4 @@
 import { z } from "zod";
-import {
-  readCodexProviderFromConfig,
-  resolveDefaultCodexConfigPath,
-} from "./codex-config.js";
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8318),
@@ -160,11 +156,8 @@ const envSchema = z.object({
     .string()
     .default("429,500,502,503,504")
     .transform(parseFallbackStatusCodes),
-  FALLBACK_CODEX_CONFIG_PATH: z
-    .string()
-    .min(1)
-    .default(resolveDefaultCodexConfigPath()),
   APP_DB_PATH: z.string().min(1).default("./logs/app.sqlite"),
+  CUSTOMER_KEY_DB_PATH: z.string().min(1).default("./logs/telegram-bot.sqlite"),
   SESSION_LOG_DIR: z.string().min(1).default("./logs/sessions"),
   SESSION_LOG_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(14),
 });
@@ -172,34 +165,15 @@ const envSchema = z.object({
 export type AppConfig = z.infer<typeof envSchema> & {
   upstreamResponsesUrl: string;
   PROVIDER_USAGE_CHECK_URL?: string;
-  fallback?: {
-    name: string;
-    responsesUrl: string;
-  };
 };
 
 export function readConfig(env: NodeJS.ProcessEnv): AppConfig {
   const parsed = envSchema.parse(env);
   const base = parsed.UPSTREAM_BASE_URL.replace(/\/+$/, "");
-  const codexProvider = parsed.FALLBACK_ENABLED
-    ? readCodexProviderFromConfig(parsed.FALLBACK_CODEX_CONFIG_PATH)
-    : undefined;
-  const fallbackBase =
-    codexProvider?.wireApi === "responses"
-      ? codexProvider.baseUrl.replace(/\/+$/, "")
-      : undefined;
-  const fallback =
-    fallbackBase && fallbackBase !== base
-      ? {
-          name: codexProvider?.name ?? "codex-fallback",
-          responsesUrl: `${fallbackBase}/responses`,
-        }
-      : undefined;
 
   return {
     ...parsed,
     upstreamResponsesUrl: `${base}/responses`,
-    fallback,
   };
 }
 

@@ -116,10 +116,22 @@ const clientCrudNameEl = document.getElementById("clientCrudName");
 const clientCrudProviderSelectEl = document.getElementById("clientCrudProviderSelect");
 const clientCrudModelEl = document.getElementById("clientCrudModel");
 const clientCrudApiKeysEl = document.getElementById("clientCrudApiKeys");
+const clientTokenLimitOverviewEl = document.getElementById("clientTokenLimitOverview");
+const clientTokenLimitSummaryEl = document.getElementById("clientTokenLimitSummary");
+const clientLimitPanelEl = document.getElementById("clientLimitPanel");
+const clientTokenLimitEnabledEl = document.getElementById("clientTokenLimitEnabled");
+const clientTokenLimitValueEl = document.getElementById("clientTokenLimitValue");
+const clientTokenLimitWindowTypeEl = document.getElementById("clientTokenLimitWindowType");
+const clientTokenLimitWindowSizeFieldEl = document.getElementById("clientTokenLimitWindowSizeField");
+const clientTokenLimitWindowSizeEl = document.getElementById("clientTokenLimitWindowSize");
+const clientTokenLimitHardBlockEl = document.getElementById("clientTokenLimitHardBlock");
+const clientTokenLimitPreviewEl = document.getElementById("clientTokenLimitPreview");
+const resetClientTokenUsageBtnEl = document.getElementById("resetClientTokenUsageBtn");
 const saveClientCrudBtnEl = document.getElementById("saveClientCrudBtn");
 const clearClientCrudBtnEl = document.getElementById("clearClientCrudBtn");
 const deleteClientCrudBtnEl = document.getElementById("deleteClientCrudBtn");
 const clientCrudStatusEl = document.getElementById("clientCrudStatus");
+const clientCrudSummaryEl = document.getElementById("clientCrudSummary");
 const clientCrudListEl = document.getElementById("clientCrudList");
 const clientCrudModeBadgeEl = document.getElementById("clientCrudModeBadge");
 const clientCrudFormTitleEl = document.getElementById("clientCrudFormTitle");
@@ -199,6 +211,7 @@ const customProviderBtnEl = document.getElementById("customProviderBtn");
 const providerDeleteBtnEl = document.getElementById("providerDeleteBtn");
 
 let providerState = { activeProviderId: "", providers: [], providerOptions: [], clientRoutes: [] };
+let clientTokenLimitState = { timestamp: "", clients: [] };
 let chatgptOauthState = { enabled: false, accounts: [], authUrl: "", rotationMode: "round_robin" };
 let latestCacheSnapshot = null;
 let usageStatsState = null;
@@ -1775,6 +1788,8 @@ function renderClientCrud() {
     }
   }
 
+  renderClientTokenLimitSummary(routes);
+
   if (clientCrudListEl) {
     clientCrudListEl.innerHTML = "";
     if (!routes.length) {
@@ -1793,8 +1808,28 @@ function renderClientCrud() {
         `<span class="provider-badge">${escapeHtml(formatClientApiKeyCount(route.apiKeys?.length || 0))}</span>`;
       const meta = document.createElement("div");
       meta.className = "client-route-meta";
-      meta.textContent =
-        `${route.providerName || route.providerId || "-"} · ${route.modelOverride || "Provider default"}`;
+      const quota = getClientTokenLimitEntry(route.key);
+      const tone = getClientTokenLimitTone(quota);
+      const quotaBadgeClass = tone === "bad"
+        ? "client-token-limit-pill bad"
+        : tone === "warn"
+          ? "client-token-limit-pill warn"
+          : "client-token-limit-pill";
+      meta.innerHTML =
+        '<div class="client-route-meta-group">' +
+        '<span class="client-route-meta-label">Routing</span>' +
+        `<strong>${escapeHtml(route.providerName || route.providerId || "-")}</strong>` +
+        `<div class="client-route-meta-caption">${escapeHtml(route.modelOverride || "Provider default")}</div>` +
+        "</div>" +
+        '<div class="client-route-meta-group client-route-meta-group-quota">' +
+        '<div class="client-route-meta-head">' +
+        '<span class="client-route-meta-label">Quota</span>' +
+        `<span class="${quotaBadgeClass}">${escapeHtml(formatClientTokenLimitBadge(quota))}</span>` +
+        "</div>" +
+        `<strong>${escapeHtml(formatClientTokenLimitLine(quota))}</strong>` +
+        `<div class="client-route-meta-caption">${escapeHtml(formatClientTokenLimitPolicy(quota))}</div>` +
+        `<div class="client-route-quota">${buildClientRouteQuotaMeter(quota)}</div>` +
+        "</div>";
       const actions = document.createElement("div");
       actions.className = "client-route-actions";
       const editButton = document.createElement("button");
@@ -1827,6 +1862,156 @@ function renderClientCrud() {
   }
 }
 
+function buildClientRouteQuotaMeter(entry) {
+  const ratio = getClientTokenLimitRatio(entry?.status || {});
+  const tone = getClientTokenLimitTone(entry);
+  const fillClass = tone === "bad" ? " bad" : tone === "warn" ? " warn" : "";
+  const width = ratio === null ? 0 : Math.min(100, Math.round(ratio * 100));
+  return `<div class="client-token-meter client-token-meter-compact" aria-hidden="true"><div class="client-token-meter-fill${fillClass}" style="width:${width}%"></div></div>`;
+}
+
+function renderClientTokenLimitSummary(routes) {
+  if (!clientTokenLimitSummaryEl) return;
+  clientTokenLimitSummaryEl.innerHTML = "";
+  renderClientTokenLimitOverview(routes);
+  if (!routes.length) {
+    return;
+  }
+  for (const route of routes) {
+    const entry = getClientTokenLimitEntry(route.key);
+    const status = entry?.status || {};
+    const ratio = getClientTokenLimitRatio(status);
+    const card = document.createElement("article");
+    card.className = "client-token-limit-card";
+    const tone = getClientTokenLimitTone(entry);
+    const fillClass = tone === "bad" ? " bad" : tone === "warn" ? " warn" : "";
+    const pillClass = tone === "bad" ? "client-token-limit-pill bad" : tone === "warn" ? "client-token-limit-pill warn" : "client-token-limit-pill";
+    card.innerHTML =
+      '<div class="client-token-limit-card-header">' +
+      `<div><strong>${escapeHtml(route.key)}</strong><span>${escapeHtml(formatClientTokenLimitLine(entry))}</span></div>` +
+      `<div class="${pillClass}">${escapeHtml(formatClientTokenLimitBadge(entry))}</div>` +
+      "</div>" +
+      '<div class="client-token-limit-meta">' +
+      `<div><label>Used</label><strong>${escapeHtml(formatClientTokenLimitUsed(entry))}</strong></div>` +
+      `<div><label>Window</label><strong>${escapeHtml(formatClientTokenLimitWindow(entry))}</strong></div>` +
+      `<div><label>Policy</label><strong>${escapeHtml(formatClientTokenLimitPolicy(entry))}</strong></div>` +
+      "</div>" +
+      '<div class="client-token-meter" aria-hidden="true">' +
+      `<div class="client-token-meter-fill${fillClass}" style="width:${ratio === null ? 0 : Math.min(100, Math.round(ratio * 100))}%"></div>` +
+      "</div>";
+    card.addEventListener("click", () => {
+      goToClientEditor(route.key);
+    });
+    clientTokenLimitSummaryEl.appendChild(card);
+  }
+}
+
+function renderClientTokenLimitOverview(routes) {
+  if (!clientTokenLimitOverviewEl) return;
+  clientTokenLimitOverviewEl.innerHTML = "";
+  if (!routes.length) {
+    return;
+  }
+  const entries = routes.map((route) => getClientTokenLimitEntry(route.key));
+  const capped = entries.filter((entry) => entry?.config?.enabled);
+  const blocked = entries.filter((entry) => entry?.status?.blocked === true);
+  const nearLimit = entries.filter((entry) => getClientTokenLimitTone(entry) === "warn");
+  const open = entries.filter((entry) => !entry?.config?.enabled);
+  const stats = [
+    { label: "Tracked routes", value: capped.length },
+    { label: "Near limit", value: nearLimit.length },
+    { label: "Blocked", value: blocked.length },
+    { label: "Open", value: open.length },
+  ];
+  for (const stat of stats) {
+    const item = document.createElement("div");
+    item.className = "client-token-overview-stat";
+    item.innerHTML = `<span>${escapeHtml(stat.label)}</span><strong>${escapeHtml(formatNumber(stat.value) || "0")}</strong>`;
+    clientTokenLimitOverviewEl.appendChild(item);
+  }
+}
+
+function getClientTokenLimitEntry(client) {
+  return (clientTokenLimitState.clients || []).find((entry) => entry.clientRoute === client) || null;
+}
+
+function formatClientTokenLimitLine(entry) {
+  const status = entry?.status || {};
+  const config = entry?.config || null;
+  if (!config?.enabled || status.limit === null || status.limit === undefined) {
+    return "Unlimited";
+  }
+  const windowLabel = formatClientTokenWindow(config);
+  const used = formatNumber(status.used || 0);
+  const limit = formatNumber(status.limit || 0);
+  const remaining = formatNumber(status.remaining || 0);
+  const state = status.blocked ? "Blocked" : `${remaining} left`;
+  return `${used} / ${limit} · ${state} · ${windowLabel}`;
+}
+
+function formatClientTokenLimitBadge(entry) {
+  const config = entry?.config || null;
+  const status = entry?.status || {};
+  if (!config?.enabled) {
+    return "Open";
+  }
+  if (status.blocked) {
+    return "Blocked";
+  }
+  const ratio = getClientTokenLimitRatio(status);
+  if (ratio !== null && ratio >= 0.8) {
+    return "Near limit";
+  }
+  return "Active";
+}
+
+function formatClientTokenLimitUsed(entry) {
+  const status = entry?.status || {};
+  if (status.limit === null || status.limit === undefined) {
+    return formatNumber(status.used || 0);
+  }
+  return `${formatNumber(status.used || 0)} / ${formatNumber(status.limit || 0)}`;
+}
+
+function formatClientTokenLimitWindow(entry) {
+  return formatClientTokenWindow(entry?.config || null);
+}
+
+function formatClientTokenLimitPolicy(entry) {
+  const config = entry?.config || null;
+  if (!config?.enabled) {
+    return "No cap";
+  }
+  return config.hardBlock ? "Hard block" : "Track only";
+}
+
+function formatClientTokenWindow(config) {
+  if (!config) return "Daily";
+  if (config.windowType === "fixed") {
+    return `${formatNumber(config.windowSizeSeconds || 86400)}s`;
+  }
+  return `${String(config.windowType || "daily").charAt(0).toUpperCase()}${String(config.windowType || "daily").slice(1)}`;
+}
+
+function getClientTokenLimitRatio(status) {
+  if (!status || typeof status.limit !== "number" || status.limit <= 0) {
+    return null;
+  }
+  return Math.max(0, (Number(status.used) || 0) / status.limit);
+}
+
+function getClientTokenLimitTone(entry) {
+  const status = entry?.status || {};
+  if (status.blocked) {
+    return "bad";
+  }
+  const ratio = getClientTokenLimitRatio(status);
+  if (ratio !== null && ratio >= 0.8) {
+    return "warn";
+  }
+  return "ok";
+}
+
 function formatClientApiKeyCount(count) {
   return count === 1 ? "1 API key" : `${count} API keys`;
 }
@@ -1849,7 +2034,10 @@ function hydrateClientCrudForm(routeKey) {
     clientCrudProviderSelectEl.value = availableProviders[0]?.id || "";
     clientCrudModelEl.value = "";
     clientCrudApiKeysEl.value = "";
+    hydrateClientTokenLimitForm(null);
+    renderClientCrudSummary(null);
     if (deleteClientCrudBtnEl) deleteClientCrudBtnEl.disabled = true;
+    if (resetClientTokenUsageBtnEl) resetClientTokenUsageBtnEl.disabled = true;
     if (!availableProviders.length) {
       setClientCrudStatus("No available providers. Add provider credentials or enable an account pool first.", "bad");
     }
@@ -1863,12 +2051,95 @@ function hydrateClientCrudForm(routeKey) {
     : availableProviders[0]?.id || "";
   clientCrudModelEl.value = route.modelOverride || "";
   clientCrudApiKeysEl.value = Array.isArray(route.apiKeys) ? route.apiKeys.join("\n") : "";
+  const limitEntry = getClientTokenLimitEntry(route.key);
+  hydrateClientTokenLimitForm(limitEntry);
+  renderClientCrudSummary(route, limitEntry);
   if (deleteClientCrudBtnEl) deleteClientCrudBtnEl.disabled = route.key === "default";
+  if (resetClientTokenUsageBtnEl) resetClientTokenUsageBtnEl.disabled = false;
   if (!availableProviders.length) {
     setClientCrudStatus("No available providers. Add provider credentials or enable an account pool first.", "bad");
   } else if (route.providerId && !availableProviders.some((provider) => provider.id === route.providerId)) {
     setClientCrudStatus("Current provider is unavailable and has been hidden from the dropdown. Choose an available provider before saving.", "bad");
   }
+}
+
+function renderClientCrudSummary(route, limitEntry = null) {
+  if (!clientCrudSummaryEl) return;
+  if (!route) {
+    clientCrudSummaryEl.innerHTML =
+      '<div class="client-edit-summary-card"><span>Mode</span><strong>Create a new client route</strong></div>' +
+      '<div class="client-edit-summary-card"><span>Provider</span><strong>Choose a bound provider</strong></div>' +
+      '<div class="client-edit-summary-card"><span>API keys</span><strong>Add one or more keys</strong></div>' +
+      '<div class="client-edit-summary-card"><span>Quota</span><strong>Open by default</strong></div>';
+    return;
+  }
+  clientCrudSummaryEl.innerHTML =
+    `<div class="client-edit-summary-card"><span>Client</span><strong>${escapeHtml(route.key || "-")}</strong></div>` +
+    `<div class="client-edit-summary-card"><span>Provider</span><strong>${escapeHtml(route.providerName || route.providerId || "-")}</strong></div>` +
+    `<div class="client-edit-summary-card"><span>API keys</span><strong>${escapeHtml(formatClientApiKeyCount(route.apiKeys?.length || 0))}</strong></div>` +
+    `<div class="client-edit-summary-card"><span>Quota</span><strong>${escapeHtml(formatClientTokenLimitLine(limitEntry))}</strong></div>`;
+}
+
+function hydrateClientTokenLimitForm(entry) {
+  const config = entry?.config || null;
+  if (clientTokenLimitEnabledEl) clientTokenLimitEnabledEl.checked = config?.enabled === true;
+  if (clientTokenLimitValueEl) clientTokenLimitValueEl.value = String(config?.tokenLimit || 100000);
+  if (clientTokenLimitWindowTypeEl) clientTokenLimitWindowTypeEl.value = config?.windowType || "daily";
+  if (clientTokenLimitWindowSizeEl) {
+    clientTokenLimitWindowSizeEl.value =
+      config?.windowType === "fixed" ? String(config.windowSizeSeconds || 3600) : "3600";
+  }
+  if (clientTokenLimitHardBlockEl) clientTokenLimitHardBlockEl.checked = config?.hardBlock !== false;
+  syncClientTokenLimitWindowControls();
+  renderClientTokenLimitPreview(entry);
+}
+
+function syncClientTokenLimitWindowControls() {
+  const isFixed = clientTokenLimitWindowTypeEl?.value === "fixed";
+  const enabled = clientTokenLimitEnabledEl?.checked === true;
+  if (clientTokenLimitWindowSizeFieldEl) {
+    clientTokenLimitWindowSizeFieldEl.hidden = !isFixed;
+  }
+  if (clientLimitPanelEl) {
+    clientLimitPanelEl.classList.toggle("is-disabled", !enabled);
+  }
+  if (clientTokenLimitValueEl) {
+    clientTokenLimitValueEl.disabled = !enabled;
+  }
+  if (clientTokenLimitWindowTypeEl) {
+    clientTokenLimitWindowTypeEl.disabled = !enabled;
+  }
+  if (clientTokenLimitWindowSizeEl) {
+    clientTokenLimitWindowSizeEl.disabled = !enabled || !isFixed;
+  }
+  renderClientTokenLimitPreview(getClientTokenLimitEntry(selectedClientCrudKey));
+}
+
+function renderClientTokenLimitPreview(entry) {
+  if (!clientTokenLimitPreviewEl) {
+    return;
+  }
+  const enabled = clientTokenLimitEnabledEl?.checked === true;
+  const hardBlock = clientTokenLimitHardBlockEl?.checked !== false;
+  const tokenLimit = Number(clientTokenLimitValueEl?.value || 0);
+  const windowType = clientTokenLimitWindowTypeEl?.value || "daily";
+  const windowSizeSeconds = Number(clientTokenLimitWindowSizeEl?.value || 0);
+  const statusLabel = enabled ? hardBlock ? "Hard cap" : "Tracked" : "Unlimited";
+  const line = enabled
+    ? `${formatNumber(tokenLimit || 0)} tokens per ${windowType === "fixed" ? `${formatNumber(windowSizeSeconds || 0)}s` : windowType}`
+    : "Requests keep flowing without a client-side quota cap.";
+  const remaining = entry?.status?.remaining;
+  const used = entry?.status?.used;
+  clientTokenLimitPreviewEl.innerHTML =
+    '<div class="client-limit-preview-head">' +
+    `<div class="client-limit-preview-title"><strong>${escapeHtml(statusLabel)}</strong><span>${escapeHtml(line)}</span></div>` +
+    `<div class="client-token-limit-pill${enabled && hardBlock ? "" : enabled ? " warn" : ""}">${escapeHtml(enabled ? "Configured" : "Open")}</div>` +
+    "</div>" +
+    '<div class="client-limit-preview-meta">' +
+    `<div><span>Current usage</span><strong>${escapeHtml(formatNumber(used || 0))}</strong></div>` +
+    `<div><span>Remaining</span><strong>${escapeHtml(remaining === null || remaining === undefined ? "Unlimited" : formatNumber(remaining))}</strong></div>` +
+    `<div><span>Window</span><strong>${escapeHtml(windowType === "fixed" ? `${formatNumber(windowSizeSeconds || 0)}s` : windowType.charAt(0).toUpperCase() + windowType.slice(1))}</strong></div>` +
+    "</div>";
 }
 
 function setClientCrudFormMode(mode, client = "") {
@@ -2343,6 +2614,22 @@ async function refreshProviders() {
   }
 }
 
+async function refreshClientTokenLimits() {
+  try {
+    const response = await fetch("/api/client-token-limits", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not load token limits");
+    }
+    clientTokenLimitState = {
+      timestamp: data.timestamp || "",
+      clients: Array.isArray(data.clients) ? data.clients : [],
+    };
+  } catch {
+    clientTokenLimitState = { timestamp: "", clients: [] };
+  }
+}
+
 async function startChatGptOauthLogin() {
   if (!chatgptOauthStartBtnEl) {
     return;
@@ -2631,6 +2918,8 @@ async function saveClientCrud() {
       };
     }
     savedClient = data.client || targetClient;
+    await saveClientTokenLimit(savedClient);
+    await refreshClientTokenLimits();
     selectedClientCrudKey = savedClient;
     renderClientConfigStatus();
     renderClientRoutePolicySection();
@@ -2643,6 +2932,57 @@ async function saveClientCrud() {
   } finally {
     saveClientCrudBtnEl.disabled = false;
     setClientCrudFormMode(savedClient || editingExisting ? "edit" : "create", savedClient || targetClient);
+  }
+}
+
+async function saveClientTokenLimit(client) {
+  const enabled = clientTokenLimitEnabledEl?.checked === true;
+  const tokenLimit = Number(clientTokenLimitValueEl?.value || 0);
+  const windowType = clientTokenLimitWindowTypeEl?.value || "daily";
+  const payload = {
+    enabled,
+    tokenLimit: enabled ? tokenLimit : tokenLimit || 1,
+    windowType,
+    hardBlock: clientTokenLimitHardBlockEl?.checked !== false,
+  };
+  if (windowType === "fixed") {
+    const windowSizeSeconds = Number(clientTokenLimitWindowSizeEl?.value || 0);
+    payload.windowSizeSeconds = enabled ? windowSizeSeconds : windowSizeSeconds || 86400;
+  }
+  const response = await fetch(`/api/client-token-limits/${encodeURIComponent(client)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) {
+    throw new Error(data.error?.message || "Could not save token limit");
+  }
+  return data.client;
+}
+
+async function resetClientTokenUsage() {
+  const client = selectedClientCrudKey;
+  if (!client || client === "__new__") {
+    return;
+  }
+  resetClientTokenUsageBtnEl.disabled = true;
+  setClientCrudStatus("Resetting usage...");
+  try {
+    const response = await fetch(`/api/client-token-limits/${encodeURIComponent(client)}/reset`, {
+      method: "POST",
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not reset usage");
+    }
+    await refreshClientTokenLimits();
+    renderClientCrud();
+    setClientCrudStatus("Usage reset.", "ok");
+  } catch (error) {
+    setClientCrudStatus(error instanceof Error ? error.message : "Could not reset usage", "bad");
+  } finally {
+    resetClientTokenUsageBtnEl.disabled = false;
   }
 }
 
@@ -2822,12 +3162,14 @@ async function refreshDashboard() {
 
 async function refreshClientsScreen() {
   await refreshProviders();
+  await refreshClientTokenLimits();
   await refreshClientConfigStatus();
   renderClientConfigStatus();
 }
 
 async function refreshClientEditScreen() {
   await refreshProviders();
+  await refreshClientTokenLimits();
   await refreshClientConfigStatus();
   hydrateClientEditorFromRoute(normalizeRoute().query);
 }
@@ -2981,6 +3323,30 @@ clearClientRtkPolicyBtnEl?.addEventListener("click", async () => {
 
 saveClientCrudBtnEl?.addEventListener("click", () => {
   void saveClientCrud();
+});
+
+clientTokenLimitWindowTypeEl?.addEventListener("change", () => {
+  syncClientTokenLimitWindowControls();
+});
+
+clientTokenLimitEnabledEl?.addEventListener("change", () => {
+  renderClientTokenLimitPreview(getClientTokenLimitEntry(selectedClientCrudKey));
+});
+
+clientTokenLimitHardBlockEl?.addEventListener("change", () => {
+  renderClientTokenLimitPreview(getClientTokenLimitEntry(selectedClientCrudKey));
+});
+
+clientTokenLimitValueEl?.addEventListener("input", () => {
+  renderClientTokenLimitPreview(getClientTokenLimitEntry(selectedClientCrudKey));
+});
+
+clientTokenLimitWindowSizeEl?.addEventListener("input", () => {
+  renderClientTokenLimitPreview(getClientTokenLimitEntry(selectedClientCrudKey));
+});
+
+resetClientTokenUsageBtnEl?.addEventListener("click", () => {
+  void resetClientTokenUsage();
 });
 
 clearClientCrudBtnEl?.addEventListener("click", () => {

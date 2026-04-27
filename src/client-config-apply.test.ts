@@ -10,6 +10,7 @@ import {
   normalizeProxyBaseUrl,
   readCodexAuthStatus,
   readQuickApplyStatus,
+  resolveQuickApplyPaths,
   writeQuickConfigFile,
 } from "./client-config-apply.js";
 
@@ -179,4 +180,13 @@ test("readQuickApplyStatus treats normalized trailing slash base URLs as configu
 test("normalizeProxyBaseUrl trims trailing slashes", () => {
   assert.equal(normalizeProxyBaseUrl(" http://127.0.0.1:8318/v1/ "), "http://127.0.0.1:8318/v1");
   assert.equal(normalizeProxyBaseUrl(""), "");
+});
+
+test("resolveQuickApplyPaths keeps Codex auth alongside override config path", () => {
+  const paths = resolveQuickApplyPaths({
+    codexConfigPath: "/host-home/.codex/config.toml",
+  });
+
+  assert.equal(paths.codexConfigPath, "/host-home/.codex/config.toml");
+  assert.equal(paths.codexAuthPath, "/host-home/.codex/auth.json");
 });

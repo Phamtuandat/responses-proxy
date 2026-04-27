@@ -7,7 +7,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ${HOME}/.hermes/config.yaml:/host-home/.hermes/config.yaml
-      - ${HOME}/.codex/config.toml:/host-home/.codex/config.toml
+      - ${HOME}/.codex:/host-home/.codex
     environment:
       PORT: "8318"
       HOST: "0.0.0.0"
@@ -46,16 +46,87 @@ services:
       STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER: "${STRIP_MAX_OUTPUT_TOKENS_FOR_PROVIDER:-false}"
       SANITIZE_REASONING_SUMMARY_FOR_PROVIDER: "${SANITIZE_REASONING_SUMMARY_FOR_PROVIDER:-false}"
       FALLBACK_ENABLED: "${FALLBACK_ENABLED:-true}"
-      FALLBACK_CODEX_CONFIG_PATH: "${FALLBACK_CODEX_CONFIG_PATH:-$HOME/.codex/config.toml}"
       FALLBACK_STATUS_CODES: "${FALLBACK_STATUS_CODES:-429,500,502,503,504}"
       APP_DB_PATH: "${APP_DB_PATH:-/app/logs/app.sqlite}"
+      CUSTOMER_KEY_DB_PATH: "${CUSTOMER_KEY_DB_PATH:-/app/logs/telegram-bot.sqlite}"
       SESSION_LOG_DIR: "/app/logs/sessions"
       SESSION_LOG_RETENTION_DAYS: "${SESSION_LOG_RETENTION_DAYS:-14}"
       QUICK_APPLY_HERMES_CONFIG_PATH: "/host-home/.hermes/config.yaml"
       QUICK_APPLY_CODEX_CONFIG_PATH: "/host-home/.codex/config.toml"
+      QUICK_APPLY_CODEX_AUTH_PATH: "/host-home/.codex/auth.json"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8318/health"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+  telegram-bot:
+    build: .
+    container_name: responses-proxy-telegram-bot
+    command: ["node", "dist/telegram-bot/index.js"]
+    depends_on:
+      responses-proxy:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      TELEGRAM_ALLOWED_USER_IDS: "${TELEGRAM_ALLOWED_USER_IDS:-}"
+      TELEGRAM_ALLOWED_CHAT_IDS: "${TELEGRAM_ALLOWED_CHAT_IDS:-}"
+      TELEGRAM_OWNER_USER_IDS: "${TELEGRAM_OWNER_USER_IDS:-}"
+      TELEGRAM_ADMIN_USER_IDS: "${TELEGRAM_ADMIN_USER_IDS:-}"
+      TELEGRAM_CUSTOMER_USER_IDS: "${TELEGRAM_CUSTOMER_USER_IDS:-}"
+      TELEGRAM_BOT_MODE: "${TELEGRAM_BOT_MODE:-polling}"
+      TELEGRAM_WEBHOOK_URL: "${TELEGRAM_WEBHOOK_URL:-}"
+      TELEGRAM_WEBHOOK_SECRET: "${TELEGRAM_WEBHOOK_SECRET:-}"
+      RESPONSES_PROXY_ADMIN_BASE_URL: "http://responses-proxy:8318"
+      RESPONSES_PROXY_CLIENT_API_KEY: "${RESPONSES_PROXY_CLIENT_API_KEY:-}"
+      RESPONSES_PROXY_DEFAULT_MODEL: "${RESPONSES_PROXY_DEFAULT_MODEL:-gpt-5.5}"
+      BOT_PUBLIC_SIGNUP_ENABLED: "${BOT_PUBLIC_SIGNUP_ENABLED:-false}"
+      BOT_REQUIRE_ADMIN_APPROVAL: "${BOT_REQUIRE_ADMIN_APPROVAL:-true}"
+      BOT_DEFAULT_CUSTOMER_ROUTE: "${BOT_DEFAULT_CUSTOMER_ROUTE:-customers}"
+      BOT_PUBLIC_RESPONSES_BASE_URL: "${BOT_PUBLIC_RESPONSES_BASE_URL:-http://127.0.0.1:8318/v1}"
+      BOT_PROXY_REQUEST_TIMEOUT_MS: "${BOT_PROXY_REQUEST_TIMEOUT_MS:-30000}"
+      BOT_SESSION_DB_PATH: "${BOT_SESSION_DB_PATH:-/app/logs/telegram-bot.sqlite}"
+      BOT_SESSION_TTL_MS: "${BOT_SESSION_TTL_MS:-900000}"
+      BOT_RATE_LIMIT_WINDOW_MS: "${BOT_RATE_LIMIT_WINDOW_MS:-60000}"
+      BOT_RATE_LIMIT_MAX_REQUESTS: "${BOT_RATE_LIMIT_MAX_REQUESTS:-12}"
+      BOT_LOG_LEVEL: "${BOT_LOG_LEVEL:-info}"
+    restart: unless-stopped
+
+  telegram-bot-worker:
+    build: .
+    container_name: responses-proxy-telegram-bot-worker
+    command: ["node", "dist/telegram-bot/worker.js"]
+    depends_on:
+      responses-proxy:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      TELEGRAM_ALLOWED_USER_IDS: "${TELEGRAM_ALLOWED_USER_IDS:-}"
+      TELEGRAM_ALLOWED_CHAT_IDS: "${TELEGRAM_ALLOWED_CHAT_IDS:-}"
+      TELEGRAM_OWNER_USER_IDS: "${TELEGRAM_OWNER_USER_IDS:-}"
+      TELEGRAM_ADMIN_USER_IDS: "${TELEGRAM_ADMIN_USER_IDS:-}"
+      TELEGRAM_CUSTOMER_USER_IDS: "${TELEGRAM_CUSTOMER_USER_IDS:-}"
+      TELEGRAM_BOT_MODE: "${TELEGRAM_BOT_MODE:-polling}"
+      TELEGRAM_WEBHOOK_URL: "${TELEGRAM_WEBHOOK_URL:-}"
+      TELEGRAM_WEBHOOK_SECRET: "${TELEGRAM_WEBHOOK_SECRET:-}"
+      RESPONSES_PROXY_ADMIN_BASE_URL: "http://responses-proxy:8318"
+      RESPONSES_PROXY_CLIENT_API_KEY: "${RESPONSES_PROXY_CLIENT_API_KEY:-}"
+      RESPONSES_PROXY_DEFAULT_MODEL: "${RESPONSES_PROXY_DEFAULT_MODEL:-gpt-5.5}"
+      BOT_PUBLIC_SIGNUP_ENABLED: "${BOT_PUBLIC_SIGNUP_ENABLED:-false}"
+      BOT_REQUIRE_ADMIN_APPROVAL: "${BOT_REQUIRE_ADMIN_APPROVAL:-true}"
+      BOT_DEFAULT_CUSTOMER_ROUTE: "${BOT_DEFAULT_CUSTOMER_ROUTE:-customers}"
+      BOT_PUBLIC_RESPONSES_BASE_URL: "${BOT_PUBLIC_RESPONSES_BASE_URL:-http://127.0.0.1:8318/v1}"
+      BOT_PROXY_REQUEST_TIMEOUT_MS: "${BOT_PROXY_REQUEST_TIMEOUT_MS:-30000}"
+      BOT_SESSION_DB_PATH: "${BOT_SESSION_DB_PATH:-/app/logs/telegram-bot.sqlite}"
+      BOT_SESSION_TTL_MS: "${BOT_SESSION_TTL_MS:-900000}"
+      BOT_RATE_LIMIT_WINDOW_MS: "${BOT_RATE_LIMIT_WINDOW_MS:-60000}"
+      BOT_RATE_LIMIT_MAX_REQUESTS: "${BOT_RATE_LIMIT_MAX_REQUESTS:-12}"
+      BOT_LOG_LEVEL: "${BOT_LOG_LEVEL:-info}"
+      BOT_WORKER_INTERVAL_MS: "${BOT_WORKER_INTERVAL_MS:-60000}"
+      BOT_WORKER_ONCE: "${BOT_WORKER_ONCE:-false}"
+    restart: unless-stopped

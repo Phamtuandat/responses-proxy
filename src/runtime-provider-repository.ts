@@ -649,6 +649,8 @@ export class RuntimeProviderRepository {
     delete this.modelOverrides[routeKey];
     delete this.clientRouteRtkPolicies[routeKey];
     delete this.clientRouteApiKeys[routeKey];
+    this.deleteClientTokenLimit(routeKey);
+    this.db.prepare("DELETE FROM client_token_usage WHERE client_route = ?").run(routeKey);
     this.persistRuntimeState();
   }
 

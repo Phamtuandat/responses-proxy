@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 export type QuickApplyClient = "hermes" | "codex";
@@ -50,10 +50,14 @@ export type QuickConfigWriteResult = {
 
 export function resolveQuickApplyPaths(overrides?: Partial<QuickApplyPaths>): QuickApplyPaths {
   const home = homedir();
+  const codexConfigPath = overrides?.codexConfigPath?.trim() || `${home}/.codex/config.toml`;
+  const codexAuthPath =
+    overrides?.codexAuthPath?.trim() ||
+    (overrides?.codexConfigPath?.trim() ? join(dirname(codexConfigPath), "auth.json") : `${home}/.codex/auth.json`);
   return {
     hermesConfigPath: overrides?.hermesConfigPath?.trim() || `${home}/.hermes/config.yaml`,
-    codexConfigPath: overrides?.codexConfigPath?.trim() || `${home}/.codex/config.toml`,
-    codexAuthPath: `${home}/.codex/auth.json`,
+    codexConfigPath,
+    codexAuthPath,
     backupDir: overrides?.backupDir?.trim() || `${home}/.responses-proxy/client-config-backups`,
   };
 }

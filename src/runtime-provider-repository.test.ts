@@ -493,6 +493,66 @@ test("lists client token limits with current usage snapshots", async () => {
   }
 });
 
+test("deleting a client route clears token limit config and usage", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.addClientRoute("codex", "provider-a");
+    repository.setClientTokenLimit("codex", {
+      enabled: true,
+      tokenLimit: 1000,
+      windowType: "daily",
+      hardBlock: true,
+    });
+    repository.incrementClientTokenUsage(
+      "codex",
+      { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      new Date("2026-04-27T12:00:00.000Z"),
+    );
+
+    repository.deleteClientRoute("codex");
+
+    assert.equal(repository.getClientTokenLimit("codex"), undefined);
+    assert.deepEqual(
+      repository.getClientTokenUsage("codex", new Date("2026-04-27T12:30:00.000Z")),
+      {
+        clientRoute: "codex",
+        windowStart: "2026-04-27T00:00:00.000Z",
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        updatedAt: "2026-04-27T00:00:00.000Z",
+      },
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("resolveClientTokenWindowStart supports daily weekly monthly and fixed windows", () => {
   const now = new Date("2026-04-29T13:45:30.000Z");
 

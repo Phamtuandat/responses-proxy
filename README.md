@@ -5,6 +5,31 @@ Minimal Fastify proxy for a Responses API upstream.
 ## Implementation Plans
 
 - [ChatGPT OAuth provider](docs/chatgpt-oauth-implementation-plan.md)
+- [Client token limit](docs/client-token-limit-implementation-plan.md)
+- [Telegram bot for Responses Proxy](docs/telegram-bot-design.md)
+- [Public Telegram bot, customer API keys, and billing](docs/public-telegram-bot-billing-implementation-plan.md)
+- [Public bot end-to-end test checklist](docs/public-bot-end-to-end-test-checklist.md)
+- [Public bot test run sheet](docs/public-bot-test-run-sheet.md)
+- [Public bot launch verification](docs/public-bot-launch-verification.md)
+- [Public bot production release](docs/public-bot-production-release.md)
+
+## Public Telegram Bot
+
+For public bot mode:
+
+- keep `TELEGRAM_OWNER_USER_IDS` and `TELEGRAM_ADMIN_USER_IDS` in env as bootstrap operators
+- enable `BOT_PUBLIC_SIGNUP_ENABLED=true` so new Telegram users can enter the bot
+- leave `TELEGRAM_ALLOWED_USER_IDS` empty during normal operation
+- use `TELEGRAM_ALLOWED_USER_IDS` only as an emergency lockdown list
+- do not manage customers through `TELEGRAM_CUSTOMER_USER_IDS`; customer access now lives in the bot database
+
+For the current manual paid flow:
+
+- customers request or receive access through the bot
+- admin collects payment outside the bot
+- admin uses `/grant`, `/renewuser`, or `/renew approve` to activate or extend access
+
+For a real deployment, start from `.env.production.checklist` and then copy the values you need into your deployed `.env`.
 
 ## App Install
 
@@ -76,8 +101,89 @@ Model aliasing:
 - a provider hint that is not allowed for the current API key returns `403 PROVIDER_NOT_ALLOWED_FOR_API_KEY`
 
 If the primary upstream fails with a retryable status, the proxy can
-automatically fall back to the active Codex provider declared in
-`~/.codex/config.toml`. In the current setup that means `cliproxy`.
+automatically fall back to another provider that is already configured in the
+app runtime routes. By default it prefers the `codex` client route as the
+secondary provider for `default` traffic.
+
+## Client token limits
+
+Each runtime client route can have an optional hard token quota. Limits are
+stored in the app SQLite DB at `APP_DB_PATH`, evaluated before upstream
+forwarding, and updated only after a successful upstream response reports
+`usage.total_tokens`.
+
+The dashboard Clients page shows per-client `used / limit`, remaining quota,
+window type, active/blocked state, and reset controls.
+
+Read current limits:
+
+```bash
+curl http://127.0.0.1:8318/api/client-token-limits
+curl http://127.0.0.1:8318/api/client-token-limits/codex
+```
+
+Create or update a limit:
+
+```bash
+curl -X PUT http://127.0.0.1:8318/api/client-token-limits/codex \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "enabled": true,
+    "tokenLimit": 100000,
+    "windowType": "daily",
+    "hardBlock": true
+  }'
+```
+
+Fixed windows require `windowSizeSeconds`:
+
+```bash
+curl -X PUT http://127.0.0.1:8318/api/client-token-limits/hermes \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "enabled": true,
+    "tokenLimit": 50000,
+    "windowType": "fixed",
+    "windowSizeSeconds": 3600,
+    "hardBlock": true
+  }'
+```
+
+Reset the current window:
+
+```bash
+curl -X POST http://127.0.0.1:8318/api/client-token-limits/codex/reset
+```
+
+When a hard limit is reached, `/v1/responses` returns `429` before contacting
+the upstream:
+
+```json
+{
+  "error": {
+    "type": "request_error",
+    "code": "CLIENT_TOKEN_LIMIT_EXCEEDED",
+    "message": "Client route 'codex' has reached its token limit for the current window.",
+    "client": "codex",
+    "client_route": "codex",
+    "usage": {
+      "used": 100000,
+      "limit": 100000,
+      "remaining": 0,
+      "blocked": true,
+      "windowStart": "2026-04-27T00:00:00.000Z"
+    }
+  }
+}
+```
+
+Accounting notes:
+
+- JSON responses increment usage after the final successful response is parsed.
+- SSE responses increment usage after the stream completes and a response usage event was seen.
+- Failed upstream attempts are not counted.
+- If fallback succeeds, only the successful fallback response is counted.
+- Concurrent requests can slightly overshoot a limit because accounting happens after completion rather than by reserving tokens up front.
 
 ## Supported request fields
 
@@ -135,7 +241,7 @@ This repo is prepared for a local Hermes setup that should call this proxy inste
 
 - proxy upstream: `${UPSTREAM_BASE_URL}` + `${UPSTREAM_API_KEY}`
 - Hermes provider base URL: `${RESPONSES_PROXY_BASE_URL}`
-- Codex fallback provider: `model_provider` from `~/.codex/config.toml`
+- Runtime fallback provider: resolved from the app client routes
 
 Use:
 
@@ -156,11 +262,15 @@ Current config files:
 
 - Hermes: `~/.hermes/config.yaml`
 - Codex: `~/.codex/config.toml`
+- Codex auth: `~/.codex/auth.json`
+
+In Docker, the container bind-mounts the whole `~/.codex/` directory so Quick
+Apply can safely create or update `auth.json` when it is missing.
 
 ## Fallback behavior
 
-By default the proxy reads `~/.codex/config.toml`, finds the active
-`model_provider`, and uses it as a fallback only when:
+By default the proxy resolves fallback from the app's configured client routes,
+not from local Codex files. It uses that fallback only when:
 
 - provider preflight rejects the request with `429`
 - the primary upstream request fails with `429`, `500`, `502`, `503`, or `504`
@@ -168,7 +278,6 @@ By default the proxy reads `~/.codex/config.toml`, finds the active
 Environment variables:
 
 - `FALLBACK_ENABLED=true`
-- `FALLBACK_CODEX_CONFIG_PATH=~/.codex/config.toml`
 - `FALLBACK_STATUS_CODES=429,500,502,503,504`
 - `APP_DB_PATH=./logs/app.sqlite`
 

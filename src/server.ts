@@ -57,6 +57,8 @@ import { resolveRequestTimeoutMs } from "./request-timeout-policy.js";
 import {
   type ClientRouteKey,
   buildBuiltinProviderPresets,
+  type ClientTokenLimitView,
+  type ClientTokenWindowType,
   normalizeClientRouteKey,
   RuntimeProviderError,
   type RuntimeProviderInput,
@@ -70,6 +72,16 @@ import {
   type PromptCacheObservation,
 } from "./prompt-cache-state.js";
 import { applyRtkLayer, parseRtkLayerPolicyInput, resolveRtkLayerPolicy } from "./rtk-layer.js";
+import {
+  buildClientTokenLimitError,
+  extractUsageTotals,
+  getClientTokenLimitStatus,
+} from "./client-token-limits.js";
+import { BillingRepository } from "./billing.js";
+import { CustomerKeyRepository } from "./customer-keys.js";
+import { resolveCustomerRoutingAccess } from "./customer-key-access.js";
+import { recordCustomerUsageFromPayload } from "./customer-usage.js";
+import { CustomerWorkspaceRepository } from "./telegram-bot/customer-workspace-repository.js";
 
 const config = readConfig(process.env);
 const CHATGPT_OAUTH_PROVIDER_ID = "account-openai-codex";
@@ -79,6 +91,11 @@ const providerRepository = await RuntimeProviderRepository.create({
   legacyStateFile: path.resolve(config.SESSION_LOG_DIR, "..", "runtime-state.json"),
   baseProviders: buildBuiltinProviderPresets(config),
 });
+const customerKeyRepository = CustomerKeyRepository.create(path.resolve(config.CUSTOMER_KEY_DB_PATH));
+const customerWorkspaceRepository = CustomerWorkspaceRepository.create(
+  path.resolve(config.CUSTOMER_KEY_DB_PATH),
+);
+const billingRepository = BillingRepository.create(path.resolve(config.CUSTOMER_KEY_DB_PATH));
 const chatGptOAuthStore = ChatGptOAuthStore.create(path.resolve(config.APP_DB_PATH));
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
 const publicDir = path.resolve(process.cwd(), "public");
@@ -106,6 +123,7 @@ const publicAssets = {
 const quickApplyPaths = resolveQuickApplyPaths({
   hermesConfigPath: process.env.QUICK_APPLY_HERMES_CONFIG_PATH,
   codexConfigPath: process.env.QUICK_APPLY_CODEX_CONFIG_PATH,
+  codexAuthPath: process.env.QUICK_APPLY_CODEX_AUTH_PATH,
   backupDir: path.resolve(config.SESSION_LOG_DIR, "..", "client-config-backups"),
 });
 const localProxyBaseUrl = `http://127.0.0.1:${config.PORT}/v1`;
@@ -125,7 +143,7 @@ const DATE_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 hydratePromptCacheObservationsFromStore(promptCacheStateStore);
 await hydrateLatestPromptCacheObservations(path.resolve(config.SESSION_LOG_DIR));
 
-const app = Fastify({
+export const app = Fastify({
   logger: {
     level: config.LOG_LEVEL,
   },
@@ -139,7 +157,7 @@ app.get("/health", async () => ({
   service: "responses-proxy",
   upstream: providerRepository.getActiveProvider()?.baseUrl ?? null,
   activeProviderId: providerRepository.getActiveProviderId(),
-  fallback: getFallbackProviderPreset()?.responsesUrl,
+  fallback: getFallbackProviderPreset("default")?.responsesUrl ?? null,
 }));
 
 app.get("/api/debug/prompt-cache/latest", async (request) => {
@@ -898,6 +916,107 @@ app.delete("/api/clients/:client", async (request, reply) => {
   }
 });
 
+app.get("/api/client-token-limits", async (_request, reply) => {
+  const now = new Date();
+  return reply.send({
+    ok: true,
+    timestamp: now.toISOString(),
+    clients: providerRepository
+      .listClientTokenLimitsForUi(now)
+      .map((entry) => buildClientTokenLimitResponse(entry)),
+  });
+});
+
+app.get("/api/client-token-limits/:client", async (request, reply) => {
+  const params = request.params as { client?: string };
+  if (typeof params.client !== "string" || !params.client.trim()) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_CLIENT",
+        message: "client is required",
+      },
+    });
+  }
+
+  const client = normalizeClientRouteKey(params.client);
+  if (!providerRepository.getClientRoutesForUi().some((entry) => entry.key === client)) {
+    return reply.code(404).send({
+      error: {
+        type: "validation_error",
+        code: "CLIENT_ROUTE_NOT_FOUND",
+        message: "client must match one of the configured client routes",
+      },
+    });
+  }
+
+  const now = new Date();
+  const config = providerRepository.getClientTokenLimit(client) ?? null;
+  const usage = providerRepository.getClientTokenUsage(client, now);
+  return reply.send({
+    ok: true,
+    timestamp: now.toISOString(),
+    client: buildClientTokenLimitResponse({
+      clientRoute: client,
+      config,
+      usage,
+    }),
+  });
+});
+
+app.put("/api/client-token-limits/:client", async (request, reply) => {
+  const params = request.params as { client?: string };
+  const client = validateClientTokenLimitRoute(params.client, reply);
+  if (!client) {
+    return;
+  }
+
+  const input = parseClientTokenLimitInput(request.body);
+  if ("error" in input) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: input.error.code,
+        message: input.error.message,
+      },
+    });
+  }
+
+  const config = providerRepository.setClientTokenLimit(client, input.value);
+  const now = new Date();
+  const usage = providerRepository.getClientTokenUsage(client, now);
+  return reply.send({
+    ok: true,
+    timestamp: now.toISOString(),
+    client: buildClientTokenLimitResponse({
+      clientRoute: client,
+      config,
+      usage,
+    }),
+  });
+});
+
+app.post("/api/client-token-limits/:client/reset", async (request, reply) => {
+  const params = request.params as { client?: string };
+  const client = validateClientTokenLimitRoute(params.client, reply);
+  if (!client) {
+    return;
+  }
+
+  const now = new Date();
+  const usage = providerRepository.resetClientTokenUsage(client, now);
+  const config = providerRepository.getClientTokenLimit(client) ?? null;
+  return reply.send({
+    ok: true,
+    timestamp: now.toISOString(),
+    client: buildClientTokenLimitResponse({
+      clientRoute: client,
+      config,
+      usage,
+    }),
+  });
+});
+
 app.get("/api/providers/:providerId", async (request, reply) => {
   const params = request.params as { providerId?: string };
   try {
@@ -1111,9 +1230,20 @@ app.get("/api/providers/live-usage", async (request, reply) => {
 
 app.get("/v1/models", async (request, reply) => {
   const routingApiKey = readBearerToken(request.headers.authorization);
+  const routingAccess = resolveCustomerRoutingAccess({
+    routingApiKey,
+    resolvedClientRoute: "default",
+    providerRepository,
+    customerKeyRepository,
+    workspaceRepository: customerWorkspaceRepository,
+    billingRepository,
+  });
+  if ("error" in routingAccess) {
+    return reply.code(routingAccess.error.statusCode).send(routingAccess.error.body);
+  }
   const providerHint = readRequestProviderHint(request.headers, undefined);
   const providerResolution = resolveProviderForRequest({
-    providers: providerRepository.findProvidersByAccessKey(routingApiKey),
+    providers: routingAccess.providers,
     explicitProviderId: providerHint.providerId,
     explicitProviderName: providerHint.providerName,
   });
@@ -1203,10 +1333,45 @@ async function handleResponsesRequest(
   }
 
   const routingApiKey = readBearerToken(request.headers.authorization);
-  const clientRoute = resolveClientRoute(request.headers, parsed.data, routingApiKey);
+  const resolvedClientRoute = resolveClientRoute(request.headers, parsed.data, routingApiKey);
+  const routingAccess = resolveCustomerRoutingAccess({
+    routingApiKey,
+    resolvedClientRoute,
+    providerRepository,
+    customerKeyRepository,
+    workspaceRepository: customerWorkspaceRepository,
+    billingRepository,
+  });
+  if ("error" in routingAccess) {
+    reply.header("x-proxy-request-id", requestId);
+    reply.header("x-proxy-error-code", routingAccess.error.body.error.code);
+    reply.header("x-proxy-retryable", routingAccess.error.body.error.retryable ? "1" : "0");
+    return reply.code(routingAccess.error.statusCode).send(routingAccess.error.body);
+  }
+  const clientRoute = routingAccess.clientRoute;
+  const customerUsageAccess =
+    routingAccess.kind === "customer"
+      ? {
+          kind: "customer" as const,
+          workspace: { id: routingAccess.workspace.id },
+          entitlement: { id: routingAccess.entitlement.id },
+          customerKey: { id: routingAccess.customerKey.id },
+        }
+      : ({ kind: "operator" as const });
+  const clientTokenLimitStatus = getClientTokenLimitStatus(
+    providerRepository.getClientTokenLimit(clientRoute),
+    providerRepository.getClientTokenUsage(clientRoute),
+  );
+  if (clientTokenLimitStatus.blocked) {
+    const limitError = buildClientTokenLimitError(clientRoute, clientTokenLimitStatus);
+    reply.header("x-proxy-request-id", requestId);
+    reply.header("x-proxy-error-code", limitError.body.error.code);
+    reply.header("x-proxy-retryable", "1");
+    return reply.code(limitError.statusCode).send(limitError.body);
+  }
   const providerHint = readRequestProviderHint(request.headers, parsed.data.metadata);
   const providerResolution = resolveProviderForRequest({
-    providers: providerRepository.findProvidersByAccessKey(routingApiKey),
+    providers: routingAccess.providers,
     explicitProviderId: providerHint.providerId,
     explicitProviderName: providerHint.providerName,
   });
@@ -1326,6 +1491,7 @@ async function handleResponsesRequest(
 
   try {
     if (isStream) {
+      let streamUsagePayload: unknown;
       setProxyResponseHeaders(reply.raw, {
         requestId,
         providerId: activeProviderId,
@@ -1348,7 +1514,27 @@ async function handleResponsesRequest(
         logger: request.log,
         sessionLog,
         logContext: traceContext,
-        onEvent: (entry) => updateLatestPromptCacheObservationFromEntry(entry),
+        onEvent: (entry) => {
+          if (entry.event === "upstream_response_usage") {
+            streamUsagePayload = entry.usage;
+          }
+          updateLatestPromptCacheObservationFromEntry(entry);
+        },
+      });
+      const streamUsage = recordClientTokenUsageFromPayload(clientRoute, streamUsagePayload);
+      if (streamUsage) {
+        await sessionLog.write({
+          event: "client_token_usage_incremented",
+          requestId,
+          clientRoute,
+          mode: "sse",
+          usage: streamUsage,
+        });
+      }
+      recordCustomerUsageFromPayload({
+        billingRepository,
+        usagePayload: streamUsagePayload,
+        access: customerUsageAccess,
       });
       latestPromptCacheObservation = {
         ...(latestPromptCacheObservation ?? {
@@ -1404,6 +1590,7 @@ async function handleResponsesRequest(
         clientRoute,
         providerId: activeProviderId,
         routingApiKey,
+        customerUsageAccess,
         body: normalized,
         logger: request.log,
         sessionLog,
@@ -1887,7 +2074,7 @@ async function resolveForwardTarget(args: {
     await runPrimaryPreflight(args);
     return primaryTarget;
   } catch (error) {
-    const fallbackProvider = getFallbackProviderPreset();
+    const fallbackProvider = getFallbackProviderPreset(args.clientRoute, activeProvider.id);
     if (!shouldFallbackFromError(error) || !fallbackProvider) {
       throw error;
     }
@@ -1942,12 +2129,20 @@ async function forwardJsonWithFallback(args: {
   clientRoute: ClientRouteKey;
   providerId?: string;
   routingApiKey?: string;
+  customerUsageAccess:
+    | {
+        kind: "customer";
+        workspace: { id: string };
+        entitlement: { id: string };
+        customerKey: { id: string };
+      }
+    | { kind: "operator" };
   body: Record<string, unknown>;
   logger: FastifyBaseLogger;
   sessionLog: ReturnType<typeof createSessionLogContext>;
 }): Promise<{ upstream: Response; target: ForwardTarget }> {
   const primaryTarget = await resolveForwardTarget(args);
-  const fallbackProvider = getFallbackProviderPreset();
+  const fallbackProvider = getFallbackProviderPreset(args.clientRoute, primaryTarget.name);
   const usingFallbackAsPrimary = fallbackProvider
     ? primaryTarget.name === fallbackProvider.id
     : false;
@@ -2019,6 +2214,14 @@ async function runJsonRequestWithInflightDedupe(
     clientRoute: ClientRouteKey;
     providerId?: string;
     routingApiKey?: string;
+    customerUsageAccess:
+      | {
+          kind: "customer";
+          workspace: { id: string };
+          entitlement: { id: string };
+          customerKey: { id: string };
+        }
+      | { kind: "operator" };
     body: Record<string, unknown>;
     logger: FastifyBaseLogger;
     sessionLog: ReturnType<typeof createSessionLogContext>;
@@ -2035,8 +2238,26 @@ async function runJsonRequestWithInflightDedupe(
     upstreamStatus: number;
   }> => {
     const { upstream, target } = await forwardJsonWithFallback(args);
+    const payload = await upstream.json();
+    if (upstream.ok) {
+      const usage = recordClientTokenUsageFromPayload(args.clientRoute, payload);
+      if (usage) {
+        await args.sessionLog.write({
+          event: "client_token_usage_incremented",
+          requestId: args.requestId,
+          clientRoute: args.clientRoute,
+          mode: "json",
+          usage,
+        });
+      }
+      recordCustomerUsageFromPayload({
+        billingRepository,
+        usagePayload: payload,
+        access: args.customerUsageAccess,
+      });
+    }
     return {
-      payload: await upstream.json(),
+      payload,
       target,
       upstreamStatus: upstream.status,
     };
@@ -2114,7 +2335,7 @@ async function logFallbackAttempt(
   error: unknown,
   statusCode?: number,
 ): Promise<void> {
-  const fallbackProvider = getFallbackProviderPreset();
+  const fallbackProvider = getFallbackProviderPreset(args.clientRoute);
   if (!fallbackProvider) {
     return;
   }
@@ -2175,7 +2396,7 @@ async function forwardSseWithFallback(args: {
   onEvent?: (entry: Record<string, unknown>) => void;
 }): Promise<ForwardTarget> {
   const primaryTarget = await resolveForwardTarget(args);
-  const fallbackProvider = getFallbackProviderPreset();
+  const fallbackProvider = getFallbackProviderPreset(args.clientRoute, primaryTarget.name);
   const usingFallbackAsPrimary = fallbackProvider
     ? primaryTarget.name === fallbackProvider.id
     : false;
@@ -2299,8 +2520,14 @@ function requireActiveProviderPreset(): RuntimeProviderPreset {
   });
 }
 
-function getFallbackProviderPreset(): RuntimeProviderPreset | undefined {
-  return providerRepository.getFallbackProvider();
+function getFallbackProviderPreset(
+  client: ClientRouteKey = "default",
+  primaryProviderId?: string,
+): RuntimeProviderPreset | undefined {
+  if (!config.FALLBACK_ENABLED) {
+    return undefined;
+  }
+  return providerRepository.getFallbackProvider(client, primaryProviderId);
 }
 
 function getDefaultProviderApiKey(provider: RuntimeProviderPreset): string | undefined {
@@ -2656,6 +2883,166 @@ function sendProviderRepositoryError(
     });
   }
   throw error;
+}
+
+function buildClientTokenLimitResponse(entry: ClientTokenLimitView): Record<string, unknown> {
+  return {
+    clientRoute: entry.clientRoute,
+    config: entry.config,
+    usage: entry.usage,
+    status: getClientTokenLimitStatus(entry.config, entry.usage),
+  };
+}
+
+function recordClientTokenUsageFromPayload(
+  client: ClientRouteKey,
+  usagePayload: unknown,
+): ReturnType<RuntimeProviderRepository["incrementClientTokenUsage"]> | undefined {
+  const usage = extractUsageTotals(usagePayload);
+  if (!usage) {
+    return undefined;
+  }
+  return providerRepository.incrementClientTokenUsage(client, usage);
+}
+
+function validateClientTokenLimitRoute(
+  rawClient: unknown,
+  reply: {
+    code(statusCode: number): { send(payload: Record<string, unknown>): unknown };
+  },
+): ClientRouteKey | undefined {
+  if (typeof rawClient !== "string" || !rawClient.trim()) {
+    reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_CLIENT",
+        message: "client is required",
+      },
+    });
+    return undefined;
+  }
+
+  const client = normalizeClientRouteKey(rawClient);
+  if (!providerRepository.getClientRoutesForUi().some((entry) => entry.key === client)) {
+    reply.code(404).send({
+      error: {
+        type: "validation_error",
+        code: "CLIENT_ROUTE_NOT_FOUND",
+        message: "client must match one of the configured client routes",
+      },
+    });
+    return undefined;
+  }
+
+  return client;
+}
+
+function parseClientTokenLimitInput(input: unknown):
+  | {
+      value: {
+        enabled: boolean;
+        tokenLimit: number;
+        windowType: ClientTokenWindowType;
+        windowSizeSeconds?: number;
+        hardBlock: boolean;
+      };
+    }
+  | { error: { code: string; message: string } } {
+  const body = isRecord(input) ? input : {};
+  const enabled = body.enabled;
+  if (typeof enabled !== "boolean") {
+    return {
+      error: {
+        code: "INVALID_CLIENT_TOKEN_LIMIT_ENABLED",
+        message: "enabled must be a boolean",
+      },
+    };
+  }
+
+  const tokenLimit = readPositiveInteger(body.tokenLimit) ?? 1;
+  if (enabled && readPositiveInteger(body.tokenLimit) === undefined) {
+    return {
+      error: {
+        code: "INVALID_CLIENT_TOKEN_LIMIT",
+        message: "tokenLimit must be a positive integer",
+      },
+    };
+  }
+
+  const windowType = parseClientTokenWindowType(body.windowType);
+  if (!windowType) {
+    return {
+      error: {
+        code: "INVALID_CLIENT_TOKEN_WINDOW_TYPE",
+        message: "windowType must be one of daily, weekly, monthly, or fixed",
+      },
+    };
+  }
+
+  const hardBlock = body.hardBlock;
+  if (typeof hardBlock !== "boolean") {
+    return {
+      error: {
+        code: "INVALID_CLIENT_TOKEN_HARD_BLOCK",
+        message: "hardBlock must be a boolean",
+      },
+    };
+  }
+
+  if (windowType !== "fixed") {
+    return {
+      value: {
+        enabled,
+        tokenLimit,
+        windowType,
+        hardBlock,
+      },
+    };
+  }
+
+  const windowSizeSeconds = readPositiveInteger(body.windowSizeSeconds) ?? 86400;
+  if (enabled && readPositiveInteger(body.windowSizeSeconds) === undefined) {
+    return {
+      error: {
+        code: "INVALID_CLIENT_TOKEN_WINDOW_SIZE",
+        message: "windowSizeSeconds must be a positive integer when windowType is fixed",
+      },
+    };
+  }
+
+  return {
+    value: {
+      enabled,
+      tokenLimit,
+      windowType,
+      windowSizeSeconds,
+      hardBlock,
+    },
+  };
+}
+
+function parseClientTokenWindowType(value: unknown): ClientTokenWindowType | undefined {
+  switch (value) {
+    case "daily":
+    case "weekly":
+    case "monthly":
+    case "fixed":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return Math.floor(parsed);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function summarizeUsage(usage: {
@@ -3636,7 +4023,9 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((error) => {
-  app.log.error(error, "failed to start responses proxy");
-  process.exit(1);
-});
+if (process.env.RESPONSES_PROXY_DISABLE_LISTEN !== "true") {
+  main().catch((error) => {
+    app.log.error(error, "failed to start responses proxy");
+    process.exit(1);
+  });
+}
