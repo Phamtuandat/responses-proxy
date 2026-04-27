@@ -294,6 +294,8 @@
                       <span>Model</span>
                       <select id="codexConfigModelSelect"></select>
                     </div>
+                    <div><span>Auth Path</span><strong id="codexAuthPath" class="mono">-</strong></div>
+                    <div><span>Auth State</span><strong id="codexAuthState" class="mono">-</strong></div>
                   </div>
                   <div class="quick-apply-backups">
                     <span>Latest backup</span>
@@ -921,7 +923,10 @@
                   <h2>Provider Usage</h2>
                   <p>Live upstream usage fetched from configured provider credentials.</p>
                 </div>
-                <div id="usageLiveStatus" class="pill">Idle</div>
+                <div class="row-wrap">
+                  <button type="button" class="button-link-muted" id="usageRefreshBtn">Refresh now</button>
+                  <div id="usageLiveStatus" class="pill">Idle</div>
+                </div>
               </div>
               <div class="cards">
                 <section class="card">
@@ -942,19 +947,16 @@
                   <thead>
                     <tr>
                       <th>Provider</th>
-                      <th>Source</th>
                       <th>Status</th>
                       <th>Remaining</th>
-                      <th>Used / Limit</th>
+                      <th>Usage</th>
                     </tr>
                   </thead>
                   <tbody id="usageLiveTableBody">
-                    <tr><td colspan="5" class="mono">Open Usage to start live fetch.</td></tr>
+                    <tr><td colspan="4" class="mono">Open Usage to start live fetch.</td></tr>
                   </tbody>
                 </table>
               </div>
-              <div class="meta">Endpoint: GET /api/providers/live-usage</div>
-              <pre id="usageRaw">{}</pre>
             </div>
           </section>
 

@@ -8,6 +8,7 @@ export type QuickApplyClient = "hermes" | "codex";
 export type QuickApplyPaths = {
   hermesConfigPath: string;
   codexConfigPath: string;
+  codexAuthPath: string;
   backupDir: string;
 };
 
@@ -25,6 +26,13 @@ export type QuickApplyStatus = {
   configured: boolean;
   routeApiKey: string;
   detected: Record<string, string | null>;
+  auth?: {
+    path: string;
+    exists: boolean;
+    configured: boolean;
+    detectedApiKey: string | null;
+    backups: QuickApplyBackupEntry[];
+  };
 };
 
 export type QuickApplyBackupEntry = {
@@ -34,17 +42,32 @@ export type QuickApplyBackupEntry = {
   sizeBytes: number;
 };
 
+export type QuickConfigWriteResult = {
+  changed: boolean;
+  backupCreated: boolean;
+  backupPath?: string;
+};
+
 export function resolveQuickApplyPaths(overrides?: Partial<QuickApplyPaths>): QuickApplyPaths {
   const home = homedir();
   return {
     hermesConfigPath: overrides?.hermesConfigPath?.trim() || `${home}/.hermes/config.yaml`,
     codexConfigPath: overrides?.codexConfigPath?.trim() || `${home}/.codex/config.toml`,
+    codexAuthPath: `${home}/.codex/auth.json`,
     backupDir: overrides?.backupDir?.trim() || `${home}/.responses-proxy/client-config-backups`,
   };
 }
 
 export function generateRouteApiKey(client: QuickApplyClient): string {
   return `sk-${client}-route-${randomBytes(12).toString("hex")}`;
+}
+
+export function normalizeProxyBaseUrl(value: string | null | undefined): string {
+  const trimmed = value?.trim() || "";
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replace(/\/+$/, "");
 }
 
 export function readQuickApplyStatus(
@@ -65,19 +88,48 @@ export function applyQuickConfig(raw: string | undefined, config: QuickApplyTarg
   return applyCodexConfig(raw, config);
 }
 
+export function readCodexAuthStatus(
+  raw: string | undefined,
+  routeApiKey: string,
+  path: string,
+  options?: { backupDir?: string },
+) {
+  const data = parseJsonObject(raw);
+  const detectedApiKey = typeof data.OPENAI_API_KEY === "string" ? data.OPENAI_API_KEY : null;
+  return {
+    path,
+    exists: typeof raw === "string",
+    configured: detectedApiKey === routeApiKey,
+    detectedApiKey,
+    backups: listRecentConfigBackups(path, 1, options),
+  };
+}
+
+export function applyCodexAuth(raw: string | undefined, routeApiKey: string): string {
+  const data = parseJsonObject(raw);
+  data.OPENAI_API_KEY = routeApiKey;
+  return `${JSON.stringify(data, null, 2)}\n`;
+}
+
 export function writeQuickConfigFile(
   filePath: string,
   nextRaw: string,
   options?: { backupDir?: string },
-): void {
+): QuickConfigWriteResult {
   mkdirSync(dirname(filePath), { recursive: true });
   if (existsSync(filePath)) {
     const currentRaw = readFileSync(filePath, "utf8");
+    if (currentRaw === nextRaw) {
+      return { changed: false, backupCreated: false };
+    }
     const backupPath = buildTimestampedBackupPath(filePath, new Date(), options?.backupDir);
     mkdirSync(dirname(backupPath), { recursive: true });
     writeFileSync(backupPath, currentRaw, "utf8");
+    writeFileSync(filePath, nextRaw, "utf8");
+    return { changed: true, backupCreated: true, backupPath };
   }
   writeFileSync(filePath, nextRaw, "utf8");
+  return { changed: true, backupCreated: false };
 }
 
 export function readQuickConfigFile(filePath: string): string | undefined {
@@ -134,7 +186,7 @@ function readHermesStatus(
     exists: typeof raw === "string",
     configured:
       detected.provider === "custom" &&
-      detected.baseUrl === config.proxyBaseUrl &&
+      normalizeProxyBaseUrl(detected.baseUrl) === normalizeProxyBaseUrl(config.proxyBaseUrl) &&
       detected.apiKey === config.routeApiKey &&
       detected.apiMode === "codex_responses",
     routeApiKey: config.routeApiKey,
@@ -164,7 +216,7 @@ function readCodexStatus(
     exists: typeof raw === "string",
     configured:
       detected.modelProvider === "responses_proxy" &&
-      detected.baseUrl === config.proxyBaseUrl &&
+      normalizeProxyBaseUrl(detected.baseUrl) === normalizeProxyBaseUrl(config.proxyBaseUrl) &&
       detected.apiKey === config.routeApiKey &&
       detected.wireApi === "responses",
     routeApiKey: config.routeApiKey,
@@ -175,12 +227,13 @@ function readCodexStatus(
 export function applyHermesConfig(raw: string | undefined, config: QuickApplyTargetConfig): string {
   const currentModel = readYamlSectionKey(raw, "model", "default");
   const nextModel = config.model?.trim() || currentModel || "gpt-5.4";
+  const nextBaseUrl = normalizeProxyBaseUrl(config.proxyBaseUrl);
   let nextRaw = typeof raw === "string" && raw.trim() ? raw : "";
 
   nextRaw = upsertYamlSectionKey(nextRaw, "model", "default", nextModel);
   nextRaw = upsertYamlSectionKey(nextRaw, "model", "provider", "custom");
   nextRaw = upsertYamlSectionKey(nextRaw, "model", "api_key", config.routeApiKey);
-  nextRaw = upsertYamlSectionKey(nextRaw, "model", "base_url", config.proxyBaseUrl);
+  nextRaw = upsertYamlSectionKey(nextRaw, "model", "base_url", nextBaseUrl);
   nextRaw = upsertYamlSectionKey(nextRaw, "model", "api_mode", "codex_responses");
 
   return ensureTrailingNewline(nextRaw);
@@ -189,12 +242,13 @@ export function applyHermesConfig(raw: string | undefined, config: QuickApplyTar
 export function applyCodexConfig(raw: string | undefined, config: QuickApplyTargetConfig): string {
   const currentModel = readTomlTopLevelString(raw, "model");
   const nextModel = config.model?.trim() || currentModel || "gpt-5.4";
+  const nextBaseUrl = normalizeProxyBaseUrl(config.proxyBaseUrl);
   let nextRaw = typeof raw === "string" && raw.trim() ? raw : "";
 
   nextRaw = upsertTomlTopLevelString(nextRaw, "model", nextModel);
   nextRaw = upsertTomlTopLevelString(nextRaw, "model_provider", "responses_proxy");
   nextRaw = upsertTomlSectionString(nextRaw, "model_providers.responses_proxy", "name", "responses-proxy");
-  nextRaw = upsertTomlSectionString(nextRaw, "model_providers.responses_proxy", "base_url", config.proxyBaseUrl);
+  nextRaw = upsertTomlSectionString(nextRaw, "model_providers.responses_proxy", "base_url", nextBaseUrl);
   nextRaw = upsertTomlSectionString(nextRaw, "model_providers.responses_proxy", "api_key", config.routeApiKey);
   nextRaw = upsertTomlSectionString(nextRaw, "model_providers.responses_proxy", "wire_api", "responses");
 
@@ -322,6 +376,20 @@ function readTomlSection(raw: string | undefined, sectionName: string): string |
 function readTomlString(rawSection: string, key: string): string | undefined {
   const match = rawSection.match(new RegExp(`^${escapeRegExp(key)}\\s*=\\s*\"([^\"]+)\"\\s*$`, "m"));
   return match?.[1];
+}
+
+function parseJsonObject(raw: string | undefined): Record<string, unknown> {
+  if (!raw?.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { ...parsed }
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function ensureTrailingNewline(raw: string): string {

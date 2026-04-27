@@ -20,9 +20,12 @@ import {
 } from "./chatgpt-provider-auth.js";
 import { ChatGptOAuthStore, redactAccount } from "./chatgpt-oauth-store.js";
 import {
+  applyCodexAuth,
   applyQuickConfig,
   generateRouteApiKey,
   listRecentConfigBackups,
+  normalizeProxyBaseUrl,
+  readCodexAuthStatus,
   readQuickApplyStatus,
   readQuickConfigFile,
   resolveQuickApplyPaths,
@@ -629,10 +632,11 @@ app.post("/api/client-configs/apply", async (request, reply) => {
     });
   }
 
-  const requestedBaseUrl =
+  const requestedBaseUrl = normalizeProxyBaseUrl(
     typeof body?.baseUrl === "string" && body.baseUrl.trim()
       ? body.baseUrl.trim()
-      : localProxyBaseUrl;
+      : localProxyBaseUrl,
+  );
   const requestedModel =
     typeof body?.model === "string" && body.model.trim()
       ? body.model.trim()
@@ -720,13 +724,25 @@ app.post("/api/client-configs/apply", async (request, reply) => {
     routeApiKey,
     model: requestedModel,
   });
-  writeQuickConfigFile(configPath, nextRaw, {
+  const writeResult = writeQuickConfigFile(configPath, nextRaw, {
     backupDir: quickApplyPaths.backupDir,
   });
+  let authWriteResult = { changed: false, backupCreated: false };
+  if (client === "codex") {
+    const currentAuthRaw = readQuickConfigFile(quickApplyPaths.codexAuthPath);
+    const nextAuthRaw = applyCodexAuth(currentAuthRaw, routeApiKey);
+    authWriteResult = writeQuickConfigFile(quickApplyPaths.codexAuthPath, nextAuthRaw, {
+      backupDir: quickApplyPaths.backupDir,
+    });
+  }
 
   return reply.send({
     ok: true,
     client,
+    changed: writeResult.changed || authWriteResult.changed,
+    backupCreated: writeResult.backupCreated || authWriteResult.backupCreated,
+    configChanged: writeResult.changed,
+    authChanged: authWriteResult.changed,
     proxyBaseUrl: requestedBaseUrl,
     status: buildQuickApplyClientStatus(client, requestedBaseUrl),
     clientRoutes: providerRepository.getClientRoutesForUi(),
@@ -2539,6 +2555,18 @@ function buildQuickApplyClientStatus(
     backups: listRecentConfigBackups(pathToRead, 1, {
       backupDir: quickApplyPaths.backupDir,
     }),
+    ...(client === "codex"
+      ? {
+          auth: readCodexAuthStatus(
+            readQuickConfigFile(quickApplyPaths.codexAuthPath),
+            routeApiKey,
+            quickApplyPaths.codexAuthPath,
+            {
+              backupDir: quickApplyPaths.backupDir,
+            },
+          ),
+        }
+      : {}),
     route: route
       ? {
           key: route.key,

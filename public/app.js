@@ -28,11 +28,11 @@ const screens = {
 };
 
 const usageLiveStatusEl = document.getElementById("usageLiveStatus");
+const usageRefreshBtnEl = document.getElementById("usageRefreshBtn");
 const usageProviderCountEl = document.getElementById("usageProviderCount");
 const usageOkCountEl = document.getElementById("usageOkCount");
 const usageUpdatedAtEl = document.getElementById("usageUpdatedAt");
 const usageLiveTableBodyEl = document.getElementById("usageLiveTableBody");
-const usageRawEl = document.getElementById("usageRaw");
 
 const cachePillEl = document.getElementById("cachePill");
 const cacheProviderSelectEl = document.getElementById("cacheProviderSelect");
@@ -109,6 +109,8 @@ const codexConfigBaseUrlEl = document.getElementById("codexConfigBaseUrl");
 const codexConfigProviderEl = document.getElementById("codexConfigProvider");
 const codexConfigApiKeySelectEl = document.getElementById("codexConfigApiKeySelect");
 const codexConfigModelSelectEl = document.getElementById("codexConfigModelSelect");
+const codexAuthPathEl = document.getElementById("codexAuthPath");
+const codexAuthStateEl = document.getElementById("codexAuthState");
 const codexConfigBackupsEl = document.getElementById("codexConfigBackups");
 const clientCrudNameEl = document.getElementById("clientCrudName");
 const clientCrudProviderSelectEl = document.getElementById("clientCrudProviderSelect");
@@ -205,6 +207,7 @@ let clientConfigModelCache = {};
 let clientConfigModelSelections = {};
 let usageLiveState = null;
 let usageLiveTimerId = 0;
+let usageLiveRefreshInFlight = false;
 let currentRoute = "";
 let selectedCacheProviderId = "";
 let providerSearchTerm = "";
@@ -283,13 +286,34 @@ function getEditableProviders() {
   return providerState.providers;
 }
 
-function getClientProviderOptions() {
+function getAllClientProviderOptions() {
   const options = Array.isArray(clientConfigState?.providerOptions)
     ? clientConfigState.providerOptions
     : Array.isArray(providerState.providerOptions)
       ? providerState.providerOptions
       : [];
   return options.length ? options : providerState.providers;
+}
+
+function isProviderAvailableForClientSetup(provider) {
+  if (!provider) {
+    return false;
+  }
+  if (provider.authMode === "chatgpt_oauth") {
+    const accounts = Array.isArray(chatgptOauthState.accounts) ? chatgptOauthState.accounts : [];
+    if (provider.chatgptAccountId) {
+      return accounts.some((account) => {
+        const accountId = account.accountId || account.id || "";
+        return accountId === provider.chatgptAccountId && account.disabled !== true;
+      });
+    }
+    return chatgptOauthState.enabled && accounts.some((account) => account.disabled !== true);
+  }
+  return provider.hasProviderApiKey === true;
+}
+
+function getClientProviderOptions() {
+  return getAllClientProviderOptions().filter((provider) => isProviderAvailableForClientSetup(provider));
 }
 
 function escapeHtml(value) {
@@ -1181,7 +1205,7 @@ function renderChatGptOauthPanel() {
   chatgptOauthAccountsEl.classList.remove("oauth-account-list-hidden");
 
   for (const account of chatgptOauthState.accounts) {
-    const provider = getClientProviderOptions().find(
+    const provider = getAllClientProviderOptions().find(
       (item) => item.authMode === "chatgpt_oauth" && !item.chatgptAccountId,
     );
     const row = document.createElement("article");
@@ -1491,6 +1515,11 @@ function getClientRouteByKey(client) {
   return (providerState.clientRoutes || []).find((route) => route.key === client) || null;
 }
 
+function normalizeConfigBaseUrl(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed ? trimmed.replace(/\/+$/, "") : "";
+}
+
 function renderClientModelSelect(selectEl, options = {}) {
   if (!selectEl) return;
   const models = Array.isArray(options.models) ? options.models.filter(Boolean) : [];
@@ -1532,14 +1561,18 @@ function renderClientModelSelect(selectEl, options = {}) {
 function updateQuickApplyActionState(client) {
   const entry = clientConfigState?.clients?.[client];
   const actionBtn = client === "hermes" ? applyHermesConfigBtnEl : applyCodexConfigBtnEl;
+  const apiKeySelectEl = client === "hermes" ? hermesConfigApiKeySelectEl : codexConfigApiKeySelectEl;
   const modelSelectEl = client === "hermes" ? hermesConfigModelSelectEl : codexConfigModelSelectEl;
   if (!actionBtn) return;
-  const hasClientApiKey = getAllClientApiKeyOptions().length > 0;
+  const hasAnyClientApiKey = getAllClientApiKeyOptions().length > 0;
+  const hasSelectedClientApiKey = Boolean(apiKeySelectEl?.value);
   const hasModel = Boolean(modelSelectEl?.value);
-  actionBtn.disabled = entry?.access?.canPatch === false || !hasClientApiKey || !hasModel;
+  actionBtn.disabled =
+    entry?.access?.canPatch === false || !hasAnyClientApiKey || !hasSelectedClientApiKey || !hasModel;
   actionBtn.title =
     entry?.access?.reason ||
-    (!hasClientApiKey ? "Add a client API key before applying." : "") ||
+    (!hasAnyClientApiKey ? "Add a client API key before applying." : "") ||
+    (!hasSelectedClientApiKey ? "Choose a client API key before applying." : "") ||
     (!hasModel ? "Choose an available model before applying." : "");
 }
 
@@ -1723,17 +1756,26 @@ function renderClientCrud() {
   if (clientCrudProviderSelectEl) {
     const currentValue = clientCrudProviderSelectEl.value;
     clientCrudProviderSelectEl.innerHTML = "";
-    for (const provider of providerOptions) {
+    if (!providerOptions.length) {
       const option = document.createElement("option");
-      option.value = provider.id;
-      option.textContent = provider.capabilities?.systemManaged
-        ? `${provider.name} (account pool)`
-        : `${provider.name} (${provider.id})`;
+      option.value = "";
+      option.textContent = "No available providers";
       clientCrudProviderSelectEl.appendChild(option);
+    } else {
+      for (const provider of providerOptions) {
+        const option = document.createElement("option");
+        option.value = provider.id;
+        option.textContent = provider.capabilities?.systemManaged
+          ? `${provider.name} (account pool)`
+          : `${provider.name} (${provider.id})`;
+        clientCrudProviderSelectEl.appendChild(option);
+      }
     }
     clientCrudProviderSelectEl.disabled = !providerOptions.length;
     if (currentValue && providerOptions.some((provider) => provider.id === currentValue)) {
       clientCrudProviderSelectEl.value = currentValue;
+    } else if (providerOptions.length) {
+      clientCrudProviderSelectEl.value = providerOptions[0].id;
     }
   }
 
@@ -1803,23 +1845,34 @@ function hydrateClientEditorFromRoute(query) {
 function hydrateClientCrudForm(routeKey) {
   const route = (providerState.clientRoutes || []).find((entry) => entry.key === routeKey);
   if (!clientCrudNameEl || !clientCrudProviderSelectEl || !clientCrudModelEl || !clientCrudApiKeysEl) return;
+  const availableProviders = getClientProviderOptions();
   if (!route) {
     setClientCrudFormMode("create");
     clientCrudNameEl.value = "";
     clientCrudNameEl.disabled = false;
-    clientCrudProviderSelectEl.value = getClientProviderOptions()[0]?.id || "";
+    clientCrudProviderSelectEl.value = availableProviders[0]?.id || "";
     clientCrudModelEl.value = "";
     clientCrudApiKeysEl.value = "";
     if (deleteClientCrudBtnEl) deleteClientCrudBtnEl.disabled = true;
+    if (!availableProviders.length) {
+      setClientCrudStatus("No available providers. Add provider credentials or enable an account pool first.", "bad");
+    }
     return;
   }
   setClientCrudFormMode("edit", route.key);
   clientCrudNameEl.value = route.key || "";
   clientCrudNameEl.disabled = true;
-  clientCrudProviderSelectEl.value = route.providerId || getClientProviderOptions()[0]?.id || "";
+  clientCrudProviderSelectEl.value = availableProviders.some((provider) => provider.id === route.providerId)
+    ? route.providerId || ""
+    : availableProviders[0]?.id || "";
   clientCrudModelEl.value = route.modelOverride || "";
   clientCrudApiKeysEl.value = Array.isArray(route.apiKeys) ? route.apiKeys.join("\n") : "";
   if (deleteClientCrudBtnEl) deleteClientCrudBtnEl.disabled = route.key === "default";
+  if (!availableProviders.length) {
+    setClientCrudStatus("No available providers. Add provider credentials or enable an account pool first.", "bad");
+  } else if (route.providerId && !availableProviders.some((provider) => provider.id === route.providerId)) {
+    setClientCrudStatus("Current provider is unavailable and has been hidden from the dropdown. Choose an available provider before saving.", "bad");
+  }
 }
 
 function setClientCrudFormMode(mode, client = "") {
@@ -1873,6 +1926,8 @@ function renderSingleClientConfigStatus(client, entry) {
   const apiKeySelectEl = isHermes ? hermesConfigApiKeySelectEl : codexConfigApiKeySelectEl;
   const modelSelectEl = isHermes ? hermesConfigModelSelectEl : codexConfigModelSelectEl;
   const backupsEl = isHermes ? hermesConfigBackupsEl : codexConfigBackupsEl;
+  const authPathEl = isHermes ? null : codexAuthPathEl;
+  const authStateEl = isHermes ? null : codexAuthStateEl;
   const preserveDraft = isInteractiveClientRoute();
   const currentBaseUrlValue = baseUrlInputEl?.value || "";
 
@@ -1882,6 +1937,8 @@ function renderSingleClientConfigStatus(client, entry) {
     setTextContent(pathEl, "-");
     setTextContent(baseUrlEl, "-");
     setTextContent(providerEl, "-");
+    setTextContent(authPathEl, "-");
+    setTextContent(authStateEl, "-");
     renderClientApiKeySelect(apiKeySelectEl, "");
     renderClientModelSelect(modelSelectEl, { emptyLabel: "Select a client API key" });
     if (baseUrlInputEl && (!preserveDraft || document.activeElement !== baseUrlInputEl)) {
@@ -1901,6 +1958,17 @@ function renderSingleClientConfigStatus(client, entry) {
   );
   setTextContent(pathEl, entry.path || "-");
   setTextContent(baseUrlEl, entry.detected?.baseUrl || clientConfigState?.proxyBaseUrl || "-");
+  setTextContent(authPathEl, entry.auth?.path || "-");
+  setTextContent(
+    authStateEl,
+    !entry.auth
+      ? "-"
+      : entry.auth.configured
+        ? "Patched"
+        : entry.auth.exists
+          ? "Needs patch"
+          : "Missing",
+  );
   renderClientApiKeySelect(apiKeySelectEl, entry.detected?.apiKey || entry.routeApiKey || "");
   loadClientConfigModelsForSelection(client, apiKeySelectEl?.value || "");
   if (baseUrlInputEl && (!preserveDraft || document.activeElement !== baseUrlInputEl)) {
@@ -1975,6 +2043,19 @@ function formatNumber(value) {
 
 function formatPercent(value) {
   return typeof value === "number" && Number.isFinite(value) ? `${value}%` : "-";
+}
+
+function formatUsageValue(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US") : "?";
+}
+
+function getUsageRatio(usage) {
+  const used = typeof usage?.used === "number" ? usage.used : NaN;
+  const limit = typeof usage?.limit === "number" ? usage.limit : NaN;
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) {
+    return null;
+  }
+  return Math.max(0, Math.min(used / limit, 1));
 }
 
 function renderUsageStats() {
@@ -2522,6 +2603,10 @@ async function saveClientCrud() {
     setClientCrudStatus("At least one client API key is required.", "bad");
     return;
   }
+  if (!providerId) {
+    setClientCrudStatus("Choose an available provider before saving.", "bad");
+    return;
+  }
   const exists = (providerState.clientRoutes || []).some((route) => route.key === client);
   const editingExisting = selectedClientCrudKey && selectedClientCrudKey !== "__new__" && exists;
   const targetClient = editingExisting ? selectedClientCrudKey : client;
@@ -2626,39 +2711,47 @@ function renderLiveUsage() {
       ? new Date(usageLiveState.timestamp).toLocaleTimeString()
       : "-";
   }
-  if (usageRawEl) {
-    usageRawEl.textContent = JSON.stringify(usageLiveState || {}, null, 2);
-  }
   if (!usageLiveTableBodyEl) return;
 
   usageLiveTableBodyEl.innerHTML = "";
   if (!providers.length) {
     const row = document.createElement("tr");
-    row.innerHTML = '<td colspan="5" class="mono">No provider usage data yet</td>';
+    row.innerHTML = '<td colspan="4" class="mono">No provider usage data yet</td>';
     usageLiveTableBodyEl.appendChild(row);
     return;
   }
 
   for (const entry of providers) {
     const usage = entry.usage || {};
-    const source =
-      entry.source === "openai_organization_usage"
-        ? "OpenAI Usage API"
-        : entry.configured
-          ? "Provider usage URL"
-          : "Not configured";
     const status = entry.ok
       ? usage.allowed === false
         ? "Blocked"
         : "Usable"
       : entry.error || "Unavailable";
+    const ratio = getUsageRatio(usage);
+    const percentLabel = ratio === null ? "Unknown" : `${Math.round(ratio * 100)}%`;
+    const sourceLabel =
+      entry.source === "openai_organization_usage"
+        ? "OpenAI Usage API"
+        : entry.configured
+          ? "Provider usage URL"
+          : "Not configured";
     const row = document.createElement("tr");
     row.innerHTML =
       `<td><strong>${escapeHtml(entry.providerName || entry.providerId || "-")}</strong><div class="meta mono">${escapeHtml(entry.providerId || "-")}</div></td>` +
-      `<td>${escapeHtml(source)}</td>` +
-      `<td><span class="provider-badge">${escapeHtml(status)}</span></td>` +
-      `<td>${usage.remaining ?? "unknown"}</td>` +
-      `<td>${usage.used !== undefined || usage.limit !== undefined ? `${usage.used ?? "?"} / ${usage.limit ?? "?"}` : "unknown"}</td>`;
+      `<td><span class="provider-badge">${escapeHtml(status)}</span><div class="meta">${escapeHtml(sourceLabel)}</div></td>` +
+      `<td>${usage.remaining !== undefined ? escapeHtml(String(usage.remaining)) : "unknown"}</td>` +
+      `<td>
+        <div class="usage-meter">
+          <div class="usage-meter-head">
+            <strong>${escapeHtml(`${formatUsageValue(usage.used)} / ${formatUsageValue(usage.limit)}`)}</strong>
+            <span>${escapeHtml(percentLabel)}</span>
+          </div>
+          <div class="usage-meter-track" aria-hidden="true">
+            <span class="usage-meter-fill" style="width:${ratio === null ? 0 : Math.round(ratio * 100)}%;"></span>
+          </div>
+        </div>
+      </td>`;
     usageLiveTableBodyEl.appendChild(row);
   }
 }
@@ -2667,8 +2760,16 @@ async function refreshLiveUsage() {
   if (currentRoute !== ROUTES.usage) {
     return;
   }
+  if (usageLiveRefreshInFlight) {
+    return;
+  }
+  usageLiveRefreshInFlight = true;
   if (usageLiveStatusEl) {
     usageLiveStatusEl.textContent = "Refreshing...";
+  }
+  if (usageRefreshBtnEl) {
+    usageRefreshBtnEl.disabled = true;
+    usageRefreshBtnEl.textContent = "Refreshing...";
   }
   try {
     const response = await fetch("/api/providers/live-usage", { cache: "no-store" });
@@ -2689,6 +2790,12 @@ async function refreshLiveUsage() {
     if (usageLiveStatusEl) {
       usageLiveStatusEl.textContent = "Error";
     }
+  } finally {
+    usageLiveRefreshInFlight = false;
+    if (usageRefreshBtnEl) {
+      usageRefreshBtnEl.disabled = false;
+      usageRefreshBtnEl.textContent = "Refresh now";
+    }
   }
   renderLiveUsage();
 }
@@ -2707,7 +2814,7 @@ function syncUsageLivePolling() {
   void refreshLiveUsage();
   usageLiveTimerId = window.setInterval(() => {
     void refreshLiveUsage();
-  }, 15000);
+  }, 60000);
 }
 
 async function refreshDashboard() {
@@ -2888,6 +2995,10 @@ deleteClientCrudBtnEl?.addEventListener("click", () => {
   void deleteClientCrud();
 });
 
+usageRefreshBtnEl?.addEventListener("click", () => {
+  void refreshLiveUsage();
+});
+
 async function applyClientQuickConfig(
   client,
   buttonEl,
@@ -2900,12 +3011,16 @@ async function applyClientQuickConfig(
   buttonEl.textContent = "Applying...";
   setQuickApplyStatus("");
   try {
+    const normalizedBaseUrl = normalizeConfigBaseUrl(baseUrlInputEl?.value);
+    if (baseUrlInputEl) {
+      baseUrlInputEl.value = normalizedBaseUrl;
+    }
     const response = await fetch("/api/client-configs/apply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         client,
-        baseUrl: baseUrlInputEl?.value.trim() || undefined,
+        baseUrl: normalizedBaseUrl || undefined,
         routeApiKey: apiKeySelectEl?.value || undefined,
         model: modelSelectEl?.value || undefined,
       }),
@@ -2931,10 +3046,18 @@ async function applyClientQuickConfig(
     renderClientConfigStatus();
     renderProviderCrudList();
     renderClientRoutePolicySection();
-    setQuickApplyStatus(
-      `${client} config applied. Backup created with a timestamp before patching.`,
-      "ok",
-    );
+    const successMessage = client === "codex"
+      ? data.changed
+        ? data.backupCreated
+          ? "codex config and auth patched. Timestamped backups were created before updating changed files."
+          : "codex config and auth patched."
+        : "codex config and auth are already up to date."
+      : data.changed
+        ? data.backupCreated
+          ? `${client} config patched. A timestamped backup was created before updating the file.`
+          : `${client} config created and patched.`
+        : `${client} config is already up to date.`;
+    setQuickApplyStatus(successMessage, "ok");
   } catch (error) {
     setQuickApplyStatus(error instanceof Error ? error.message : `Could not apply ${client} config`, "bad");
   } finally {
@@ -2957,8 +3080,13 @@ hermesConfigApiKeySelectEl?.addEventListener("change", () => {
   loadClientConfigModelsForSelection("hermes", hermesConfigApiKeySelectEl.value || "");
 });
 
+hermesBaseUrlInputEl?.addEventListener("blur", () => {
+  hermesBaseUrlInputEl.value = normalizeConfigBaseUrl(hermesBaseUrlInputEl.value);
+});
+
 hermesConfigModelSelectEl?.addEventListener("change", () => {
   clientConfigModelSelections.hermes = hermesConfigModelSelectEl.value || "";
+  updateQuickApplyActionState("hermes");
 });
 
 applyCodexConfigBtnEl?.addEventListener("click", async () => {
@@ -2975,8 +3103,13 @@ codexConfigApiKeySelectEl?.addEventListener("change", () => {
   loadClientConfigModelsForSelection("codex", codexConfigApiKeySelectEl.value || "");
 });
 
+codexBaseUrlInputEl?.addEventListener("blur", () => {
+  codexBaseUrlInputEl.value = normalizeConfigBaseUrl(codexBaseUrlInputEl.value);
+});
+
 codexConfigModelSelectEl?.addEventListener("change", () => {
   clientConfigModelSelections.codex = codexConfigModelSelectEl.value || "";
+  updateQuickApplyActionState("codex");
 });
 
 customProviderBtnEl.addEventListener("click", async () => {

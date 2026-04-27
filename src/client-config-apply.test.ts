@@ -4,8 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  applyCodexAuth,
   applyCodexConfig,
   applyHermesConfig,
+  normalizeProxyBaseUrl,
+  readCodexAuthStatus,
   readQuickApplyStatus,
   writeQuickConfigFile,
 } from "./client-config-apply.js";
@@ -70,6 +73,11 @@ test("applyCodexConfig uses the selected helper model when provided", () => {
   assert.match(next, /^model = "gpt-5\.4"$/m);
 });
 
+test("applyCodexAuth stores the selected route API key in auth.json", () => {
+  const next = applyCodexAuth('{\n  "OPENAI_API_KEY": "sk-old"\n}\n', "sk-codex-route-abc");
+  assert.equal(JSON.parse(next).OPENAI_API_KEY, "sk-codex-route-abc");
+});
+
 test("readQuickApplyStatus marks Hermes as configured only when route key and base URL match", () => {
   const raw = [
     "model:",
@@ -96,6 +104,17 @@ test("readQuickApplyStatus marks Hermes as configured only when route key and ba
   assert.equal(status.detected.apiKey, "sk-hermes-route-abc");
 });
 
+test("readCodexAuthStatus detects when auth.json already matches the route key", () => {
+  const status = readCodexAuthStatus(
+    '{\n  "OPENAI_API_KEY": "sk-codex-route-abc"\n}\n',
+    "sk-codex-route-abc",
+    "/tmp/auth.json",
+  );
+
+  assert.equal(status.configured, true);
+  assert.equal(status.detectedApiKey, "sk-codex-route-abc");
+});
+
 test("writeQuickConfigFile stores backup in configured backup directory", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-quick-apply-"));
   const configFile = path.join(tempDir, "config.toml");
@@ -112,4 +131,52 @@ test("writeQuickConfigFile stores backup in configured backup directory", () => 
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("writeQuickConfigFile skips backup when content is unchanged", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-quick-apply-"));
+  const configFile = path.join(tempDir, "config.toml");
+  const backupDir = path.join(tempDir, "backups");
+
+  try {
+    const firstWrite = writeQuickConfigFile(configFile, 'model = "gpt-5.4"\n');
+    const secondWrite = writeQuickConfigFile(configFile, 'model = "gpt-5.4"\n', { backupDir });
+
+    assert.equal(firstWrite.changed, true);
+    assert.equal(firstWrite.backupCreated, false);
+    assert.equal(secondWrite.changed, false);
+    assert.equal(secondWrite.backupCreated, false);
+    assert.equal(readdirSync(tempDir).includes("backups"), false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("readQuickApplyStatus treats normalized trailing slash base URLs as configured", () => {
+  const raw = [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: custom",
+    "  api_key: sk-hermes-route-abc",
+    "  base_url: http://127.0.0.1:8318/v1/",
+    "  api_mode: codex_responses",
+    "",
+  ].join("\n");
+
+  const status = readQuickApplyStatus(
+    raw,
+    {
+      client: "hermes",
+      proxyBaseUrl: "http://127.0.0.1:8318/v1",
+      routeApiKey: "sk-hermes-route-abc",
+    },
+    "/tmp/hermes.yaml",
+  );
+
+  assert.equal(status.configured, true);
+});
+
+test("normalizeProxyBaseUrl trims trailing slashes", () => {
+  assert.equal(normalizeProxyBaseUrl(" http://127.0.0.1:8318/v1/ "), "http://127.0.0.1:8318/v1");
+  assert.equal(normalizeProxyBaseUrl(""), "");
 });
