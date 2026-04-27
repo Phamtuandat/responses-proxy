@@ -8,6 +8,7 @@ import { readConfig } from "./config.js";
 import {
   buildBuiltinProviderPresets,
   normalizeClientRouteKey,
+  resolveClientTokenWindowStart,
   RuntimeProviderRepository,
   type RuntimeProviderPreset,
 } from "./runtime-provider-repository.js";
@@ -93,6 +94,424 @@ test("derives the primary built-in provider identity from the upstream host", ()
   const [provider] = buildBuiltinProviderPresets(config);
   assert.equal(provider?.id, "krouter");
   assert.equal(provider?.name, "krouter");
+});
+
+test("reads persisted client token limit configuration", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    const now = "2026-04-27T13:00:00.000Z";
+    const db = new BetterSqlite3(dbFile);
+    db.prepare(
+      `INSERT INTO client_token_limits (
+        client_route, enabled, token_limit, window_type, window_size_seconds, hard_block, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("codex", 1, 500000, "daily", null, 1, now, now);
+    db.close();
+
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [],
+    });
+
+    assert.deepEqual(repository.getClientTokenLimit("codex"), {
+      clientRoute: "codex",
+      enabled: true,
+      tokenLimit: 500000,
+      windowType: "daily",
+      windowSizeSeconds: undefined,
+      hardBlock: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("upserts and deletes client token limit configuration", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    const created = repository.setClientTokenLimit("codex", {
+      enabled: true,
+      tokenLimit: 1000,
+      windowType: "monthly",
+      hardBlock: true,
+    });
+    assert.equal(created.clientRoute, "codex");
+    assert.equal(created.windowType, "monthly");
+    assert.equal(created.tokenLimit, 1000);
+
+    const updated = repository.setClientTokenLimit("codex", {
+      enabled: false,
+      tokenLimit: 500,
+      windowType: "fixed",
+      windowSizeSeconds: 3600,
+      hardBlock: false,
+    });
+    assert.equal(updated.enabled, false);
+    assert.equal(updated.tokenLimit, 500);
+    assert.equal(updated.windowType, "fixed");
+    assert.equal(updated.windowSizeSeconds, 3600);
+    assert.equal(updated.hardBlock, false);
+
+    assert.equal(repository.deleteClientTokenLimit("codex"), true);
+    assert.equal(repository.getClientTokenLimit("codex"), undefined);
+    assert.equal(repository.deleteClientTokenLimit("codex"), false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reads empty client token usage as zeros for the current window", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    const now = new Date("2026-04-27T13:45:30.000Z");
+    assert.deepEqual(repository.getClientTokenUsage("codex", now), {
+      clientRoute: "codex",
+      windowStart: "2026-04-27T00:00:00.000Z",
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      updatedAt: "2026-04-27T00:00:00.000Z",
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("increments client token usage within the same window", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.setClientTokenLimit("codex", {
+      enabled: true,
+      tokenLimit: 5000,
+      windowType: "daily",
+      hardBlock: true,
+    });
+
+    const at = new Date("2026-04-27T13:45:30.000Z");
+    repository.incrementClientTokenUsage(
+      "codex",
+      { inputTokens: 100, outputTokens: 25, totalTokens: 125 },
+      at,
+    );
+    const snapshot = repository.incrementClientTokenUsage(
+      "codex",
+      { inputTokens: 50, outputTokens: 10, totalTokens: 60 },
+      at,
+    );
+
+    assert.deepEqual(snapshot, {
+      clientRoute: "codex",
+      windowStart: "2026-04-27T00:00:00.000Z",
+      inputTokens: 150,
+      outputTokens: 35,
+      totalTokens: 185,
+      updatedAt: "2026-04-27T13:45:30.000Z",
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("increments client token usage into a new window without changing the previous one", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.setClientTokenLimit("codex", {
+      enabled: true,
+      tokenLimit: 5000,
+      windowType: "fixed",
+      windowSizeSeconds: 3600,
+      hardBlock: true,
+    });
+
+    repository.incrementClientTokenUsage(
+      "codex",
+      { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+      new Date("2026-04-27T13:15:00.000Z"),
+    );
+    repository.incrementClientTokenUsage(
+      "codex",
+      { inputTokens: 200, outputTokens: 40, totalTokens: 240 },
+      new Date("2026-04-27T14:05:00.000Z"),
+    );
+
+    assert.deepEqual(repository.getClientTokenUsage("codex", new Date("2026-04-27T13:30:00.000Z")), {
+      clientRoute: "codex",
+      windowStart: "2026-04-27T13:00:00.000Z",
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      updatedAt: "2026-04-27T13:15:00.000Z",
+    });
+    assert.deepEqual(repository.getClientTokenUsage("codex", new Date("2026-04-27T14:10:00.000Z")), {
+      clientRoute: "codex",
+      windowStart: "2026-04-27T14:00:00.000Z",
+      inputTokens: 200,
+      outputTokens: 40,
+      totalTokens: 240,
+      updatedAt: "2026-04-27T14:05:00.000Z",
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reset clears the current client token usage window", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.setClientTokenLimit("codex", {
+      enabled: true,
+      tokenLimit: 5000,
+      windowType: "daily",
+      hardBlock: true,
+    });
+
+    repository.incrementClientTokenUsage(
+      "codex",
+      { inputTokens: 100, outputTokens: 25, totalTokens: 125 },
+      new Date("2026-04-27T13:00:00.000Z"),
+    );
+    const reset = repository.resetClientTokenUsage("codex", new Date("2026-04-27T14:00:00.000Z"));
+
+    assert.deepEqual(reset, {
+      clientRoute: "codex",
+      windowStart: "2026-04-27T00:00:00.000Z",
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      updatedAt: "2026-04-27T14:00:00.000Z",
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("lists client token limits with current usage snapshots", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.setClientRoute("codex", "provider-a");
+
+    const now = "2026-04-27T13:00:00.000Z";
+    const db = new BetterSqlite3(dbFile);
+    db.prepare(
+      `INSERT INTO client_token_limits (
+        client_route, enabled, token_limit, window_type, window_size_seconds, hard_block, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("codex", 1, 1000, "daily", null, 1, now, now);
+    db.prepare(
+      `INSERT INTO client_token_usage (
+        client_route, window_start, input_tokens, output_tokens, total_tokens, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run("codex", "2026-04-27T00:00:00.000Z", 100, 50, 150, now);
+    db.close();
+
+    const views = repository.listClientTokenLimitsForUi(new Date(now));
+    const codexView = views.find((entry) => entry.clientRoute === "codex");
+
+    assert.equal(codexView?.config?.tokenLimit, 1000);
+    assert.equal(codexView?.usage.totalTokens, 150);
+    assert.equal(codexView?.usage.windowStart, "2026-04-27T00:00:00.000Z");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveClientTokenWindowStart supports daily weekly monthly and fixed windows", () => {
+  const now = new Date("2026-04-29T13:45:30.000Z");
+
+  assert.equal(
+    resolveClientTokenWindowStart(now, { windowType: "daily" }),
+    "2026-04-29T00:00:00.000Z",
+  );
+  assert.equal(
+    resolveClientTokenWindowStart(now, { windowType: "weekly" }),
+    "2026-04-27T00:00:00.000Z",
+  );
+  assert.equal(
+    resolveClientTokenWindowStart(now, { windowType: "monthly" }),
+    "2026-04-01T00:00:00.000Z",
+  );
+  assert.equal(
+    resolveClientTokenWindowStart(now, { windowType: "fixed", windowSizeSeconds: 3600 }),
+    "2026-04-29T13:00:00.000Z",
+  );
 });
 
 test("backfills legacy request parameter policy rows in the database", async () => {
@@ -454,6 +873,161 @@ test("keeps explicit hermes and codex client routes distinct", () => {
   assert.equal(normalizeClientRouteKey("hermes"), "hermes");
   assert.equal(normalizeClientRouteKey("codex"), "codex");
   assert.equal(normalizeClientRouteKey("openclaw"), "openclaw");
+});
+
+test("prefers the codex route as fallback for default traffic", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-default",
+          name: "provider-default",
+          baseUrl: "https://default.example/v1",
+          responsesUrl: "https://default.example/v1/responses",
+          providerApiKeys: ["provider-default-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+        {
+          id: "provider-codex",
+          name: "provider-codex",
+          baseUrl: "https://codex.example/v1",
+          responsesUrl: "https://codex.example/v1/responses",
+          providerApiKeys: ["provider-codex-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.setClientRoute("default", "provider-default");
+    repository.setClientRoute("codex", "provider-codex");
+
+    assert.equal(repository.getFallbackProvider("default", "provider-default")?.id, "provider-codex");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("uses the default route as fallback for codex traffic", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-default",
+          name: "provider-default",
+          baseUrl: "https://default.example/v1",
+          responsesUrl: "https://default.example/v1/responses",
+          providerApiKeys: ["provider-default-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+        {
+          id: "provider-codex",
+          name: "provider-codex",
+          baseUrl: "https://codex.example/v1",
+          responsesUrl: "https://codex.example/v1/responses",
+          providerApiKeys: ["provider-codex-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.setClientRoute("default", "provider-default");
+    repository.setClientRoute("codex", "provider-codex");
+
+    assert.equal(repository.getFallbackProvider("codex", "provider-codex")?.id, "provider-default");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("does not fall back to an unbound provider outside configured client routes", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-default",
+          name: "provider-default",
+          baseUrl: "https://default.example/v1",
+          responsesUrl: "https://default.example/v1/responses",
+          providerApiKeys: ["provider-default-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+        {
+          id: "provider-extra",
+          name: "provider-extra",
+          baseUrl: "https://extra.example/v1",
+          responsesUrl: "https://extra.example/v1/responses",
+          providerApiKeys: ["provider-extra-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.setClientRoute("default", "provider-default");
+
+    assert.equal(repository.getFallbackProvider("default", "provider-default"), undefined);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("persists provider error policy rules in the database", async () => {

@@ -14,6 +14,8 @@ import {
   parseRtkLayerPolicyInput,
   type RtkLayerPolicy,
 } from "./rtk-layer.js";
+import { resolveClientTokenWindowStart } from "./client-token-limits.js";
+export { resolveClientTokenWindowStart } from "./client-token-limits.js";
 type Database = InstanceType<typeof BetterSqlite3>;
 
 export type RuntimeProviderCapabilities = {
@@ -69,6 +71,39 @@ export type ClientRouteMap = Record<string, string>;
 export type ClientModelOverrideMap = Record<string, string>;
 export type ClientRtkPolicyMap = Record<string, RtkLayerPolicy>;
 export type ClientRouteApiKeyMap = Record<string, string[]>;
+export type ClientTokenWindowType = "daily" | "weekly" | "monthly" | "fixed";
+
+export type ClientTokenLimitConfig = {
+  clientRoute: ClientRouteKey;
+  enabled: boolean;
+  tokenLimit: number;
+  windowType: ClientTokenWindowType;
+  windowSizeSeconds?: number;
+  hardBlock: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ClientTokenUsageSnapshot = {
+  clientRoute: ClientRouteKey;
+  windowStart: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  updatedAt: string;
+};
+
+export type ClientTokenUsageDelta = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
+
+export type ClientTokenLimitView = {
+  clientRoute: ClientRouteKey;
+  config: ClientTokenLimitConfig | null;
+  usage: ClientTokenUsageSnapshot;
+};
 
 type RuntimeProviderState = {
   providers: RuntimeProviderPreset[];
@@ -182,6 +217,26 @@ type AppStateRow = {
   value: string;
 };
 
+type ClientTokenLimitRow = {
+  client_route: string;
+  enabled: number | null;
+  token_limit: number | null;
+  window_type: string | null;
+  window_size_seconds: number | null;
+  hard_block: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type ClientTokenUsageRow = {
+  client_route: string;
+  window_start: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  updated_at: string | null;
+};
+
 export class RuntimeProviderError extends Error {
   constructor(
     readonly statusCode: number,
@@ -288,6 +343,212 @@ export class RuntimeProviderRepository {
 
   getClientRouteApiKeys(client: ClientRouteKey = "default"): string[] {
     return [...(this.clientRouteApiKeys[normalizeClientRouteKey(client)] ?? [])];
+  }
+
+  getClientTokenLimit(client: ClientRouteKey): ClientTokenLimitConfig | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT
+          client_route,
+          enabled,
+          token_limit,
+          window_type,
+          window_size_seconds,
+          hard_block,
+          created_at,
+          updated_at
+        FROM client_token_limits
+        WHERE client_route = ?`,
+      )
+      .get(normalizeClientRouteKey(client)) as ClientTokenLimitRow | undefined;
+    return row ? mapClientTokenLimitRow(row) : undefined;
+  }
+
+  getClientTokenUsage(client: ClientRouteKey, now: Date = new Date()): ClientTokenUsageSnapshot {
+    const clientRoute = normalizeClientRouteKey(client);
+    const config = this.getClientTokenLimit(clientRoute);
+    const windowStart = resolveClientTokenWindowStart(now, {
+      windowType: config?.windowType ?? "daily",
+      windowSizeSeconds: config?.windowSizeSeconds,
+    });
+    const row = this.db
+      .prepare(
+        `SELECT
+          client_route,
+          window_start,
+          input_tokens,
+          output_tokens,
+          total_tokens,
+          updated_at
+        FROM client_token_usage
+        WHERE client_route = ? AND window_start = ?`,
+      )
+      .get(clientRoute, windowStart) as ClientTokenUsageRow | undefined;
+    return (
+      row ? mapClientTokenUsageRow(row) : buildEmptyClientTokenUsageSnapshot(clientRoute, windowStart)
+    );
+  }
+
+  listClientTokenLimitsForUi(now: Date = new Date()): ClientTokenLimitView[] {
+    const rows = queryRows<ClientTokenLimitRow>(
+      this.db,
+      `SELECT
+        client_route,
+        enabled,
+        token_limit,
+        window_type,
+        window_size_seconds,
+        hard_block,
+        created_at,
+        updated_at
+      FROM client_token_limits
+      ORDER BY client_route`,
+    );
+    const configByClientRoute = new Map(rows.map((row) => {
+      const config = mapClientTokenLimitRow(row);
+      return [config.clientRoute, config] as const;
+    }));
+    return this.listClientRouteKeys().map((clientRoute) => {
+      const config = configByClientRoute.get(clientRoute) ?? null;
+      return {
+        clientRoute,
+        config,
+        usage: this.getClientTokenUsage(clientRoute, now),
+      };
+    });
+  }
+
+  setClientTokenLimit(
+    client: ClientRouteKey,
+    input: {
+      enabled: boolean;
+      tokenLimit: number;
+      windowType: ClientTokenWindowType;
+      windowSizeSeconds?: number;
+      hardBlock: boolean;
+    },
+  ): ClientTokenLimitConfig {
+    const clientRoute = normalizeClientRouteKey(client);
+    const tokenLimit = Math.max(1, Math.floor(input.tokenLimit));
+    const windowType = normalizeClientTokenWindowType(input.windowType);
+    const windowSizeSeconds =
+      windowType === "fixed" && input.windowSizeSeconds && input.windowSizeSeconds > 0
+        ? Math.floor(input.windowSizeSeconds)
+        : undefined;
+    const now = new Date().toISOString();
+    const existing = this.getClientTokenLimit(clientRoute);
+
+    this.db
+      .prepare(
+        `INSERT INTO client_token_limits (
+          client_route,
+          enabled,
+          token_limit,
+          window_type,
+          window_size_seconds,
+          hard_block,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(client_route) DO UPDATE SET
+          enabled = excluded.enabled,
+          token_limit = excluded.token_limit,
+          window_type = excluded.window_type,
+          window_size_seconds = excluded.window_size_seconds,
+          hard_block = excluded.hard_block,
+          updated_at = excluded.updated_at`,
+      )
+      .run(
+        clientRoute,
+        input.enabled ? 1 : 0,
+        tokenLimit,
+        windowType,
+        windowSizeSeconds ?? null,
+        input.hardBlock ? 1 : 0,
+        existing?.createdAt ?? now,
+        now,
+      );
+
+    return this.getClientTokenLimit(clientRoute)!;
+  }
+
+  deleteClientTokenLimit(client: ClientRouteKey): boolean {
+    const result = this.db
+      .prepare("DELETE FROM client_token_limits WHERE client_route = ?")
+      .run(normalizeClientRouteKey(client));
+    return result.changes > 0;
+  }
+
+  incrementClientTokenUsage(
+    client: ClientRouteKey,
+    usage: ClientTokenUsageDelta,
+    now: Date = new Date(),
+  ): ClientTokenUsageSnapshot {
+    const clientRoute = normalizeClientRouteKey(client);
+    const config = this.getClientTokenLimit(clientRoute);
+    const windowStart = resolveClientTokenWindowStart(now, {
+      windowType: config?.windowType ?? "daily",
+      windowSizeSeconds: config?.windowSizeSeconds,
+    });
+    const inputTokens = normalizeNonNegativeInteger(usage.inputTokens);
+    const outputTokens = normalizeNonNegativeInteger(usage.outputTokens);
+    const totalTokens = normalizeNonNegativeInteger(usage.totalTokens);
+    const updatedAt = now.toISOString();
+
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO client_token_usage (
+            client_route,
+            window_start,
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(client_route, window_start) DO UPDATE SET
+            input_tokens = input_tokens + excluded.input_tokens,
+            output_tokens = output_tokens + excluded.output_tokens,
+            total_tokens = total_tokens + excluded.total_tokens,
+            updated_at = excluded.updated_at`,
+        )
+        .run(clientRoute, windowStart, inputTokens, outputTokens, totalTokens, updatedAt);
+    })();
+
+    return this.getClientTokenUsage(clientRoute, now);
+  }
+
+  resetClientTokenUsage(client: ClientRouteKey, now: Date = new Date()): ClientTokenUsageSnapshot {
+    const clientRoute = normalizeClientRouteKey(client);
+    const config = this.getClientTokenLimit(clientRoute);
+    const windowStart = resolveClientTokenWindowStart(now, {
+      windowType: config?.windowType ?? "daily",
+      windowSizeSeconds: config?.windowSizeSeconds,
+    });
+    const updatedAt = now.toISOString();
+
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          `DELETE FROM client_token_usage
+          WHERE client_route = ? AND window_start = ?`,
+        )
+        .run(clientRoute, windowStart);
+      this.db
+        .prepare(
+          `INSERT INTO client_token_usage (
+            client_route,
+            window_start,
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            updated_at
+          ) VALUES (?, ?, 0, 0, 0, ?)`,
+        )
+        .run(clientRoute, windowStart, updatedAt);
+    })();
+
+    return this.getClientTokenUsage(clientRoute, now);
   }
 
   findClientRouteByApiKey(apiKey?: string): ClientRouteKey | undefined {
@@ -403,6 +664,22 @@ export class RuntimeProviderRepository {
     ];
   }
 
+  private buildFallbackRouteOrder(currentClient: ClientRouteKey): string[] {
+    const normalizedCurrent = normalizeClientRouteKey(currentClient);
+    const prioritizedRoutes =
+      normalizedCurrent === "codex"
+        ? ["default", "hermes", "codex"]
+        : normalizedCurrent === "default"
+          ? ["codex", "hermes", "default"]
+          : ["codex", "default", "hermes"];
+
+    return [
+      ...new Set(
+        [...prioritizedRoutes, ...this.listClientRouteKeys()].filter((routeKey) => routeKey !== normalizedCurrent),
+      ),
+    ];
+  }
+
   private resolveClientRouteApiKeys(value?: ClientRouteApiKeyMap): ClientRouteApiKeyMap {
     const next = sanitizeClientRouteApiKeys(value);
     delete next.default;
@@ -472,8 +749,22 @@ export class RuntimeProviderRepository {
     return this.getProviderForClient("default");
   }
 
-  getFallbackProvider(): RuntimeProviderPreset | undefined {
-    return this.providerPresets.find((provider) => provider.id !== this.activeProviderId);
+  getFallbackProvider(client: ClientRouteKey = "default", primaryProviderId?: string): RuntimeProviderPreset | undefined {
+    const preferredRouteOrder = this.buildFallbackRouteOrder(client);
+    const excludedProviderIds = new Set<string>();
+    const normalizedPrimaryProviderId = typeof primaryProviderId === "string" ? primaryProviderId.trim() : "";
+    if (normalizedPrimaryProviderId) {
+      excludedProviderIds.add(normalizedPrimaryProviderId);
+    }
+
+    for (const routeKey of preferredRouteOrder) {
+      const provider = this.getProviderForClient(routeKey);
+      if (!provider || excludedProviderIds.has(provider.id)) {
+        continue;
+      }
+      return provider;
+    }
+    return undefined;
   }
 
   selectProvider(id?: string): RuntimeProviderPreset {
@@ -822,7 +1113,7 @@ export class RuntimeProviderRepository {
 
 export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderPreset[] {
   const primaryIdentity = inferProviderIdentity(config.UPSTREAM_BASE_URL, "");
-  const presets: RuntimeProviderPreset[] = [
+  return ensureUniqueProviderIds([
     {
       id: primaryIdentity.id,
       name: primaryIdentity.name,
@@ -833,24 +1124,7 @@ export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderP
       clientApiKeys: [],
       capabilities: buildDefaultCapabilitiesFromConfig(config),
     },
-  ];
-
-  if (config.fallback) {
-    const fallbackBaseUrl = config.fallback.responsesUrl.replace(/\/responses$/, "");
-    const fallbackIdentity = inferProviderIdentity(fallbackBaseUrl, config.fallback.name);
-    presets.push({
-      id: fallbackIdentity.id,
-      name: fallbackIdentity.name,
-      baseUrl: fallbackBaseUrl,
-      responsesUrl: config.fallback.responsesUrl,
-      authMode: "api_key",
-      providerApiKeys: [],
-      clientApiKeys: [],
-      capabilities: buildDefaultCapabilitiesFromConfig(config),
-    });
-  }
-
-  return ensureUniqueProviderIds(presets);
+  ]);
 }
 
 function openDatabase(dbFile: string): Database {
@@ -920,6 +1194,27 @@ function ensureSchema(db: Database): void {
     CREATE TABLE IF NOT EXISTS app_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS client_token_limits (
+      client_route TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      token_limit INTEGER NOT NULL,
+      window_type TEXT NOT NULL,
+      window_size_seconds INTEGER,
+      hard_block INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS client_token_usage (
+      client_route TEXT NOT NULL,
+      window_start TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (client_route, window_start)
     );
   `);
   ensureProvidersColumn(db, "owned_by", "TEXT");
@@ -1059,6 +1354,67 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
 
 function queryRows<T extends Record<string, unknown>>(db: Database, sql: string): T[] {
   return db.prepare(sql).all() as T[];
+}
+
+function mapClientTokenLimitRow(row: ClientTokenLimitRow): ClientTokenLimitConfig {
+  return {
+    clientRoute: normalizeClientRouteKey(row.client_route),
+    enabled: row.enabled === 1,
+    tokenLimit: Math.max(0, Number(row.token_limit ?? 0)),
+    windowType: normalizeClientTokenWindowType(row.window_type),
+    windowSizeSeconds:
+      typeof row.window_size_seconds === "number" && row.window_size_seconds > 0
+        ? row.window_size_seconds
+        : undefined,
+    hardBlock: row.hard_block !== 0,
+    createdAt: row.created_at ?? new Date(0).toISOString(),
+    updatedAt: row.updated_at ?? row.created_at ?? new Date(0).toISOString(),
+  };
+}
+
+function mapClientTokenUsageRow(row: ClientTokenUsageRow): ClientTokenUsageSnapshot {
+  return {
+    clientRoute: normalizeClientRouteKey(row.client_route),
+    windowStart: row.window_start,
+    inputTokens: Math.max(0, Number(row.input_tokens ?? 0)),
+    outputTokens: Math.max(0, Number(row.output_tokens ?? 0)),
+    totalTokens: Math.max(0, Number(row.total_tokens ?? 0)),
+    updatedAt: row.updated_at ?? new Date(0).toISOString(),
+  };
+}
+
+function buildEmptyClientTokenUsageSnapshot(
+  clientRoute: ClientRouteKey,
+  windowStart: string,
+): ClientTokenUsageSnapshot {
+  return {
+    clientRoute,
+    windowStart,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    updatedAt: windowStart,
+  };
+}
+
+function normalizeClientTokenWindowType(value: unknown): ClientTokenWindowType {
+  switch (value) {
+    case "weekly":
+    case "monthly":
+    case "fixed":
+      return value;
+    case "daily":
+    default:
+      return "daily";
+  }
+}
+
+function normalizeNonNegativeInteger(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return Math.floor(parsed);
 }
 
 function ensureSharedApiKeyTable(db: Database, tableName: "provider_api_keys" | "client_api_keys"): void {
