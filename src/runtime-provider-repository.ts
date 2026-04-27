@@ -18,6 +18,9 @@ type Database = InstanceType<typeof BetterSqlite3>;
 
 export type RuntimeProviderCapabilities = {
   ownedBy?: string;
+  systemManaged?: boolean;
+  accountPlatform?: string;
+  accountPoolRequired?: boolean;
   usageCheckEnabled: boolean;
   usageCheckUrl?: string;
   stripMaxOutputTokens: boolean;
@@ -49,12 +52,16 @@ export type RuntimeProviderPreset = {
   name: string;
   baseUrl: string;
   responsesUrl: string;
+  authMode?: RuntimeProviderAuthMode;
+  chatgptAccountId?: string;
   providerApiKeys: string[];
   clientApiKeys: string[];
   capabilities: RuntimeProviderCapabilities;
   createdAt?: string;
   updatedAt?: string;
 };
+
+export type RuntimeProviderAuthMode = "api_key" | "chatgpt_oauth";
 
 export const BUILTIN_CLIENT_ROUTE_KEYS = ["default"] as const;
 export type ClientRouteKey = string;
@@ -74,12 +81,15 @@ type RuntimeProviderState = {
 };
 
 export type RuntimeProviderInput = {
+  id?: unknown;
   name?: unknown;
   baseUrl?: unknown;
   apiKey?: unknown;
   apiKeys?: unknown;
   providerApiKeys?: unknown;
   clientApiKeys?: unknown;
+  authMode?: unknown;
+  chatgptAccountId?: unknown;
   capabilities?: unknown;
 };
 
@@ -93,6 +103,8 @@ export type RuntimeProviderView = {
   hasClientApiKey: boolean;
   clientApiKeys: string[];
   clientApiKeysCount: number;
+  authMode: RuntimeProviderAuthMode;
+  chatgptAccountId: string | null;
   capabilities: RuntimeProviderCapabilities;
   createdAt: string | null;
   updatedAt: string | null;
@@ -108,8 +120,11 @@ export type ClientRouteView = {
 };
 
 type ValidatedProviderInput = {
+  id?: string;
   name: string;
   baseUrl: string;
+  authMode: RuntimeProviderAuthMode;
+  chatgptAccountId?: string;
   providerApiKeys: string[];
   clientApiKeys: string[];
   capabilities: RuntimeProviderCapabilities;
@@ -126,6 +141,8 @@ type ProviderRow = {
   name: string;
   base_url: string;
   responses_url: string;
+  auth_mode: string | null;
+  chatgpt_account_id: string | null;
   owned_by: string | null;
   usage_check_enabled: number | null;
   usage_check_url: string | null;
@@ -136,6 +153,9 @@ type ProviderRow = {
   model_aliases: string | null;
   rtk_policy: string | null;
   error_policy: string | null;
+  system_managed: number | null;
+  account_platform: string | null;
+  account_pool_required: number | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -358,6 +378,22 @@ export class RuntimeProviderRepository {
     return this.setClientRoute(routeKey, providerId || this.activeProviderId);
   }
 
+  deleteClientRoute(client: ClientRouteKey): void {
+    const routeKey = normalizeClientRouteKey(client);
+    if (routeKey === "default") {
+      throw new RuntimeProviderError(400, {
+        type: "validation_error",
+        code: "DEFAULT_CLIENT_ROUTE_REQUIRED",
+        message: "The default client route cannot be deleted",
+      });
+    }
+    delete this.clientRoutes[routeKey];
+    delete this.modelOverrides[routeKey];
+    delete this.clientRouteRtkPolicies[routeKey];
+    delete this.clientRouteApiKeys[routeKey];
+    this.persistRuntimeState();
+  }
+
   private listClientRouteKeys(): string[] {
     return [
       ...new Set([
@@ -381,7 +417,13 @@ export class RuntimeProviderRepository {
   }
 
   listProvidersForUi(): RuntimeProviderView[] {
-    return this.providerPresets.map((provider) => this.serializeProviderForUi(provider));
+    return this.providerPresets
+      .filter((provider) => !provider.capabilities.systemManaged)
+      .map((provider) => this.serializeProviderForUi(provider));
+  }
+
+  listProviderOptionsForClientSetup(): RuntimeProviderView[] {
+    return this.providerPresets.map((provider) => this.serializeProviderOptionForClientSetup(provider));
   }
 
   getProvider(id?: string): RuntimeProviderPreset | undefined {
@@ -412,6 +454,11 @@ export class RuntimeProviderRepository {
     const normalized = typeof apiKey === "string" ? apiKey.trim() : "";
     if (!normalized) {
       return [];
+    }
+    const clientRoute = this.findClientRouteByApiKey(normalized);
+    if (clientRoute) {
+      const provider = this.getProviderForClient(clientRoute);
+      return provider ? [provider] : [];
     }
     return this.providerPresets.filter(
       (provider) =>
@@ -463,10 +510,12 @@ export class RuntimeProviderRepository {
     this.ensureNoDuplicate(validated);
     const now = new Date().toISOString();
     const provider: RuntimeProviderPreset = {
-      id: `custom-${randomUUID().slice(0, 8)}`,
+      id: validated.id ?? `custom-${randomUUID().slice(0, 8)}`,
       name: validated.name,
       baseUrl: validated.baseUrl,
       responsesUrl: toResponsesUrl(validated.baseUrl),
+      authMode: validated.authMode,
+      chatgptAccountId: validated.chatgptAccountId,
       providerApiKeys: validated.providerApiKeys,
       clientApiKeys: validated.clientApiKeys,
       capabilities: validated.capabilities,
@@ -493,6 +542,8 @@ export class RuntimeProviderRepository {
       name: validated.name,
       baseUrl: validated.baseUrl,
       responsesUrl: toResponsesUrl(validated.baseUrl),
+      authMode: validated.authMode,
+      chatgptAccountId: validated.chatgptAccountId,
       providerApiKeys: validated.providerApiKeys,
       clientApiKeys: validated.clientApiKeys,
       capabilities: validated.capabilities,
@@ -557,12 +608,18 @@ export class RuntimeProviderRepository {
 
   private parseProviderInput(body: RuntimeProviderInput): ValidatedProviderInput {
     const name = typeof body.name === "string" ? body.name.trim() : "";
+    const id = typeof body.id === "string" && body.id.trim() ? body.id.trim() : undefined;
     const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
     const providerApiKeys = normalizeApiKeysInput(
       body.providerApiKeys,
       body.apiKeys,
       body.apiKey,
     );
+    const authMode = parseRuntimeProviderAuthMode(body.authMode);
+    const chatgptAccountId =
+      typeof body.chatgptAccountId === "string" && body.chatgptAccountId.trim()
+        ? body.chatgptAccountId.trim()
+        : undefined;
     const hasExplicitClientApiKeys = Object.prototype.hasOwnProperty.call(body, "clientApiKeys");
     const clientApiKeys = normalizeApiKeysInput(body.clientApiKeys);
 
@@ -587,7 +644,10 @@ export class RuntimeProviderRepository {
 
     return {
       name,
+      id,
       baseUrl: parsedBaseUrl.toString().replace(/\/+$/, ""),
+      authMode,
+      chatgptAccountId,
       providerApiKeys,
       clientApiKeys: hasExplicitClientApiKeys
         ? clientApiKeys
@@ -609,9 +669,20 @@ export class RuntimeProviderRepository {
       hasClientApiKey: provider.clientApiKeys.length > 0,
       clientApiKeys: [...provider.clientApiKeys],
       clientApiKeysCount: provider.clientApiKeys.length,
+      authMode: parseRuntimeProviderAuthMode(provider.authMode),
+      chatgptAccountId: provider.chatgptAccountId ?? null,
       capabilities: cloneCapabilities(provider.capabilities),
       createdAt: provider.createdAt ?? null,
       updatedAt: provider.updatedAt ?? null,
+    };
+  }
+
+  private serializeProviderOptionForClientSetup(provider: RuntimeProviderPreset): RuntimeProviderView {
+    const view = this.serializeProviderForUi(provider);
+    return {
+      ...view,
+      providerApiKeys: [],
+      clientApiKeys: [],
     };
   }
 
@@ -676,6 +747,8 @@ export class RuntimeProviderRepository {
           name,
           base_url,
           responses_url,
+          auth_mode,
+          chatgpt_account_id,
           owned_by,
           usage_check_enabled,
           usage_check_url,
@@ -686,10 +759,13 @@ export class RuntimeProviderRepository {
           model_aliases,
           rtk_policy,
           error_policy,
+          system_managed,
+          account_platform,
+          account_pool_required,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertApiKey = this.db.prepare(`
         INSERT INTO provider_api_keys (provider_id, api_key, position)
@@ -722,6 +798,8 @@ export class RuntimeProviderRepository {
           provider.name,
           provider.baseUrl,
           provider.responsesUrl,
+          parseRuntimeProviderAuthMode(provider.authMode),
+          provider.chatgptAccountId ?? null,
           provider.capabilities.ownedBy ?? null,
           provider.capabilities.usageCheckEnabled ? 1 : 0,
           provider.capabilities.usageCheckUrl ?? null,
@@ -734,6 +812,9 @@ export class RuntimeProviderRepository {
           JSON.stringify(provider.capabilities.modelAliases ?? {}),
           JSON.stringify(cloneRtkLayerPolicy(provider.capabilities.rtkPolicy) ?? {}),
           JSON.stringify(cloneProviderErrorPolicy(provider.capabilities.errorPolicy) ?? {}),
+          provider.capabilities.systemManaged ? 1 : 0,
+          provider.capabilities.accountPlatform ?? null,
+          provider.capabilities.accountPoolRequired ? 1 : 0,
           provider.createdAt ?? null,
           provider.updatedAt ?? null,
         );
@@ -779,6 +860,7 @@ export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderP
       name: primaryIdentity.name,
       baseUrl: config.UPSTREAM_BASE_URL,
       responsesUrl: config.upstreamResponsesUrl,
+      authMode: "api_key",
       providerApiKeys: normalizeApiKeys(config.UPSTREAM_API_KEY ? [config.UPSTREAM_API_KEY] : []),
       clientApiKeys: normalizeApiKeys(config.UPSTREAM_API_KEY ? [config.UPSTREAM_API_KEY] : []),
       capabilities: buildDefaultCapabilitiesFromConfig(config),
@@ -793,6 +875,7 @@ export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderP
       name: fallbackIdentity.name,
       baseUrl: fallbackBaseUrl,
       responsesUrl: config.fallback.responsesUrl,
+      authMode: "api_key",
       providerApiKeys: [],
       clientApiKeys: [],
       capabilities: buildDefaultCapabilitiesFromConfig(config),
@@ -815,6 +898,8 @@ function ensureSchema(db: Database): void {
       name TEXT NOT NULL,
       base_url TEXT NOT NULL,
       responses_url TEXT NOT NULL,
+      auth_mode TEXT NOT NULL DEFAULT 'api_key',
+      chatgpt_account_id TEXT,
       owned_by TEXT,
       usage_check_enabled INTEGER NOT NULL DEFAULT 0,
       usage_check_url TEXT,
@@ -825,6 +910,9 @@ function ensureSchema(db: Database): void {
       model_aliases TEXT NOT NULL DEFAULT '{}',
       rtk_policy TEXT NOT NULL DEFAULT '{}',
       error_policy TEXT NOT NULL DEFAULT '{}',
+      system_managed INTEGER NOT NULL DEFAULT 0,
+      account_platform TEXT,
+      account_pool_required INTEGER NOT NULL DEFAULT 0,
       created_at TEXT,
       updated_at TEXT
     );
@@ -867,6 +955,8 @@ function ensureSchema(db: Database): void {
     );
   `);
   ensureProvidersColumn(db, "owned_by", "TEXT");
+  ensureProvidersColumn(db, "auth_mode", "TEXT NOT NULL DEFAULT 'api_key'");
+  ensureProvidersColumn(db, "chatgpt_account_id", "TEXT");
   ensureProvidersColumn(db, "usage_check_enabled", "INTEGER NOT NULL DEFAULT 0");
   ensureProvidersColumn(db, "usage_check_url", "TEXT");
   ensureProvidersColumn(db, "strip_max_output_tokens", "INTEGER NOT NULL DEFAULT 0");
@@ -876,6 +966,9 @@ function ensureSchema(db: Database): void {
   ensureProvidersColumn(db, "model_aliases", "TEXT NOT NULL DEFAULT '{}'");
   ensureProvidersColumn(db, "rtk_policy", "TEXT NOT NULL DEFAULT '{}'");
   ensureProvidersColumn(db, "error_policy", "TEXT NOT NULL DEFAULT '{}'");
+  ensureProvidersColumn(db, "system_managed", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "account_platform", "TEXT");
+  ensureProvidersColumn(db, "account_pool_required", "INTEGER NOT NULL DEFAULT 0");
   ensureSharedApiKeyTable(db, "provider_api_keys");
   ensureSharedApiKeyTable(db, "client_api_keys");
 }
@@ -888,6 +981,8 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       name,
       base_url,
       responses_url,
+      auth_mode,
+      chatgpt_account_id,
       owned_by,
       usage_check_enabled,
       usage_check_url,
@@ -898,6 +993,9 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       model_aliases,
       rtk_policy,
       error_policy,
+      system_managed,
+      account_platform,
+      account_pool_required,
       created_at,
       updated_at
     FROM providers
@@ -947,6 +1045,8 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
     name: row.name,
     baseUrl: row.base_url,
     responsesUrl: row.responses_url,
+    authMode: parseRuntimeProviderAuthMode(row.auth_mode),
+    chatgptAccountId: row.chatgpt_account_id?.trim() ? row.chatgpt_account_id.trim() : undefined,
     providerApiKeys: providerApiKeysByProvider.get(row.id) ?? [],
     clientApiKeys:
       clientApiKeysByProvider.get(row.id) ??
@@ -954,6 +1054,9 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       [],
     capabilities: {
       ownedBy: row.owned_by ?? undefined,
+      systemManaged: row.system_managed === 1,
+      accountPlatform: row.account_platform?.trim() ? row.account_platform.trim() : undefined,
+      accountPoolRequired: row.account_pool_required === 1,
       usageCheckEnabled: row.usage_check_enabled === 1,
       usageCheckUrl: row.usage_check_url?.trim() ? row.usage_check_url.trim() : undefined,
       stripMaxOutputTokens: row.strip_max_output_tokens === 1,
@@ -1092,6 +1195,11 @@ function sanitizeCustomProvider(value: unknown): RuntimeProviderPreset | undefin
       ? record.updatedAt.trim()
       : undefined;
   const capabilities = parseProviderCapabilitiesInput(record.capabilities);
+  const authMode = parseRuntimeProviderAuthMode(record.authMode);
+  const chatgptAccountId =
+    typeof record.chatgptAccountId === "string" && record.chatgptAccountId.trim()
+      ? record.chatgptAccountId.trim()
+      : undefined;
 
   if (!id || !name || !baseUrl) {
     return undefined;
@@ -1105,6 +1213,8 @@ function sanitizeCustomProvider(value: unknown): RuntimeProviderPreset | undefin
       name,
       baseUrl: normalizedBaseUrl,
       responsesUrl: toResponsesUrl(normalizedBaseUrl),
+      authMode,
+      chatgptAccountId,
       providerApiKeys,
       clientApiKeys: clientApiKeys.length > 0 ? clientApiKeys : [...providerApiKeys],
       capabilities,
@@ -1220,6 +1330,10 @@ function normalizeApiKeys(values: unknown[]): string[] {
   ];
 }
 
+function parseRuntimeProviderAuthMode(value: unknown): RuntimeProviderAuthMode {
+  return value === "chatgpt_oauth" ? "chatgpt_oauth" : "api_key";
+}
+
 export function normalizeClientRouteKey(value: string): string {
   const normalized = value
     .trim()
@@ -1238,12 +1352,17 @@ export function normalizeClientRouteKey(value: string): string {
 }
 
 function migrateLegacyProvider(provider: RuntimeProviderPreset): RuntimeProviderPreset {
+  const migrated = {
+    ...provider,
+    authMode: parseRuntimeProviderAuthMode(provider.authMode),
+    chatgptAccountId: provider.chatgptAccountId?.trim() || undefined,
+  };
   if (provider.id !== "primary" && provider.id !== "fallback") {
-    return provider;
+    return migrated;
   }
   const identity = inferProviderIdentity(provider.baseUrl, provider.name);
   return {
-    ...provider,
+    ...migrated,
     id: identity.id,
     name: identity.name,
     capabilities: cloneCapabilities(provider.capabilities),
@@ -1343,6 +1462,8 @@ function shouldPersistSeededProviders(
       original.id !== provider.id ||
       original.name !== provider.name ||
       original.baseUrl !== provider.baseUrl ||
+      original.authMode !== provider.authMode ||
+      original.chatgptAccountId !== provider.chatgptAccountId ||
       JSON.stringify(original.providerApiKeys) !== JSON.stringify(provider.providerApiKeys) ||
       JSON.stringify(original.clientApiKeys) !== JSON.stringify(provider.clientApiKeys) ||
       JSON.stringify(cloneCapabilities(original.capabilities)) !==
@@ -1419,6 +1540,12 @@ function parseProviderCapabilitiesInput(value: unknown): RuntimeProviderCapabili
     typeof record.ownedBy === "string" && record.ownedBy.trim()
       ? record.ownedBy.trim()
       : undefined;
+  const accountPlatform =
+    typeof record.accountPlatform === "string" && record.accountPlatform.trim()
+      ? record.accountPlatform.trim()
+      : typeof record.account_platform === "string" && record.account_platform.trim()
+        ? record.account_platform.trim()
+        : undefined;
   const usageCheckUrl =
     typeof record.usageCheckUrl === "string" && record.usageCheckUrl.trim()
       ? normalizeOptionalUrl(record.usageCheckUrl)
@@ -1432,6 +1559,9 @@ function parseProviderCapabilitiesInput(value: unknown): RuntimeProviderCapabili
   });
   return {
     ownedBy,
+    systemManaged: coerceBoolean(record.systemManaged ?? record.system_managed),
+    accountPlatform,
+    accountPoolRequired: coerceBoolean(record.accountPoolRequired ?? record.account_pool_required),
     usageCheckEnabled: coerceBoolean(record.usageCheckEnabled),
     usageCheckUrl,
     stripMaxOutputTokens: maxOutputTokensRule.mode === "strip",
@@ -1450,6 +1580,9 @@ function cloneCapabilities(
   const maxOutputTokensRule = resolveMaxOutputTokensRule(capabilities);
   return {
     ownedBy: capabilities?.ownedBy,
+    systemManaged: capabilities?.systemManaged ?? false,
+    accountPlatform: capabilities?.accountPlatform,
+    accountPoolRequired: capabilities?.accountPoolRequired ?? false,
     usageCheckEnabled: capabilities?.usageCheckEnabled ?? false,
     usageCheckUrl: capabilities?.usageCheckUrl,
     stripMaxOutputTokens: maxOutputTokensRule.mode === "strip",

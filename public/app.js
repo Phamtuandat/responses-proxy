@@ -1,6 +1,10 @@
 const ROUTES = {
   dashboard: "dashboard",
   clients: "clients",
+  clientEdit: "client-edit",
+  configHelper: "config-helper",
+  oauth: "oauth",
+  authManagement: "auth-management",
   providers: "providers",
   rtk: "rtk",
   providerEdit: "provider-edit",
@@ -12,6 +16,10 @@ const routeLinks = [...document.querySelectorAll("[data-route-link]")];
 const screens = {
   [ROUTES.dashboard]: document.getElementById("screen-dashboard"),
   [ROUTES.clients]: document.getElementById("screen-clients"),
+  [ROUTES.clientEdit]: document.getElementById("screen-client-edit"),
+  [ROUTES.configHelper]: document.getElementById("screen-config-helper"),
+  [ROUTES.oauth]: document.getElementById("screen-oauth"),
+  [ROUTES.authManagement]: document.getElementById("screen-auth-management"),
   [ROUTES.providers]: document.getElementById("screen-providers"),
   [ROUTES.rtk]: document.getElementById("screen-rtk"),
   [ROUTES.providerEdit]: document.getElementById("screen-provider-edit"),
@@ -54,12 +62,23 @@ const providerTableBodyEl = document.getElementById("providerTableBody");
 const providerListEl = document.getElementById("providerList");
 const providerMetaEl = document.getElementById("providerMeta");
 const providerSearchInputEl = document.getElementById("providerSearchInput");
+const clientSearchInputEl = document.getElementById("clientSearchInput");
 const providerCrudTotalEl = document.getElementById("providerCrudTotal");
 const providerCrudWithProviderKeysEl = document.getElementById("providerCrudWithProviderKeys");
 const providerCrudWithClientKeysEl = document.getElementById("providerCrudWithClientKeys");
 const providerCrudUsageCheckEl = document.getElementById("providerCrudUsageCheck");
 const providerCrudRtkCustomEl = document.getElementById("providerCrudRtkCustom");
 const providerCrudRequestPolicyEl = document.getElementById("providerCrudRequestPolicy");
+const chatgptOauthEnabledBadgeEl = document.getElementById("chatgptOauthEnabledBadge");
+const chatgptOauthStartBtnEl = document.getElementById("chatgptOauthStartBtn");
+const chatgptOauthCopyLinkBtnEl = document.getElementById("chatgptOauthCopyLinkBtn");
+const chatgptOauthOpenLinkEl = document.getElementById("chatgptOauthOpenLink");
+const chatgptOauthRotationModeEl = document.getElementById("chatgptOauthRotationMode");
+const chatgptOauthAuthUrlEl = document.getElementById("chatgptOauthAuthUrl");
+const chatgptOauthCallbackInputEl = document.getElementById("chatgptOauthCallbackInput");
+const chatgptOauthSubmitBtnEl = document.getElementById("chatgptOauthSubmitBtn");
+const chatgptOauthStatusEl = document.getElementById("chatgptOauthStatus");
+const chatgptOauthAccountsEl = document.getElementById("chatgptOauthAccounts");
 
 const statProvidersEl = document.getElementById("statProviders");
 const statCurrentModelEl = document.getElementById("statCurrentModel");
@@ -76,26 +95,33 @@ const applyCodexConfigBtnEl = document.getElementById("applyCodexConfigBtn");
 const quickApplyStatusEl = document.getElementById("quickApplyStatus");
 const hermesConfigStateBadgeEl = document.getElementById("hermesConfigStateBadge");
 const hermesConfigRouteBadgeEl = document.getElementById("hermesConfigRouteBadge");
-const hermesProviderSelectEl = document.getElementById("hermesProviderSelect");
 const hermesBaseUrlInputEl = document.getElementById("hermesBaseUrlInput");
-const hermesModelSelectEl = document.getElementById("hermesModelSelect");
 const hermesConfigPathEl = document.getElementById("hermesConfigPath");
 const hermesConfigBaseUrlEl = document.getElementById("hermesConfigBaseUrl");
-const hermesConfigApiKeyEl = document.getElementById("hermesConfigApiKey");
+const hermesConfigProviderEl = document.getElementById("hermesConfigProvider");
+const hermesConfigApiKeySelectEl = document.getElementById("hermesConfigApiKeySelect");
 const hermesConfigModelEl = document.getElementById("hermesConfigModel");
-const hermesQuickApplyModelEl = document.getElementById("hermesQuickApplyModel");
 const hermesConfigBackupsEl = document.getElementById("hermesConfigBackups");
 const codexConfigStateBadgeEl = document.getElementById("codexConfigStateBadge");
 const codexConfigRouteBadgeEl = document.getElementById("codexConfigRouteBadge");
-const codexProviderSelectEl = document.getElementById("codexProviderSelect");
 const codexBaseUrlInputEl = document.getElementById("codexBaseUrlInput");
-const codexModelSelectEl = document.getElementById("codexModelSelect");
 const codexConfigPathEl = document.getElementById("codexConfigPath");
 const codexConfigBaseUrlEl = document.getElementById("codexConfigBaseUrl");
-const codexConfigApiKeyEl = document.getElementById("codexConfigApiKey");
+const codexConfigProviderEl = document.getElementById("codexConfigProvider");
+const codexConfigApiKeySelectEl = document.getElementById("codexConfigApiKeySelect");
 const codexConfigModelEl = document.getElementById("codexConfigModel");
-const codexQuickApplyModelEl = document.getElementById("codexQuickApplyModel");
 const codexConfigBackupsEl = document.getElementById("codexConfigBackups");
+const clientCrudNameEl = document.getElementById("clientCrudName");
+const clientCrudProviderSelectEl = document.getElementById("clientCrudProviderSelect");
+const clientCrudModelEl = document.getElementById("clientCrudModel");
+const clientCrudApiKeysEl = document.getElementById("clientCrudApiKeys");
+const saveClientCrudBtnEl = document.getElementById("saveClientCrudBtn");
+const clearClientCrudBtnEl = document.getElementById("clearClientCrudBtn");
+const deleteClientCrudBtnEl = document.getElementById("deleteClientCrudBtn");
+const clientCrudStatusEl = document.getElementById("clientCrudStatus");
+const clientCrudListEl = document.getElementById("clientCrudList");
+const clientCrudModeBadgeEl = document.getElementById("clientCrudModeBadge");
+const clientCrudFormTitleEl = document.getElementById("clientCrudFormTitle");
 const statsTodayRequestsEl = document.getElementById("statsTodayRequests");
 const statsTodayHitRateEl = document.getElementById("statsTodayHitRate");
 const statsTodayTelemetryEl = document.getElementById("statsTodayTelemetry");
@@ -175,24 +201,26 @@ const addProviderErrorRuleBtnEl = document.getElementById("addProviderErrorRuleB
 const customProviderBtnEl = document.getElementById("customProviderBtn");
 const providerDeleteBtnEl = document.getElementById("providerDeleteBtn");
 
-let providerState = { activeProviderId: "", providers: [], clientRoutes: [] };
+let providerState = { activeProviderId: "", providers: [], providerOptions: [], clientRoutes: [] };
+let chatgptOauthState = { enabled: false, accounts: [], authUrl: "", rotationMode: "round_robin" };
 let latestCacheSnapshot = null;
 let usageStatsState = null;
 let clientConfigState = null;
 let currentRoute = "";
-let clientModelCatalogState = { hermes: { providerId: "", models: [] }, codex: { providerId: "", models: [] } };
-let clientProviderAvailabilityState = { byId: {}, loading: false };
 let selectedCacheProviderId = "";
 let providerSearchTerm = "";
+let clientSearchTerm = "";
 let providerEditorDirty = false;
+let chatgptOauthRotationSaveId = 0;
+let selectedClientCrudKey = "";
 const TRI_STATE_INHERIT = "inherit";
 
 function isInteractiveClientRoute() {
-  return currentRoute === ROUTES.clients;
+  return currentRoute === ROUTES.configHelper;
 }
 
 function shouldSkipBackgroundRefresh() {
-  return currentRoute === ROUTES.clients || currentRoute === ROUTES.providerEdit;
+  return currentRoute === ROUTES.configHelper || currentRoute === ROUTES.providerEdit;
 }
 
 function normalizeRoute() {
@@ -209,10 +237,19 @@ function setRoute(routeState) {
   }
   for (const link of routeLinks) {
     const target = (link.getAttribute("href") || "").replace(/^#\/?/, "");
-    link.classList.toggle("active", target === routeState.name);
+    const activeTarget =
+      routeState.name === ROUTES.clientEdit
+        ? ROUTES.clients
+        : routeState.name === ROUTES.providerEdit
+          ? ROUTES.providers
+          : routeState.name;
+    link.classList.toggle("active", target === activeTarget);
   }
   if (routeState.name === ROUTES.providerEdit) {
     hydrateProviderEditorFromRoute(routeState.query);
+  }
+  if (routeState.name === ROUTES.clientEdit) {
+    hydrateClientEditorFromRoute(routeState.query);
   }
   refreshActiveRoute();
 }
@@ -245,6 +282,15 @@ function isEditingProviderForm() {
 
 function getEditableProviders() {
   return providerState.providers;
+}
+
+function getClientProviderOptions() {
+  const options = Array.isArray(clientConfigState?.providerOptions)
+    ? clientConfigState.providerOptions
+    : Array.isArray(providerState.providerOptions)
+      ? providerState.providerOptions
+      : [];
+  return options.length ? options : providerState.providers;
 }
 
 function escapeHtml(value) {
@@ -391,6 +437,12 @@ function setProviderEditorStatus(message = "", tone = "") {
   providerEditorStatusEl.hidden = false;
   providerEditorStatusEl.className = tone ? `status ${tone}` : "status";
   providerEditorStatusEl.textContent = message;
+}
+
+function setProviderMeta(message = "") {
+  if (!providerMetaEl) return;
+  providerMetaEl.textContent = message;
+  providerMetaEl.hidden = !message;
 }
 
 function renderProviderEditorSummary() {
@@ -979,6 +1031,14 @@ function goToProviderEditor(providerId) {
   window.location.hash = "#/provider-edit";
 }
 
+function goToClientEditor(client) {
+  if (client) {
+    window.location.hash = `#/client-edit?client=${encodeURIComponent(client)}`;
+    return;
+  }
+  window.location.hash = "#/client-edit";
+}
+
 function hydrateProviderEditorFromRoute(query) {
   if (isEditingProviderForm() || providerEditorDirty) return;
   const providerId = query.get("id") || "";
@@ -1130,6 +1190,84 @@ function renderProviderCrudSummary() {
   );
 }
 
+function renderChatGptOauthPanel() {
+  if (!chatgptOauthEnabledBadgeEl || !chatgptOauthAccountsEl) {
+    return;
+  }
+
+  chatgptOauthEnabledBadgeEl.textContent = chatgptOauthState.enabled ? "Enabled" : "Disabled";
+  chatgptOauthEnabledBadgeEl.className = `provider-badge ${
+    chatgptOauthState.enabled ? "provider-badge-ok" : "provider-badge-warn"
+  }`;
+  if (chatgptOauthStartBtnEl) {
+    chatgptOauthStartBtnEl.disabled = !chatgptOauthState.enabled;
+  }
+  if (chatgptOauthSubmitBtnEl) {
+    chatgptOauthSubmitBtnEl.disabled = !chatgptOauthState.enabled;
+  }
+  if (chatgptOauthRotationModeEl) {
+    chatgptOauthRotationModeEl.disabled = !chatgptOauthState.enabled;
+    chatgptOauthRotationModeEl.value = chatgptOauthState.rotationMode || "round_robin";
+  }
+  if (chatgptOauthAuthUrlEl && chatgptOauthAuthUrlEl.value !== chatgptOauthState.authUrl) {
+    chatgptOauthAuthUrlEl.value = chatgptOauthState.authUrl || "";
+  }
+  if (chatgptOauthCopyLinkBtnEl) {
+    chatgptOauthCopyLinkBtnEl.disabled = !chatgptOauthState.authUrl;
+  }
+  if (chatgptOauthOpenLinkEl) {
+    chatgptOauthOpenLinkEl.href = chatgptOauthState.authUrl || "#";
+    const linkDisabled = !chatgptOauthState.authUrl;
+    chatgptOauthOpenLinkEl.classList.toggle("disabled-link", linkDisabled);
+    chatgptOauthOpenLinkEl.setAttribute("aria-disabled", linkDisabled ? "true" : "false");
+    if (linkDisabled) {
+      chatgptOauthOpenLinkEl.setAttribute("tabindex", "-1");
+    } else {
+      chatgptOauthOpenLinkEl.removeAttribute("tabindex");
+    }
+  }
+
+  chatgptOauthAccountsEl.innerHTML = "";
+  if (!chatgptOauthState.accounts.length) {
+    chatgptOauthAccountsEl.classList.add("oauth-account-list-hidden");
+    return;
+  }
+  chatgptOauthAccountsEl.classList.remove("oauth-account-list-hidden");
+
+  for (const account of chatgptOauthState.accounts) {
+    const provider = getClientProviderOptions().find(
+      (item) => item.authMode === "chatgpt_oauth" && !item.chatgptAccountId,
+    );
+    const row = document.createElement("article");
+    row.className = "oauth-account-row";
+    row.innerHTML =
+      '<div>' +
+      '<div class="oauth-account-title">' +
+      `<strong>${escapeHtml(account.email || account.accountId || account.id)}</strong>` +
+      `<span class="pill">${escapeHtml(provider ? `${provider.id} pool` : "shared provider pending")}</span>` +
+      `<span class="pill">${escapeHtml(account.disabled ? "Disabled" : "Enabled")}</span>` +
+      "</div>" +
+      `<div class="oauth-account-meta">Account: ${escapeHtml(account.accountId || account.id)}</div>` +
+      `<div class="oauth-account-meta">Expires: ${escapeHtml(formatRelativeTimestamp(account.expiresAt))}</div>` +
+      "</div>" +
+      '<div class="oauth-account-actions">' +
+      '<button type="button" class="table-button oauth-refresh-button">Refresh</button>' +
+      `<button type="button" class="table-button table-button-utility oauth-toggle-button">${escapeHtml(account.disabled ? "Enable" : "Disable")}</button>` +
+      '<button type="button" class="table-button button-danger-soft oauth-delete-button">Delete</button>' +
+      "</div>";
+    row.querySelector(".oauth-refresh-button")?.addEventListener("click", () =>
+      refreshChatGptOauthAccount(account.id),
+    );
+    row.querySelector(".oauth-delete-button")?.addEventListener("click", () =>
+      deleteChatGptOauthAccount(account.id, account.email || account.accountId || account.id),
+    );
+    row.querySelector(".oauth-toggle-button")?.addEventListener("click", () =>
+      toggleChatGptOauthAccount(account.id, account.disabled),
+    );
+    chatgptOauthAccountsEl.appendChild(row);
+  }
+}
+
 function renderProviderCrudList() {
   if (!providerListEl) {
     return;
@@ -1199,7 +1337,7 @@ function renderProviderCrudList() {
       }
       deleteBtn.disabled = true;
       deleteBtn.textContent = "Deleting...";
-      providerMetaEl.textContent = `Deleting provider ${provider.id}...`;
+      setProviderMeta(`Deleting provider ${provider.id}...`);
       try {
         const response = await fetch(`/api/providers/${encodeURIComponent(provider.id)}`, {
           method: "DELETE",
@@ -1209,10 +1347,9 @@ function renderProviderCrudList() {
           throw new Error(data.error?.message || "Delete failed");
         }
         await refreshProviders();
-        providerMetaEl.textContent = `Deleted provider ${provider.id}`;
+        setProviderMeta(`Deleted provider ${provider.id}`);
       } catch (error) {
-        providerMetaEl.textContent =
-          error instanceof Error ? error.message : "Could not delete provider";
+        setProviderMeta(error instanceof Error ? error.message : "Could not delete provider");
       } finally {
         deleteBtn.disabled = false;
         deleteBtn.textContent = "Delete";
@@ -1223,7 +1360,9 @@ function renderProviderCrudList() {
 }
 
 function renderClientRoutePolicySection() {
-  const routes = Array.isArray(providerState.clientRoutes) ? providerState.clientRoutes : [];
+  const routes = Array.isArray(providerState.clientRoutes)
+    ? providerState.clientRoutes.filter((route) => route.key !== "default")
+    : [];
   if (rtkClientRouteSelectEl) {
     const previous = rtkClientRouteSelectEl.value;
     rtkClientRouteSelectEl.innerHTML = "";
@@ -1243,7 +1382,7 @@ function renderClientRoutePolicySection() {
     clientRouteTableBodyEl.innerHTML = "";
     if (!routes.length) {
       const row = document.createElement("tr");
-      row.innerHTML = '<td colspan="4" class="mono">No client routes</td>';
+      row.innerHTML = '<td colspan="4" class="mono">No clients</td>';
       clientRouteTableBodyEl.appendChild(row);
     } else {
       for (const route of routes) {
@@ -1354,6 +1493,49 @@ function maskApiKey(value) {
   return `${value.slice(0, 6)}...${value.slice(-6)}`;
 }
 
+function getAllClientApiKeyOptions() {
+  const routes = Array.isArray(providerState.clientRoutes)
+    ? providerState.clientRoutes.filter((route) => route.key !== "default")
+    : [];
+  return routes.flatMap((route) => {
+    const keys = Array.isArray(route.apiKeys) ? route.apiKeys.filter(Boolean) : [];
+    return keys.map((apiKey, index) => ({
+      apiKey,
+      client: route.key,
+      label: keys.length > 1 ? `${route.key} (${index + 1})` : route.key,
+    }));
+  });
+}
+
+function renderClientApiKeySelect(selectEl, preferredApiKey) {
+  if (!selectEl) return;
+  const options = getAllClientApiKeyOptions();
+  const keys = options.map((option) => option.apiKey);
+  const currentValue = selectEl.value || "";
+  const selectedValue =
+    (currentValue && keys.includes(currentValue) ? currentValue : "") ||
+    (preferredApiKey && keys.includes(preferredApiKey) ? preferredApiKey : "") ||
+    keys[0] ||
+    "";
+  selectEl.innerHTML = "";
+  if (!keys.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No client API keys";
+    selectEl.appendChild(option);
+    selectEl.disabled = true;
+    return;
+  }
+  for (const optionEntry of options) {
+    const option = document.createElement("option");
+    option.value = optionEntry.apiKey;
+    option.textContent = optionEntry.label;
+    selectEl.appendChild(option);
+  }
+  selectEl.disabled = false;
+  selectEl.value = selectedValue;
+}
+
 function setTextContent(element, value) {
   if (!element) return;
   element.textContent = value;
@@ -1372,6 +1554,19 @@ function setQuickApplyStatus(message, tone = "") {
   quickApplyStatusEl.textContent = message;
 }
 
+function setClientCrudStatus(message, tone = "") {
+  if (!clientCrudStatusEl) return;
+  if (!message) {
+    clientCrudStatusEl.hidden = true;
+    clientCrudStatusEl.className = "compact-status";
+    clientCrudStatusEl.textContent = "";
+    return;
+  }
+  clientCrudStatusEl.hidden = false;
+  clientCrudStatusEl.className = `compact-status${tone ? ` ${tone}` : ""}`;
+  clientCrudStatusEl.textContent = message;
+}
+
 function updateQuickApplyBadge(element, label, tone) {
   if (!element) return;
   element.textContent = label;
@@ -1382,48 +1577,6 @@ function syncQuickApplyModelInput(inputEl, preferredValue) {
   if (!inputEl) return;
   if (document.activeElement === inputEl) return;
   inputEl.value = preferredValue || "";
-}
-
-function renderClientModelSelect(selectEl, inputEl, models, currentModel) {
-  if (!selectEl) return;
-  const normalizedModels = Array.isArray(models) ? models : [];
-  const selectedModel = currentModel || "";
-  const hasSelected = selectedModel && normalizedModels.includes(selectedModel);
-
-  selectEl.innerHTML = "";
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = normalizedModels.length ? "Provider default" : "No models loaded";
-  selectEl.appendChild(defaultOption);
-
-  for (const model of normalizedModels) {
-    const option = document.createElement("option");
-    option.value = model;
-    option.textContent = model;
-    selectEl.appendChild(option);
-  }
-
-  const customOption = document.createElement("option");
-  customOption.value = "__custom__";
-  customOption.textContent = "Custom model...";
-  selectEl.appendChild(customOption);
-
-  if (hasSelected) {
-    selectEl.value = selectedModel;
-  } else if (selectedModel) {
-    selectEl.value = "__custom__";
-  } else {
-    selectEl.value = "";
-  }
-
-  if (inputEl) {
-    inputEl.hidden = selectEl.value !== "__custom__";
-    if (selectEl.value === "__custom__") {
-      syncQuickApplyModelInput(inputEl, selectedModel);
-    } else if (document.activeElement !== inputEl) {
-      inputEl.value = "";
-    }
-  }
 }
 
 function formatRelativeTimestamp(value) {
@@ -1456,29 +1609,164 @@ function renderQuickApplyBackups(container, backups) {
 
 function renderClientConfigStatus() {
   const clients = clientConfigState?.clients || {};
+  renderClientCrud();
   renderSingleClientConfigStatus("hermes", clients.hermes);
   renderSingleClientConfigStatus("codex", clients.codex);
 }
 
-function getClientAvailableProviders(entry) {
-  const providers = Array.isArray(providerState.providers) ? providerState.providers : [];
-  const currentProviderId = entry?.route?.providerId || "";
-  if (!providers.length) {
-    return [];
+function renderClientCrud() {
+  const allRoutes = Array.isArray(providerState.clientRoutes)
+    ? providerState.clientRoutes.filter((route) => route.key !== "default")
+    : [];
+  const search = clientSearchTerm.trim().toLowerCase();
+  const routes = search
+    ? allRoutes.filter((route) => {
+      const haystack = [
+        route.key,
+        route.providerName,
+        route.providerId,
+        route.modelOverride || "Provider default",
+        formatClientApiKeyCount(route.apiKeys?.length || 0),
+      ].join(" ").toLowerCase();
+      return haystack.includes(search);
+    })
+    : allRoutes;
+  const providerOptions = getClientProviderOptions();
+  if (
+    selectedClientCrudKey &&
+    selectedClientCrudKey !== "__new__" &&
+    !allRoutes.some((route) => route.key === selectedClientCrudKey)
+  ) {
+    selectedClientCrudKey = "";
   }
-  if (clientProviderAvailabilityState.loading && !Object.keys(clientProviderAvailabilityState.byId || {}).length) {
-    return providers;
+  if (!selectedClientCrudKey && allRoutes.length) {
+    selectedClientCrudKey = allRoutes[0].key;
   }
-  return providers.filter((provider) => {
-    const availability = clientProviderAvailabilityState.byId?.[provider.id];
-    if (provider.id === currentProviderId) {
-      return true;
+  if (clientCrudProviderSelectEl) {
+    const currentValue = clientCrudProviderSelectEl.value;
+    clientCrudProviderSelectEl.innerHTML = "";
+    for (const provider of providerOptions) {
+      const option = document.createElement("option");
+      option.value = provider.id;
+      option.textContent = provider.capabilities?.systemManaged
+        ? `${provider.name} (account pool)`
+        : `${provider.name} (${provider.id})`;
+      clientCrudProviderSelectEl.appendChild(option);
     }
-    if (!availability) {
-      return true;
+    clientCrudProviderSelectEl.disabled = !providerOptions.length;
+    if (currentValue && providerOptions.some((provider) => provider.id === currentValue)) {
+      clientCrudProviderSelectEl.value = currentValue;
     }
-    return availability?.available === true;
-  });
+  }
+
+  if (clientCrudListEl) {
+    clientCrudListEl.innerHTML = "";
+    if (!routes.length) {
+      const empty = document.createElement("div");
+      empty.className = "meta";
+      empty.textContent = search ? "No clients match this search." : "No clients yet.";
+      clientCrudListEl.appendChild(empty);
+    }
+    for (const route of routes) {
+      const item = document.createElement("article");
+      item.className = `client-route-item${route.key === selectedClientCrudKey ? " active" : ""}`;
+      const title = document.createElement("div");
+      title.className = "client-route-title";
+      title.innerHTML =
+        `<strong>${escapeHtml(route.key)}</strong>` +
+        `<span class="provider-badge">${escapeHtml(formatClientApiKeyCount(route.apiKeys?.length || 0))}</span>`;
+      const meta = document.createElement("div");
+      meta.className = "client-route-meta";
+      meta.textContent =
+        `${route.providerName || route.providerId || "-"} · ${route.modelOverride || "Provider default"}`;
+      const actions = document.createElement("div");
+      actions.className = "client-route-actions";
+      const editButton = document.createElement("button");
+      editButton.type = "button";
+      editButton.className = "button-link-muted";
+      editButton.textContent = "Edit";
+      editButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        goToClientEditor(route.key);
+      });
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "table-button-danger-soft";
+      deleteButton.textContent = "Delete";
+      deleteButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void deleteClientCrud(route.key);
+      });
+      actions.append(editButton, deleteButton);
+      item.append(title, meta, actions);
+      item.addEventListener("click", () => {
+        goToClientEditor(route.key);
+      });
+      clientCrudListEl.appendChild(item);
+    }
+  }
+
+  if (currentRoute === ROUTES.clientEdit) {
+    hydrateClientCrudForm(selectedClientCrudKey);
+  }
+}
+
+function formatClientApiKeyCount(count) {
+  return count === 1 ? "1 API key" : `${count} API keys`;
+}
+
+function hydrateClientEditorFromRoute(query) {
+  const client = query.get("client") || "";
+  selectedClientCrudKey = client || "__new__";
+  setClientCrudStatus("");
+  hydrateClientCrudForm(selectedClientCrudKey);
+}
+
+function hydrateClientCrudForm(routeKey) {
+  const route = (providerState.clientRoutes || []).find((entry) => entry.key === routeKey);
+  if (!clientCrudNameEl || !clientCrudProviderSelectEl || !clientCrudModelEl || !clientCrudApiKeysEl) return;
+  if (!route) {
+    setClientCrudFormMode("create");
+    clientCrudNameEl.value = "";
+    clientCrudNameEl.disabled = false;
+    clientCrudProviderSelectEl.value = getClientProviderOptions()[0]?.id || "";
+    clientCrudModelEl.value = "";
+    clientCrudApiKeysEl.value = "";
+    if (deleteClientCrudBtnEl) deleteClientCrudBtnEl.disabled = true;
+    return;
+  }
+  setClientCrudFormMode("edit", route.key);
+  clientCrudNameEl.value = route.key || "";
+  clientCrudNameEl.disabled = true;
+  clientCrudProviderSelectEl.value = route.providerId || getClientProviderOptions()[0]?.id || "";
+  clientCrudModelEl.value = route.modelOverride || "";
+  clientCrudApiKeysEl.value = Array.isArray(route.apiKeys) ? route.apiKeys.join("\n") : "";
+  if (deleteClientCrudBtnEl) deleteClientCrudBtnEl.disabled = route.key === "default";
+}
+
+function setClientCrudFormMode(mode, client = "") {
+  const isEdit = mode === "edit";
+  if (clientCrudModeBadgeEl) {
+    clientCrudModeBadgeEl.textContent = isEdit ? "Edit mode" : "Create mode";
+    clientCrudModeBadgeEl.className = `pill${isEdit ? " ok-pill" : ""}`;
+  }
+  if (clientCrudFormTitleEl) {
+    clientCrudFormTitleEl.textContent = isEdit ? `Edit ${client}` : "Create Client";
+  }
+  if (saveClientCrudBtnEl) {
+    saveClientCrudBtnEl.textContent = isEdit ? "Update client" : "Create client";
+  }
+}
+
+function clearClientCrudForm() {
+  selectedClientCrudKey = "__new__";
+  setClientCrudStatus("");
+  if (currentRoute === ROUTES.clientEdit && normalizeRoute().query.get("client")) {
+    goToClientEditor();
+    return;
+  }
+  renderClientCrud();
+  clientCrudNameEl?.focus();
 }
 
 async function fetchJsonWithTimeout(url, timeoutMs = 3500) {
@@ -1500,59 +1788,24 @@ function renderSingleClientConfigStatus(client, entry) {
   const isHermes = client === "hermes";
   const stateBadgeEl = isHermes ? hermesConfigStateBadgeEl : codexConfigStateBadgeEl;
   const routeBadgeEl = isHermes ? hermesConfigRouteBadgeEl : codexConfigRouteBadgeEl;
-  const providerSelectEl = isHermes ? hermesProviderSelectEl : codexProviderSelectEl;
   const baseUrlInputEl = isHermes ? hermesBaseUrlInputEl : codexBaseUrlInputEl;
-  const modelSelectEl = isHermes ? hermesModelSelectEl : codexModelSelectEl;
   const pathEl = isHermes ? hermesConfigPathEl : codexConfigPathEl;
   const baseUrlEl = isHermes ? hermesConfigBaseUrlEl : codexConfigBaseUrlEl;
-  const apiKeyEl = isHermes ? hermesConfigApiKeyEl : codexConfigApiKeyEl;
+  const providerEl = isHermes ? hermesConfigProviderEl : codexConfigProviderEl;
+  const apiKeySelectEl = isHermes ? hermesConfigApiKeySelectEl : codexConfigApiKeySelectEl;
   const modelEl = isHermes ? hermesConfigModelEl : codexConfigModelEl;
-  const inputEl = isHermes ? hermesQuickApplyModelEl : codexQuickApplyModelEl;
   const backupsEl = isHermes ? hermesConfigBackupsEl : codexConfigBackupsEl;
-  const catalog = isHermes ? clientModelCatalogState.hermes : clientModelCatalogState.codex;
-  const providers = getClientAvailableProviders(entry);
   const preserveDraft = isInteractiveClientRoute();
-  const currentProviderValue = providerSelectEl?.value || "";
   const currentBaseUrlValue = baseUrlInputEl?.value || "";
-  const currentModelValue = resolveClientModelValue(modelSelectEl, inputEl) || "";
-
-  if (providerSelectEl) {
-    const previous = providerSelectEl.value;
-    providerSelectEl.innerHTML = "";
-    if (!providers.length) {
-      const option = document.createElement("option");
-      option.value = "";
-      option.textContent = clientProviderAvailabilityState.loading
-        ? "Checking available providers..."
-        : "No available providers";
-      providerSelectEl.appendChild(option);
-      providerSelectEl.disabled = true;
-    }
-    for (const provider of providers) {
-      const option = document.createElement("option");
-      option.value = provider.id;
-      option.textContent = `${provider.name} (${provider.id})`;
-      providerSelectEl.appendChild(option);
-    }
-    if (providers.length) {
-      providerSelectEl.disabled = false;
-    }
-    const targetProviderId =
-      (preserveDraft ? currentProviderValue : "") || entry?.route?.providerId || previous || providers[0]?.id || "";
-    if (targetProviderId) {
-      providerSelectEl.value = targetProviderId;
-    }
-  }
 
   if (!entry) {
     updateQuickApplyBadge(stateBadgeEl, "Unavailable", "bad");
-    updateQuickApplyBadge(routeBadgeEl, "Route unknown", "warn");
+    updateQuickApplyBadge(routeBadgeEl, "Client unknown", "warn");
     setTextContent(pathEl, "-");
     setTextContent(baseUrlEl, "-");
-    setTextContent(apiKeyEl, "-");
+    setTextContent(providerEl, "-");
+    renderClientApiKeySelect(apiKeySelectEl, "");
     setTextContent(modelEl, "-");
-    syncQuickApplyModelInput(inputEl, preserveDraft ? currentModelValue : "");
-    renderClientModelSelect(modelSelectEl, inputEl, catalog.models, preserveDraft ? currentModelValue : "");
     if (baseUrlInputEl && (!preserveDraft || document.activeElement !== baseUrlInputEl)) {
       baseUrlInputEl.value = preserveDraft ? currentBaseUrlValue || clientConfigState?.proxyBaseUrl || "" : clientConfigState?.proxyBaseUrl || "";
     }
@@ -1572,19 +1825,14 @@ function renderSingleClientConfigStatus(client, entry) {
     routeBadgeEl,
     entry.route?.providerName
       ? `${entry.route.key} → ${entry.route.providerName}`
-      : `${client} route`,
+      : client,
     entry.route?.providerId ? "ok" : "warn",
   );
   setTextContent(pathEl, entry.path || "-");
   setTextContent(baseUrlEl, entry.detected?.baseUrl || clientConfigState?.proxyBaseUrl || "-");
-  setTextContent(apiKeyEl, maskApiKey(entry.routeApiKey || entry.detected?.apiKey || ""));
+  setTextContent(providerEl, entry.route?.providerName || entry.route?.providerId || "-");
+  renderClientApiKeySelect(apiKeySelectEl, entry.detected?.apiKey || entry.routeApiKey || "");
   setTextContent(modelEl, entry.detected?.model || entry.route?.modelOverride || "Unspecified");
-  renderClientModelSelect(
-    modelSelectEl,
-    inputEl,
-    catalog.models,
-    (preserveDraft ? currentModelValue : "") || entry.route?.modelOverride || entry.detected?.model || "",
-  );
   if (baseUrlInputEl && (!preserveDraft || document.activeElement !== baseUrlInputEl)) {
     baseUrlInputEl.value =
       (preserveDraft ? currentBaseUrlValue : "") || entry.detected?.baseUrl || clientConfigState?.proxyBaseUrl || "";
@@ -1592,8 +1840,9 @@ function renderSingleClientConfigStatus(client, entry) {
   renderQuickApplyBackups(backupsEl, entry.backups || []);
   const actionBtn = isHermes ? applyHermesConfigBtnEl : applyCodexConfigBtnEl;
   if (actionBtn) {
-    actionBtn.disabled = entry.access?.canPatch === false;
-    actionBtn.title = entry.access?.reason || "";
+    const hasClientApiKey = getAllClientApiKeyOptions().length > 0;
+    actionBtn.disabled = entry.access?.canPatch === false || !hasClientApiKey;
+    actionBtn.title = entry.access?.reason || (hasClientApiKey ? "" : "Add a client API key before applying.");
   }
 }
 
@@ -1668,7 +1917,9 @@ function renderUsageStats() {
   const month = usageStatsState?.month;
   const daily = Array.isArray(usageStatsState?.daily) ? usageStatsState.daily : [];
   const byProvider = Array.isArray(usageStatsState?.byProvider) ? usageStatsState.byProvider : [];
-  const byClientRoute = Array.isArray(usageStatsState?.byClientRoute) ? usageStatsState.byClientRoute : [];
+  const byClientRoute = Array.isArray(usageStatsState?.byClientRoute)
+    ? usageStatsState.byClientRoute.filter((entry) => entry.key !== "default")
+    : [];
 
   statsTodayRequestsEl.textContent = formatNumber(today?.requests);
   statsTodayHitRateEl.textContent = formatPercent(today?.hitRate);
@@ -1758,7 +2009,7 @@ function renderUsageStats() {
     clientRouteRtkStatsTableBodyEl.innerHTML = "";
     if (!byClientRoute.length) {
       const row = document.createElement("tr");
-      row.innerHTML = '<td colspan="7" class="mono">No client route RTK stats yet</td>';
+      row.innerHTML = '<td colspan="7" class="mono">No client RTK stats yet</td>';
       clientRouteRtkStatsTableBodyEl.appendChild(row);
     } else {
       for (const entry of byClientRoute) {
@@ -1910,17 +2161,33 @@ async function refreshCacheSnapshot(providerIdOverride) {
 
 async function refreshProviders() {
   try {
-    const response = await fetch("/api/providers", { cache: "no-store" });
+    const [response, oauthResponse] = await Promise.all([
+      fetch("/api/providers", { cache: "no-store" }),
+      fetch("/api/chatgpt-oauth/status", { cache: "no-store" }).catch(() => null),
+    ]);
     const data = await response.json();
     const providers = Array.isArray(data.providers) ? data.providers : [];
+    const providerOptions = Array.isArray(data.providerOptions) ? data.providerOptions : providers;
     const activeProviderId = data.activeProviderId;
     const clientRoutes = Array.isArray(data.clientRoutes) ? data.clientRoutes : [];
-    providerState = { activeProviderId, providers, clientRoutes };
+    providerState = { activeProviderId, providers, providerOptions, clientRoutes };
+    if (oauthResponse) {
+      const oauthData = await oauthResponse.json();
+      if (oauthResponse.ok && !oauthData.error) {
+        chatgptOauthState = {
+          ...chatgptOauthState,
+          enabled: oauthData.enabled === true,
+          rotationMode: oauthData.rotationMode || "round_robin",
+          accounts: Array.isArray(oauthData.accounts) ? oauthData.accounts : [],
+        };
+      }
+    }
     renderProviderTable();
     renderProviderCrudSummary();
+    renderChatGptOauthPanel();
     renderProviderCrudList();
     renderClientRoutePolicySection();
-    providerMetaEl.textContent = "Endpoint: GET /api/providers";
+    setProviderMeta("");
     renderCacheProviderSelect();
     renderCacheProviderStats();
 
@@ -1930,7 +2197,227 @@ async function refreshProviders() {
 
     renderOverviewStats();
   } catch (error) {
-    providerMetaEl.textContent = error instanceof Error ? error.message : "Load failed";
+    setProviderMeta(error instanceof Error ? error.message : "Load failed");
+  }
+}
+
+async function startChatGptOauthLogin() {
+  if (!chatgptOauthStartBtnEl) {
+    return;
+  }
+  chatgptOauthStartBtnEl.disabled = true;
+  chatgptOauthStartBtnEl.textContent = "Starting...";
+  if (chatgptOauthStatusEl) {
+    chatgptOauthStatusEl.textContent = "Creating login session...";
+  }
+  try {
+    const response = await fetch("/api/chatgpt-oauth/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not start account login");
+    }
+    chatgptOauthState = {
+      ...chatgptOauthState,
+      enabled: true,
+      authUrl: data.authUrl || "",
+    };
+    renderChatGptOauthPanel();
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = "Sign-in URL ready. Open it, then paste the redirected callback URL.";
+    }
+  } catch (error) {
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent =
+        error instanceof Error ? error.message : "Could not start account login";
+    }
+  } finally {
+    chatgptOauthStartBtnEl.disabled = !chatgptOauthState.enabled;
+    chatgptOauthStartBtnEl.textContent = "Start login";
+  }
+}
+
+async function submitChatGptOauthCallback() {
+  const redirectUrl = chatgptOauthCallbackInputEl?.value.trim() || "";
+  if (!redirectUrl) {
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = "Paste the callback URL first.";
+    }
+    return;
+  }
+
+  if (chatgptOauthSubmitBtnEl) {
+    chatgptOauthSubmitBtnEl.disabled = true;
+    chatgptOauthSubmitBtnEl.textContent = "Connecting...";
+  }
+  if (chatgptOauthStatusEl) {
+    chatgptOauthStatusEl.textContent = "Exchanging callback code...";
+  }
+
+  try {
+    const response = await fetch("/api/chatgpt-oauth/callback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ redirectUrl }),
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not connect account");
+    }
+    chatgptOauthState = {
+      ...chatgptOauthState,
+      enabled: true,
+      accounts: Array.isArray(data.accounts) ? data.accounts : chatgptOauthState.accounts,
+      authUrl: "",
+    };
+    if (chatgptOauthCallbackInputEl) {
+      chatgptOauthCallbackInputEl.value = "";
+    }
+    await refreshProviders();
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = "Account connected.";
+    }
+  } catch (error) {
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent =
+        error instanceof Error ? error.message : "Could not connect account";
+    }
+  } finally {
+    if (chatgptOauthSubmitBtnEl) {
+      chatgptOauthSubmitBtnEl.disabled = !chatgptOauthState.enabled;
+      chatgptOauthSubmitBtnEl.textContent = "Connect account";
+    }
+  }
+}
+
+async function updateChatGptOauthRotationMode() {
+  const rotationMode = chatgptOauthRotationModeEl?.value || "round_robin";
+  const saveId = ++chatgptOauthRotationSaveId;
+  if (chatgptOauthRotationModeEl) {
+    chatgptOauthRotationModeEl.disabled = true;
+  }
+  if (chatgptOauthStatusEl) {
+    chatgptOauthStatusEl.textContent = "Saving account rotation...";
+  }
+  try {
+    const response = await fetch("/api/chatgpt-oauth/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rotationMode }),
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not save account rotation");
+    }
+    if (saveId === chatgptOauthRotationSaveId) {
+      chatgptOauthState = {
+        ...chatgptOauthState,
+        rotationMode: data.rotationMode || rotationMode,
+        accounts: Array.isArray(data.accounts) ? data.accounts : chatgptOauthState.accounts,
+      };
+      renderChatGptOauthPanel();
+      if (chatgptOauthStatusEl) {
+        chatgptOauthStatusEl.textContent = `Account rotation saved: ${chatgptOauthState.rotationMode}`;
+      }
+    }
+  } catch (error) {
+    if (saveId === chatgptOauthRotationSaveId && chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent =
+        error instanceof Error ? error.message : "Could not save account rotation";
+    }
+    if (saveId === chatgptOauthRotationSaveId) {
+      renderChatGptOauthPanel();
+    }
+  } finally {
+    if (saveId === chatgptOauthRotationSaveId && chatgptOauthRotationModeEl) {
+      chatgptOauthRotationModeEl.disabled = !chatgptOauthState.enabled;
+    }
+  }
+}
+
+async function refreshChatGptOauthAccount(accountId) {
+  if (chatgptOauthStatusEl) {
+    chatgptOauthStatusEl.textContent = "Refreshing account...";
+  }
+  try {
+    const response = await fetch(
+      `/api/account-auth/accounts/${encodeURIComponent(accountId)}/refresh`,
+      { method: "POST" },
+    );
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Refresh failed");
+    }
+    await refreshProviders();
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = "Account refreshed.";
+    }
+  } catch (error) {
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = error instanceof Error ? error.message : "Refresh failed";
+    }
+  }
+}
+
+async function toggleChatGptOauthAccount(accountId, disabled) {
+  if (chatgptOauthStatusEl) {
+    chatgptOauthStatusEl.textContent = disabled ? "Enabling account..." : "Disabling account...";
+  }
+  try {
+    const response = await fetch(
+      `/api/account-auth/accounts/${encodeURIComponent(accountId)}/${disabled ? "enable" : "disable"}`,
+      { method: "POST" },
+    );
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Update failed");
+    }
+    chatgptOauthState = {
+      ...chatgptOauthState,
+      accounts: Array.isArray(data.accounts) ? data.accounts : chatgptOauthState.accounts,
+    };
+    await refreshProviders();
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = disabled ? "Account enabled." : "Account disabled.";
+    }
+  } catch (error) {
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = error instanceof Error ? error.message : "Update failed";
+    }
+  }
+}
+
+async function deleteChatGptOauthAccount(accountId, label) {
+  const confirmed = window.confirm(`Delete connected account "${label}"?`);
+  if (!confirmed) {
+    return;
+  }
+  if (chatgptOauthStatusEl) {
+    chatgptOauthStatusEl.textContent = "Deleting account...";
+  }
+  try {
+    const response = await fetch(`/api/account-auth/accounts/${encodeURIComponent(accountId)}`, {
+      method: "DELETE",
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Delete failed");
+    }
+    chatgptOauthState = {
+      ...chatgptOauthState,
+      accounts: Array.isArray(data.accounts) ? data.accounts : [],
+    };
+    await refreshProviders();
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = "Account deleted.";
+    }
+  } catch (error) {
+    if (chatgptOauthStatusEl) {
+      chatgptOauthStatusEl.textContent = error instanceof Error ? error.message : "Delete failed";
+    }
   }
 }
 
@@ -1957,67 +2444,96 @@ async function refreshClientConfigStatus() {
   renderClientConfigStatus();
 }
 
-async function refreshClientModelCatalog(client, providerId) {
-  if (!providerId) {
-    clientModelCatalogState[client] = { providerId: "", models: [] };
-    renderClientConfigStatus();
+async function saveClientCrud() {
+  const client = clientCrudNameEl?.value.trim() || "";
+  const providerId = clientCrudProviderSelectEl?.value || "";
+  const model = clientCrudModelEl?.value.trim() || "";
+  const apiKeys = clientCrudApiKeysEl?.value || "";
+  if (!client) {
+    setClientCrudStatus("Client name is required.", "bad");
     return;
   }
-
-  const currentCatalog = clientModelCatalogState[client];
-  if (currentCatalog?.providerId === providerId && currentCatalog.models.length) {
+  if (!apiKeys.split(/\r?\n|,/g).some((entry) => entry.trim())) {
+    setClientCrudStatus("At least one client API key is required.", "bad");
     return;
   }
-
+  const exists = (providerState.clientRoutes || []).some((route) => route.key === client);
+  const editingExisting = selectedClientCrudKey && selectedClientCrudKey !== "__new__" && exists;
+  const targetClient = editingExisting ? selectedClientCrudKey : client;
+  saveClientCrudBtnEl.disabled = true;
+  saveClientCrudBtnEl.textContent = "Saving...";
+  setClientCrudStatus("");
+  let savedClient = "";
   try {
-    const { response, data } = await fetchJsonWithTimeout(
-      `/api/provider-models?providerId=${encodeURIComponent(providerId)}`,
-      3500,
+    const response = await fetch(
+      editingExisting ? `/api/clients/${encodeURIComponent(targetClient)}` : "/api/clients",
+      {
+        method: editingExisting ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client, providerId, model, apiKeys }),
+      },
     );
+    const data = await response.json();
     if (!response.ok || data.error) {
-      throw new Error(data.error?.message || "Could not load models");
+      throw new Error(data.error?.message || "Could not save client");
     }
-    clientModelCatalogState[client] = {
-      providerId,
-      models: Array.isArray(data.models) ? data.models : [],
-    };
-  } catch (_error) {
-    clientModelCatalogState[client] = { providerId, models: [] };
+    if (Array.isArray(data.clientRoutes)) {
+      providerState = {
+        ...providerState,
+        clientRoutes: data.clientRoutes,
+        providerOptions: Array.isArray(data.providerOptions) ? data.providerOptions : providerState.providerOptions,
+      };
+    }
+    savedClient = data.client || targetClient;
+    selectedClientCrudKey = savedClient;
+    renderClientConfigStatus();
+    renderClientRoutePolicySection();
+    setClientCrudStatus("Client saved.", "ok");
+    if (currentRoute === ROUTES.clientEdit) {
+      goToClientEditor(savedClient);
+    }
+  } catch (error) {
+    setClientCrudStatus(error instanceof Error ? error.message : "Could not save client", "bad");
+  } finally {
+    saveClientCrudBtnEl.disabled = false;
+    setClientCrudFormMode(savedClient || editingExisting ? "edit" : "create", savedClient || targetClient);
   }
-  renderClientConfigStatus();
 }
 
-async function refreshClientProviderAvailability() {
-  const providers = Array.isArray(providerState.providers) ? providerState.providers : [];
-  clientProviderAvailabilityState = { ...clientProviderAvailabilityState, loading: true };
-  renderClientConfigStatus();
-
-  const checks = await Promise.all(
-    providers.map(async (provider) => {
-      if (!provider?.id || !provider?.baseUrl || (provider.providerApiKeysCount || 0) <= 0) {
-        return [provider.id, { available: false, reason: "missing_provider_key" }];
-      }
-      try {
-        const { response, data } = await fetchJsonWithTimeout(
-          `/api/provider-models?providerId=${encodeURIComponent(provider.id)}`,
-          2500,
-        );
-        const models = Array.isArray(data.models) ? data.models : [];
-        if (!response.ok || data.error) {
-          return [provider.id, { available: false, reason: data.error?.message || "probe_failed" }];
-        }
-        return [provider.id, { available: true, modelsCount: models.length }];
-      } catch (error) {
-        return [provider.id, { available: false, reason: error instanceof Error ? error.message : "probe_failed" }];
-      }
-    }),
-  );
-
-  clientProviderAvailabilityState = {
-    byId: Object.fromEntries(checks),
-    loading: false,
-  };
-  renderClientConfigStatus();
+async function deleteClientCrud(clientOverride = "") {
+  const client = clientOverride || selectedClientCrudKey;
+  if (!client || client === "__new__" || client === "default") {
+    return;
+  }
+  const confirmed = window.confirm(`Delete client "${client}"?`);
+  if (!confirmed) return;
+  deleteClientCrudBtnEl.disabled = true;
+  setClientCrudStatus("Deleting client...");
+  try {
+    const response = await fetch(`/api/clients/${encodeURIComponent(client)}`, {
+      method: "DELETE",
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not delete client");
+    }
+    providerState = {
+      ...providerState,
+      clientRoutes: Array.isArray(data.clientRoutes) ? data.clientRoutes : providerState.clientRoutes,
+      providerOptions: Array.isArray(data.providerOptions) ? data.providerOptions : providerState.providerOptions,
+    };
+    selectedClientCrudKey = "";
+    renderClientConfigStatus();
+    renderClientRoutePolicySection();
+    setClientCrudStatus("Client deleted.", "ok");
+    if (currentRoute === ROUTES.clientEdit) {
+      window.location.hash = "#/clients";
+    }
+  } catch (error) {
+    setClientCrudStatus(error instanceof Error ? error.message : "Could not delete client", "bad");
+  } finally {
+    deleteClientCrudBtnEl.disabled = false;
+  }
 }
 
 async function refreshUsageStats() {
@@ -2043,13 +2559,18 @@ async function refreshClientsScreen() {
   await refreshProviders();
   await refreshClientConfigStatus();
   renderClientConfigStatus();
-  void refreshClientProviderAvailability();
-  const hermesProviderId =
-    clientConfigState?.clients?.hermes?.route?.providerId || hermesProviderSelectEl?.value || "";
-  const codexProviderId =
-    clientConfigState?.clients?.codex?.route?.providerId || codexProviderSelectEl?.value || "";
-  void refreshClientModelCatalog("hermes", hermesProviderId);
-  void refreshClientModelCatalog("codex", codexProviderId);
+}
+
+async function refreshClientEditScreen() {
+  await refreshProviders();
+  await refreshClientConfigStatus();
+  hydrateClientEditorFromRoute(normalizeRoute().query);
+}
+
+async function refreshConfigHelperScreen() {
+  await refreshProviders();
+  await refreshClientConfigStatus();
+  renderClientConfigStatus();
 }
 
 async function refreshActiveRoute() {
@@ -2059,6 +2580,22 @@ async function refreshActiveRoute() {
   }
   if (currentRoute === ROUTES.clients) {
     await refreshClientsScreen();
+    return;
+  }
+  if (currentRoute === ROUTES.clientEdit) {
+    await refreshClientEditScreen();
+    return;
+  }
+  if (currentRoute === ROUTES.configHelper) {
+    await refreshConfigHelperScreen();
+    return;
+  }
+  if (currentRoute === ROUTES.oauth) {
+    await refreshProviders();
+    return;
+  }
+  if (currentRoute === ROUTES.authManagement) {
+    await refreshProviders();
     return;
   }
   if (currentRoute === ROUTES.providers) {
@@ -2093,6 +2630,32 @@ providerSearchInputEl?.addEventListener("input", () => {
   renderProviderCrudList();
 });
 
+clientSearchInputEl?.addEventListener("input", () => {
+  clientSearchTerm = clientSearchInputEl.value || "";
+  renderClientCrud();
+});
+
+chatgptOauthStartBtnEl?.addEventListener("click", () => {
+  void startChatGptOauthLogin();
+});
+
+chatgptOauthCopyLinkBtnEl?.addEventListener("click", () => {
+  void copyTextWithButton(chatgptOauthCopyLinkBtnEl, chatgptOauthState.authUrl, {
+    idleLabel: "Copy",
+    emptyLabel: "No URL",
+    copiedLabel: "Copied",
+    selectLabel: "Select",
+  });
+});
+
+chatgptOauthSubmitBtnEl?.addEventListener("click", () => {
+  void submitChatGptOauthCallback();
+});
+
+chatgptOauthRotationModeEl?.addEventListener("change", () => {
+  void updateChatGptOauthRotationMode();
+});
+
 rtkClientRouteSelectEl?.addEventListener("change", () => {
   hydrateClientRouteRtkForm(rtkClientRouteSelectEl.value);
 });
@@ -2116,7 +2679,7 @@ saveClientRtkPolicyBtnEl?.addEventListener("click", async () => {
     }
     await refreshProviders();
   } catch (error) {
-    providerMetaEl.textContent = error instanceof Error ? error.message : "Could not save RTK policy";
+    setProviderMeta(error instanceof Error ? error.message : "Could not save RTK policy");
   } finally {
     saveClientRtkPolicyBtnEl.disabled = false;
   }
@@ -2141,29 +2704,29 @@ clearClientRtkPolicyBtnEl?.addEventListener("click", async () => {
     }
     await refreshProviders();
   } catch (error) {
-    providerMetaEl.textContent = error instanceof Error ? error.message : "Could not clear RTK policy";
+    setProviderMeta(error instanceof Error ? error.message : "Could not clear RTK policy");
   } finally {
     clearClientRtkPolicyBtnEl.disabled = false;
   }
 });
 
-function resolveClientModelValue(modelSelectEl, modelInputEl) {
-  if (!modelSelectEl) {
-    return modelInputEl?.value.trim() || undefined;
-  }
-  if (modelSelectEl.value === "__custom__") {
-    return modelInputEl?.value.trim() || undefined;
-  }
-  return modelSelectEl.value.trim() || undefined;
-}
+saveClientCrudBtnEl?.addEventListener("click", () => {
+  void saveClientCrud();
+});
+
+clearClientCrudBtnEl?.addEventListener("click", () => {
+  clearClientCrudForm();
+});
+
+deleteClientCrudBtnEl?.addEventListener("click", () => {
+  void deleteClientCrud();
+});
 
 async function applyClientQuickConfig(
   client,
   buttonEl,
-  modelInputEl,
-  providerSelectEl,
   baseUrlInputEl,
-  modelSelectEl,
+  apiKeySelectEl,
 ) {
   buttonEl.disabled = true;
   const originalLabel = buttonEl.textContent;
@@ -2175,9 +2738,8 @@ async function applyClientQuickConfig(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         client,
-        providerId: providerSelectEl?.value || undefined,
         baseUrl: baseUrlInputEl?.value.trim() || undefined,
-        model: resolveClientModelValue(modelSelectEl, modelInputEl),
+        routeApiKey: apiKeySelectEl?.value || undefined,
       }),
     });
     const data = await response.json();
@@ -2185,6 +2747,7 @@ async function applyClientQuickConfig(
       throw new Error(data.error?.message || `Could not apply ${client} config`);
     }
     clientConfigState = {
+      providerOptions: clientConfigState?.providerOptions || providerState.providerOptions || [],
       proxyBaseUrl: data.proxyBaseUrl,
       clients: {
         ...(clientConfigState?.clients || {}),
@@ -2197,12 +2760,9 @@ async function applyClientQuickConfig(
         clientRoutes: data.clientRoutes,
       };
     }
-    const providerId = data.status?.route?.providerId || providerSelectEl?.value || "";
-    clientModelCatalogState[client] = { providerId, models: clientModelCatalogState[client]?.models || [] };
     renderClientConfigStatus();
     renderProviderCrudList();
     renderClientRoutePolicySection();
-    await refreshClientModelCatalog(client, providerId);
     setQuickApplyStatus(
       `${client} config applied. Backup created with a timestamp before patching.`,
       "ok",
@@ -2219,10 +2779,8 @@ applyHermesConfigBtnEl?.addEventListener("click", async () => {
   await applyClientQuickConfig(
     "hermes",
     applyHermesConfigBtnEl,
-    hermesQuickApplyModelEl,
-    hermesProviderSelectEl,
     hermesBaseUrlInputEl,
-    hermesModelSelectEl,
+    hermesConfigApiKeySelectEl,
   );
 });
 
@@ -2230,40 +2788,8 @@ applyCodexConfigBtnEl?.addEventListener("click", async () => {
   await applyClientQuickConfig(
     "codex",
     applyCodexConfigBtnEl,
-    codexQuickApplyModelEl,
-    codexProviderSelectEl,
     codexBaseUrlInputEl,
-    codexModelSelectEl,
-  );
-});
-
-hermesProviderSelectEl?.addEventListener("change", async () => {
-  clientModelCatalogState.hermes = { providerId: "", models: [] };
-  renderClientConfigStatus();
-  await refreshClientModelCatalog("hermes", hermesProviderSelectEl.value);
-});
-
-codexProviderSelectEl?.addEventListener("change", async () => {
-  clientModelCatalogState.codex = { providerId: "", models: [] };
-  renderClientConfigStatus();
-  await refreshClientModelCatalog("codex", codexProviderSelectEl.value);
-});
-
-hermesModelSelectEl?.addEventListener("change", () => {
-  renderClientModelSelect(
-    hermesModelSelectEl,
-    hermesQuickApplyModelEl,
-    clientModelCatalogState.hermes.models,
-    hermesModelSelectEl.value === "__custom__" ? hermesQuickApplyModelEl?.value.trim() || "" : hermesModelSelectEl.value,
-  );
-});
-
-codexModelSelectEl?.addEventListener("change", () => {
-  renderClientModelSelect(
-    codexModelSelectEl,
-    codexQuickApplyModelEl,
-    clientModelCatalogState.codex.models,
-    codexModelSelectEl.value === "__custom__" ? codexQuickApplyModelEl?.value.trim() || "" : codexModelSelectEl.value,
+    codexConfigApiKeySelectEl,
   );
 });
 
@@ -2429,7 +2955,7 @@ providerDeleteBtnEl.addEventListener("click", async () => {
     .map((route) => route.key);
   const impactMessage = impactedRoutes.length
     ? `This will remove provider routing for: ${impactedRoutes.join(", ")}.`
-    : "This provider is not assigned to any client route.";
+    : "This provider is not assigned to any client.";
   const confirmed = window.confirm(
     `Delete provider "${customProviderNameEl.value.trim() || providerId}"?\n\n${impactMessage}`,
   );

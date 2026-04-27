@@ -255,6 +255,63 @@ test("persists client-route api key bindings and resolves route by key", async (
   }
 });
 
+test("routes client CRUD api keys to the bound provider", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-a-key"],
+          clientApiKeys: ["legacy-client-a-key"],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+        {
+          id: "provider-b",
+          name: "provider-b",
+          baseUrl: "https://provider-b.example/v1",
+          responsesUrl: "https://provider-b.example/v1/responses",
+          providerApiKeys: ["provider-b-key"],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.setClientRoute("mobile-app", "provider-b");
+    repository.setClientRouteApiKeys("mobile-app", ["sk-mobile-client"]);
+
+    const matchedProviders = repository.findProvidersByAccessKey("sk-mobile-client");
+    assert.equal(repository.findClientRouteByApiKey("sk-mobile-client"), "mobile-app");
+    assert.deepEqual(
+      matchedProviders.map((provider) => provider.id),
+      ["provider-b"],
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("allows sharing one client API key across multiple providers", async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
   const dbFile = path.join(tempDir, "app.sqlite");
@@ -517,6 +574,86 @@ test("persists provider model aliases in the database", async () => {
       "cheap-default": "gpt-5.4-mini",
       "quality-default": "gpt-5.4",
     });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("hides system-managed providers from CRUD list while keeping client selector options", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "manual-provider",
+          name: "manual-provider",
+          baseUrl: "https://manual.example/v1",
+          responsesUrl: "https://manual.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: ["client-key"],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+        {
+          id: "account-openai-codex",
+          name: "OpenAI / Codex Account Pool",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          responsesUrl: "https://chatgpt.com/backend-api/codex/v1/responses",
+          authMode: "chatgpt_oauth",
+          providerApiKeys: [],
+          clientApiKeys: [],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+            systemManaged: true,
+            accountPlatform: "openai_codex",
+            accountPoolRequired: true,
+          },
+        },
+      ],
+    });
+
+    assert.deepEqual(
+      repository.listProvidersForUi().map((provider) => provider.id),
+      ["manual-provider"],
+    );
+    assert.deepEqual(
+      repository.listProviderOptionsForClientSetup().map((provider) => provider.id),
+      ["manual-provider", "account-openai-codex"],
+    );
+
+    const reloaded = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [],
+    });
+    const accountProvider = reloaded.getProvider("account-openai-codex");
+
+    assert.equal(accountProvider?.capabilities.systemManaged, true);
+    assert.equal(accountProvider?.capabilities.accountPlatform, "openai_codex");
+    assert.equal(accountProvider?.capabilities.accountPoolRequired, true);
+    assert.deepEqual(
+      reloaded.listProvidersForUi().map((provider) => provider.id),
+      ["manual-provider"],
+    );
+    assert.ok(
+      reloaded
+        .listProviderOptionsForClientSetup()
+        .some((provider) => provider.id === "account-openai-codex"),
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

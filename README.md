@@ -2,6 +2,10 @@
 
 Minimal Fastify proxy for a Responses API upstream.
 
+## Implementation Plans
+
+- [ChatGPT OAuth provider](docs/chatgpt-oauth-implementation-plan.md)
+
 ## App Install
 
 Turn this repo into a local app with one command:

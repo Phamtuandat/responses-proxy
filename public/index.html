@@ -26,17 +26,15 @@
             <nav class="topnav sidenav sidebar-card" aria-label="Sections">
               <div class="sidenav-label">Workspace</div>
               <a href="#/dashboard" data-route-link><span class="nav-dot"></span><span class="nav-label">Dashboard</span></a>
-              <a href="#/clients" data-route-link><span class="nav-dot"></span><span class="nav-label">Clients</span></a>
               <a href="#/providers" data-route-link><span class="nav-dot"></span><span class="nav-label">Providers</span></a>
-              <a href="#/rtk" data-route-link><span class="nav-dot"></span><span class="nav-label">RTK</span></a>
+              <a href="#/clients" data-route-link><span class="nav-dot"></span><span class="nav-label">Clients</span></a>
+              <a href="#/oauth" data-route-link><span class="nav-dot"></span><span class="nav-label">Accounts</span></a>
+              <a href="#/auth-management" data-route-link><span class="nav-dot"></span><span class="nav-label">Auth Management</span></a>
+              <a href="#/config-helper" data-route-link><span class="nav-dot"></span><span class="nav-label">Config Helper</span></a>
               <a href="#/usage" data-route-link><span class="nav-dot"></span><span class="nav-label">Usage</span></a>
+              <a href="#/rtk" data-route-link><span class="nav-dot"></span><span class="nav-label">RTK</span></a>
               <a href="#/cache" data-route-link><span class="nav-dot"></span><span class="nav-label">Cache</span></a>
             </nav>
-
-            <section class="sidebar-card sidebar-note">
-              <div class="sidenav-label">Runtime</div>
-              <p>Use the left rail for navigation. The right side stays focused on the current screen only.</p>
-            </section>
           </aside>
 
           <div class="content-area">
@@ -105,7 +103,7 @@
                   </section>
                 </div>
                 <div class="docs-steps">
-                  <div class="docs-step"><span>1</span><p>Create or copy a client API key from the Providers page.</p></div>
+                  <div class="docs-step"><span>1</span><p>Create or copy a client API key from the Clients tab.</p></div>
                   <div class="docs-step"><span>2</span><p>Point the client to the base URL shown below and call <span class="mono">/v1/responses</span>.</p></div>
                   <div class="docs-step"><span>3</span><p>Send the client key in the <span class="mono">Authorization</span> header and a normal Responses JSON body.</p></div>
                 </div>
@@ -116,7 +114,7 @@
                 <div class="row">
                   <div>
                     <h3>Client Setup</h3>
-                    <p>Use the dedicated Clients tab to patch Hermes and Codex config with provider, base URL, and model overrides.</p>
+                    <p>Use Clients to manage API keys and provider bindings, then use Config Helper to patch Hermes and Codex config.</p>
                   </div>
                 </div>
               </div>
@@ -155,7 +153,76 @@
               <div class="row">
                 <div>
                   <h2>Clients</h2>
-                  <p>Apply client config changes with provider, base URL, and model overrides.</p>
+                </div>
+                <a class="button-link" href="#/client-edit">New client</a>
+              </div>
+
+              <div class="providers-toolbar section-divider">
+                <div class="field providers-search">
+                  <label for="clientSearchInput">Search clients</label>
+                  <input id="clientSearchInput" type="search" placeholder="Search by name, provider, model, or API key count" />
+                </div>
+              </div>
+
+              <section class="section section-nested provider-card">
+                <div class="provider-card-header">
+                  <div>
+                    <h3>Clients</h3>
+                  </div>
+                </div>
+                <div class="client-route-list" id="clientCrudList"></div>
+              </section>
+
+            </div>
+          </section>
+
+          <section id="screen-client-edit" class="screen">
+            <div class="section">
+              <div class="provider-editor-header">
+                <div class="provider-editor-heading">
+                  <h2 id="clientCrudFormTitle">Create Client</h2>
+                </div>
+                <div class="provider-editor-header-actions">
+                  <div id="clientCrudModeBadge" class="pill">Create mode</div>
+                  <a class="button-link button-link-muted" href="#/clients">Back to clients</a>
+                </div>
+              </div>
+
+              <section class="section section-nested provider-card">
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="clientCrudName">Client name</label>
+                    <input id="clientCrudName" type="text" placeholder="hermes, codex, app-name" />
+                  </div>
+                  <div class="field">
+                    <label for="clientCrudProviderSelect">Provider</label>
+                    <select id="clientCrudProviderSelect"></select>
+                  </div>
+                  <div class="field">
+                    <label for="clientCrudModel">Model override</label>
+                    <input id="clientCrudModel" type="text" placeholder="Optional model name" />
+                  </div>
+                  <div class="field">
+                    <label for="clientCrudApiKeys">Client API keys</label>
+                    <textarea id="clientCrudApiKeys" rows="6" placeholder="Required. One key per line"></textarea>
+                  </div>
+                </div>
+                <div class="row-wrap" style="margin-top:14px;">
+                  <button type="button" id="saveClientCrudBtn">Create client</button>
+                  <button type="button" class="button-link-muted" id="clearClientCrudBtn">Clear</button>
+                  <button type="button" class="table-button-danger-soft" id="deleteClientCrudBtn">Delete</button>
+                </div>
+                <div id="clientCrudStatus" class="compact-status" hidden></div>
+              </section>
+            </div>
+          </section>
+
+          <section id="screen-config-helper" class="screen">
+            <div class="section">
+              <div class="row">
+                <div>
+                  <h2>Config Helper</h2>
+                  <p>Patch local Hermes and Codex config files after clients are ready.</p>
                 </div>
               </div>
 
@@ -172,24 +239,20 @@
                   </div>
                   <div class="provider-crud-badges">
                     <span class="provider-badge" id="hermesConfigStateBadge">Loading</span>
-                    <span class="provider-badge" id="hermesConfigRouteBadge">Route</span>
+                    <span class="provider-badge" id="hermesConfigRouteBadge">Client</span>
                   </div>
                   <div class="quick-apply-meta">
-                    <div>
-                      <span>Provider</span>
-                      <select id="hermesProviderSelect"></select>
-                    </div>
+                    <div><span>Client</span><strong class="mono">hermes</strong></div>
+                    <div><span>Bound Provider</span><strong id="hermesConfigProvider" class="mono">-</strong></div>
                     <div>
                       <span>Base URL</span>
                       <input id="hermesBaseUrlInput" type="text" placeholder="http://127.0.0.1:8318/v1" />
                     </div>
-                    <div>
-                      <span>Model</span>
-                      <select id="hermesModelSelect"></select>
-                      <input id="hermesQuickApplyModel" type="text" placeholder="Custom model name" />
-                    </div>
                     <div><span>Path</span><strong id="hermesConfigPath" class="mono">-</strong></div>
-                    <div><span>Route API Key</span><strong id="hermesConfigApiKey" class="mono">-</strong></div>
+                    <div>
+                      <span>Client API Key</span>
+                      <select id="hermesConfigApiKeySelect"></select>
+                    </div>
                     <div><span>Current Model</span><strong id="hermesConfigModel" class="mono">-</strong></div>
                   </div>
                   <div class="quick-apply-backups">
@@ -210,24 +273,20 @@
                   </div>
                   <div class="provider-crud-badges">
                     <span class="provider-badge" id="codexConfigStateBadge">Loading</span>
-                    <span class="provider-badge" id="codexConfigRouteBadge">Route</span>
+                    <span class="provider-badge" id="codexConfigRouteBadge">Client</span>
                   </div>
                   <div class="quick-apply-meta">
-                    <div>
-                      <span>Provider</span>
-                      <select id="codexProviderSelect"></select>
-                    </div>
+                    <div><span>Client</span><strong class="mono">codex</strong></div>
+                    <div><span>Bound Provider</span><strong id="codexConfigProvider" class="mono">-</strong></div>
                     <div>
                       <span>Base URL</span>
                       <input id="codexBaseUrlInput" type="text" placeholder="http://127.0.0.1:8318/v1" />
                     </div>
-                    <div>
-                      <span>Model</span>
-                      <select id="codexModelSelect"></select>
-                      <input id="codexQuickApplyModel" type="text" placeholder="Custom model name" />
-                    </div>
                     <div><span>Path</span><strong id="codexConfigPath" class="mono">-</strong></div>
-                    <div><span>Route API Key</span><strong id="codexConfigApiKey" class="mono">-</strong></div>
+                    <div>
+                      <span>Client API Key</span>
+                      <select id="codexConfigApiKeySelect"></select>
+                    </div>
                     <div><span>Current Model</span><strong id="codexConfigModel" class="mono">-</strong></div>
                   </div>
                   <div class="quick-apply-backups">
@@ -240,35 +299,121 @@
             </div>
           </section>
 
+          <section id="screen-oauth" class="screen">
+            <div class="section">
+              <div class="row">
+                <div>
+                  <h2>Connected Accounts</h2>
+                  <p>Connect platform accounts separately from provider inventory.</p>
+                </div>
+                <span class="provider-badge" id="chatgptOauthEnabledBadge">Loading</span>
+              </div>
+
+              <div class="platform-accordion section-divider">
+                <details class="platform-panel" open>
+                  <summary class="platform-summary">
+                    <span class="platform-summary-main">
+                      <span class="eyebrow">Platform</span>
+                      <strong>OpenAI / Codex</strong>
+                      <span>Account-based authentication for Codex-compatible providers.</span>
+                    </span>
+                    <span class="platform-summary-meta">
+                      <span class="provider-badge">OAuth</span>
+                      <span class="platform-chevron" aria-hidden="true"></span>
+                    </span>
+                  </summary>
+
+                  <div class="platform-panel-body">
+                    <div class="oauth-workspace oauth-workspace-single">
+                      <section class="section section-nested provider-card oauth-card">
+                        <div class="provider-card-header">
+                          <div>
+                            <h3>Connection</h3>
+                            <p>Generate a one-time sign-in URL and finish the exchange with the redirected callback URL.</p>
+                          </div>
+                          <div class="oauth-actions">
+                            <button type="button" id="chatgptOauthStartBtn">Start login</button>
+                          </div>
+                        </div>
+                        <div class="field oauth-url-field">
+                          <div class="field-label-row">
+                            <label for="chatgptOauthAuthUrl">Sign-in URL</label>
+                            <div class="field-inline-actions">
+                              <button type="button" class="table-button table-button-utility" id="chatgptOauthCopyLinkBtn">Copy</button>
+                              <a class="button-link button-link-muted disabled-link compact-link" id="chatgptOauthOpenLink" href="#" target="_blank" rel="noopener">Open</a>
+                            </div>
+                          </div>
+                          <input id="chatgptOauthAuthUrl" type="text" readonly placeholder="Start login to generate a sign-in URL" />
+                        </div>
+                        <div class="field oauth-url-field">
+                          <label for="chatgptOauthCallbackInput">Callback URL</label>
+                          <textarea id="chatgptOauthCallbackInput" rows="4" placeholder="http://localhost:1455/auth/callback?code=...&state=..."></textarea>
+                        </div>
+                        <div class="oauth-submit-box">
+                          <button type="button" id="chatgptOauthSubmitBtn">Connect account</button>
+                          <div class="meta" id="chatgptOauthStatus">Endpoint: POST /api/chatgpt-oauth/callback</div>
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </section>
+
+          <section id="screen-auth-management" class="screen">
+            <div class="section">
+              <div class="row">
+                <div>
+                  <h2>Auth Management</h2>
+                  <p>Manage account pool behavior and connected auth sessions.</p>
+                </div>
+              </div>
+
+              <section class="section section-nested section-divider account-settings-panel">
+                <div>
+                  <div class="eyebrow">General Settings</div>
+                  <h3>Account pool behavior</h3>
+                  <p>Shared settings apply across connected account platforms and provider pools.</p>
+                </div>
+                <div class="field account-settings-field">
+                  <label for="chatgptOauthRotationMode">Account rotation</label>
+                  <select id="chatgptOauthRotationMode">
+                    <option value="round_robin">Round robin</option>
+                    <option value="random">Random</option>
+                    <option value="first_available">First available</option>
+                  </select>
+                </div>
+              </section>
+
+              <div class="platform-accordion section-divider">
+                <details class="platform-panel" open>
+                  <summary class="platform-summary">
+                    <span class="platform-summary-main">
+                      <span class="eyebrow">Platform</span>
+                      <strong>OpenAI / Codex</strong>
+                      <span>Connected auth sessions for Codex-compatible providers.</span>
+                    </span>
+                    <span class="platform-summary-meta">
+                      <span class="provider-badge">OAuth</span>
+                      <span class="platform-chevron" aria-hidden="true"></span>
+                    </span>
+                  </summary>
+                  <div class="platform-panel-body">
+                    <div id="chatgptOauthAccounts" class="oauth-account-list oauth-account-list-hidden"></div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </section>
+
           <section id="screen-providers" class="screen">
             <div class="section">
               <div class="row">
                 <div>
                   <h2>Providers</h2>
-                  <p>Dedicated CRUD workspace for provider identity, credentials, and routing-facing capabilities.</p>
                 </div>
-                <div class="row-wrap">
-                  <a class="button-link button-link-muted" href="#/dashboard">Back to dashboard</a>
-                  <a class="button-link" href="#/provider-edit">Create provider</a>
-                </div>
-              </div>
-
-              <section class="section section-nested section-hero-card">
-                <div class="section-hero-copy">
-                  <div class="eyebrow">Provider Registry</div>
-                  <h3>Manage every upstream as a first-class record.</h3>
-                  <p>Review base URLs, key inventory, request parameter policy, and route-facing access in one place before editing the full form.</p>
-                </div>
-                <img src="/providers-illustration.svg" alt="Providers illustration" class="section-illustration" />
-              </section>
-
-              <div class="mini-grid compact-grid" style="margin-top:14px;">
-                <div class="mini-card"><span>Total providers</span><strong id="providerCrudTotal">-</strong></div>
-                <div class="mini-card"><span>With provider keys</span><strong id="providerCrudWithProviderKeys">-</strong></div>
-                <div class="mini-card"><span>With client keys</span><strong id="providerCrudWithClientKeys">-</strong></div>
-                <div class="mini-card"><span>Usage check enabled</span><strong id="providerCrudUsageCheck">-</strong></div>
-                <div class="mini-card"><span>RTK custom policy</span><strong id="providerCrudRtkCustom">-</strong></div>
-                <div class="mini-card"><span>Request policy overrides</span><strong id="providerCrudRequestPolicy">-</strong></div>
+                <a class="button-link" href="#/provider-edit">Create provider</a>
               </div>
 
               <div class="providers-toolbar section-divider">
@@ -279,7 +424,7 @@
               </div>
 
               <div id="providerList" class="provider-list" style="margin-top:14px;"></div>
-              <div class="meta" id="providerMeta">Endpoint: GET /api/providers</div>
+              <div class="meta" id="providerMeta" hidden></div>
               <div hidden style="margin-top:14px; overflow:auto;">
                 <table>
                   <tbody id="dailyStatsTableBody">
@@ -356,15 +501,15 @@
               <div class="section section-nested section-divider">
                 <div class="row">
                   <div>
-                    <h3>Client Route RTK Policy</h3>
-                    <p>Override RTK behavior per client route after provider defaults.</p>
+                    <h3>Client RTK Policy</h3>
+                    <p>Override RTK behavior per client after provider defaults.</p>
                   </div>
                 </div>
                 <div style="margin-top:14px; overflow:auto;">
                   <table>
                     <thead>
                       <tr>
-                        <th>Client Route</th>
+                        <th>Client</th>
                         <th>Provider</th>
                         <th>Model Override</th>
                         <th>RTK Policy</th>
@@ -372,14 +517,14 @@
                     </thead>
                     <tbody id="clientRouteTableBody">
                       <tr>
-                        <td colspan="4" class="mono">Loading client routes...</td>
+                        <td colspan="4" class="mono">Loading clients...</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
                 <div class="row-wrap" style="margin-top:14px;">
                   <div style="flex:1; min-width:180px;">
-                    <label for="rtkClientRouteSelect">Client route</label>
+                    <label for="rtkClientRouteSelect">Client</label>
                     <select id="rtkClientRouteSelect"></select>
                   </div>
                   <div style="flex:1; min-width:160px;">
@@ -427,23 +572,23 @@
                   </div>
                 </div>
                 <div class="row-wrap" style="margin-top:12px;">
-                  <button id="saveClientRtkPolicyBtn" type="button">Save route policy</button>
-                  <button id="clearClientRtkPolicyBtn" type="button">Clear route override</button>
+                  <button id="saveClientRtkPolicyBtn" type="button">Save client policy</button>
+                  <button id="clearClientRtkPolicyBtn" type="button">Clear client override</button>
                 </div>
               </div>
 
               <div class="section section-nested section-divider">
                 <div class="row">
                   <div>
-                    <h3>Client Route RTK Breakdown</h3>
-                    <p>RTK efficiency split by routed client.</p>
+                    <h3>Client RTK Breakdown</h3>
+                    <p>RTK efficiency split by client.</p>
                   </div>
                 </div>
                 <div style="margin-top:14px; overflow:auto;">
                   <table>
                     <thead>
                       <tr>
-                        <th>Client Route</th>
+                        <th>Client</th>
                         <th>Requests</th>
                         <th>RTK Applied</th>
                         <th>Tool Outputs Seen</th>
@@ -454,7 +599,7 @@
                     </thead>
                     <tbody id="clientRouteRtkStatsTableBody">
                       <tr>
-                        <td colspan="7" class="mono">Loading RTK route stats...</td>
+                        <td colspan="7" class="mono">Loading client RTK stats...</td>
                       </tr>
                     </tbody>
                   </table>

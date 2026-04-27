@@ -7,6 +7,19 @@ import readline from "node:readline";
 import path from "node:path";
 import { readConfig } from "./config.js";
 import {
+  buildChatGptAuthUrl,
+  exchangeChatGptCodeForTokens,
+  generateChatGptOAuthState,
+  generateChatGptPkceCodes,
+  refreshChatGptTokens,
+} from "./chatgpt-oauth.js";
+import {
+  AccountPoolAuthError,
+  buildChatGptCodexHeaders,
+  resolveChatGptAccessToken,
+} from "./chatgpt-provider-auth.js";
+import { ChatGptOAuthStore, redactAccount } from "./chatgpt-oauth-store.js";
+import {
   applyQuickConfig,
   generateRouteApiKey,
   listRecentConfigBackups,
@@ -54,12 +67,14 @@ import {
 import { applyRtkLayer, parseRtkLayerPolicyInput, resolveRtkLayerPolicy } from "./rtk-layer.js";
 
 const config = readConfig(process.env);
+const CHATGPT_OAUTH_PROVIDER_ID = "account-openai-codex";
 
 const providerRepository = await RuntimeProviderRepository.create({
   dbFile: path.resolve(config.APP_DB_PATH),
   legacyStateFile: path.resolve(config.SESSION_LOG_DIR, "..", "runtime-state.json"),
   baseProviders: buildBuiltinProviderPresets(config),
 });
+const chatGptOAuthStore = ChatGptOAuthStore.create(path.resolve(config.APP_DB_PATH));
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
 const publicDir = path.resolve(process.cwd(), "public");
 const publicAssetFiles = [
@@ -228,8 +243,8 @@ app.post("/api/rtk-policies", async (request, reply) => {
     return reply.code(400).send({
       error: {
         type: "validation_error",
-        code: "INVALID_CLIENT_ROUTE",
-        message: "client route is required",
+        code: "INVALID_CLIENT",
+        message: "client is required",
       },
     });
   }
@@ -251,8 +266,8 @@ app.post("/api/client-route-keys", async (request, reply) => {
     return reply.code(400).send({
       error: {
         type: "validation_error",
-        code: "INVALID_CLIENT_ROUTE",
-        message: "client route is required",
+        code: "INVALID_CLIENT",
+        message: "client is required",
       },
     });
   }
@@ -277,18 +292,315 @@ app.post("/api/client-route-keys", async (request, reply) => {
   });
 });
 
-app.get("/api/providers", async () => ({
-  ok: true,
-  activeProviderId: providerRepository.getActiveProviderId(),
-  clientRoutes: providerRepository.getClientRoutesForUi(),
-  providers: providerRepository.listProvidersForUi(),
-}));
+app.get("/api/providers", async () => {
+  ensureAccountBackedProvidersForExistingAccounts();
+  return {
+    ok: true,
+    activeProviderId: providerRepository.getActiveProviderId(),
+    clientRoutes: providerRepository.getClientRoutesForUi(),
+    providerOptions: providerRepository.listProviderOptionsForClientSetup(),
+    providers: providerRepository.listProvidersForUi(),
+  };
+});
+
+app.get("/api/chatgpt-oauth/status", async () => {
+  ensureAccountBackedProvidersForExistingAccounts();
+  return {
+    ok: true,
+    enabled: config.CHATGPT_OAUTH_ENABLED,
+    rotationMode: chatGptOAuthStore.getRotationMode(),
+    accounts: chatGptOAuthStore.listAccountsForUi(),
+  };
+});
+
+app.patch("/api/chatgpt-oauth/settings", async (request, reply) => {
+  if (!config.CHATGPT_OAUTH_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "CHATGPT_OAUTH_DISABLED",
+        message: "ChatGPT OAuth is disabled. Set CHATGPT_OAUTH_ENABLED=true to use it.",
+      },
+    });
+  }
+  const body = request.body as { rotationMode?: unknown } | undefined;
+  return reply.send({
+    ok: true,
+    rotationMode: chatGptOAuthStore.setRotationMode(body?.rotationMode),
+    accounts: chatGptOAuthStore.listAccountsForUi(),
+  });
+});
+
+app.post("/api/chatgpt-oauth/start", async (_request, reply) => {
+  if (!config.CHATGPT_OAUTH_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "CHATGPT_OAUTH_DISABLED",
+        message: "ChatGPT OAuth is disabled. Set CHATGPT_OAUTH_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  const state = generateChatGptOAuthState();
+  const pkce = generateChatGptPkceCodes();
+  chatGptOAuthStore.createSession({
+    state,
+    codeVerifier: pkce.codeVerifier,
+    redirectUri: config.CHATGPT_OAUTH_REDIRECT_URI,
+  });
+  return reply.send({
+    ok: true,
+    state,
+    authUrl: buildChatGptAuthUrl(config, state, pkce),
+  });
+});
+
+app.post("/api/chatgpt-oauth/callback", async (request, reply) => {
+  if (!config.CHATGPT_OAUTH_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "CHATGPT_OAUTH_DISABLED",
+        message: "ChatGPT OAuth is disabled. Set CHATGPT_OAUTH_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  const callback = parseChatGptOAuthCallbackInput(request.body);
+  if (!callback.state) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "MISSING_OAUTH_STATE",
+        message: "state is required. Paste the full callback URL or provide state directly.",
+      },
+    });
+  }
+  if (callback.errorMessage) {
+    chatGptOAuthStore.markSessionError(callback.state, callback.errorMessage);
+    return reply.code(400).send({
+      error: {
+        type: "authentication_error",
+        code: "CHATGPT_OAUTH_ERROR",
+        message: callback.errorMessage,
+      },
+    });
+  }
+  if (!callback.code) {
+    chatGptOAuthStore.markSessionError(callback.state, "Missing authorization code");
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "MISSING_AUTHORIZATION_CODE",
+        message: "code is required. Paste the full callback URL or provide code directly.",
+      },
+    });
+  }
+
+  try {
+    const result = await completeChatGptOAuthCallback(callback.state, callback.code);
+    return reply.send({
+      ok: true,
+      account: result.account,
+      provider: result.provider,
+      accounts: chatGptOAuthStore.listAccountsForUi(),
+      providers: providerRepository.listProvidersForUi(),
+    });
+  } catch (error) {
+    chatGptOAuthStore.markSessionError(
+      callback.state,
+      error instanceof Error ? error.message : "OAuth failed",
+    );
+    return reply.code(400).send({
+      error: {
+        type: "authentication_error",
+        code: "CHATGPT_OAUTH_CALLBACK_FAILED",
+        message: error instanceof Error ? error.message : "OAuth failed",
+      },
+    });
+  }
+});
+
+app.get("/auth/chatgpt/callback", async (request, reply) => {
+  if (!config.CHATGPT_OAUTH_ENABLED) {
+    return reply.code(409).type("text/html").send(renderOAuthResultPage("ChatGPT OAuth disabled"));
+  }
+
+  const callback = parseChatGptOAuthCallbackInput(request.query);
+
+  if (!callback.state) {
+    return reply.code(400).type("text/html").send(renderOAuthResultPage("Missing OAuth state"));
+  }
+  if (callback.errorMessage) {
+    chatGptOAuthStore.markSessionError(callback.state, callback.errorMessage);
+    return reply.code(400).type("text/html").send(renderOAuthResultPage(callback.errorMessage));
+  }
+  if (!callback.code) {
+    chatGptOAuthStore.markSessionError(callback.state, "Missing authorization code");
+    return reply.code(400).type("text/html").send(renderOAuthResultPage("Missing authorization code"));
+  }
+
+  try {
+    const result = await completeChatGptOAuthCallback(callback.state, callback.code);
+    return reply
+      .type("text/html")
+      .send(
+        renderOAuthResultPage(
+          `ChatGPT OAuth connected: ${result.account.email || result.account.accountId}`,
+          result.provider.id,
+        ),
+      );
+  } catch (error) {
+    chatGptOAuthStore.markSessionError(
+      callback.state,
+      error instanceof Error ? error.message : "OAuth failed",
+    );
+    return reply
+      .code(400)
+      .type("text/html")
+      .send(renderOAuthResultPage(error instanceof Error ? error.message : "OAuth failed"));
+  }
+});
+
+app.post("/api/chatgpt-oauth/accounts/:accountId/refresh", async (request, reply) => {
+  if (!config.CHATGPT_OAUTH_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "CHATGPT_OAUTH_DISABLED",
+        message: "ChatGPT OAuth is disabled. Set CHATGPT_OAUTH_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const account = chatGptOAuthStore.getAccount(accountId);
+  if (!account) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "CHATGPT_OAUTH_ACCOUNT_NOT_FOUND",
+        message: "ChatGPT OAuth account was not found",
+      },
+    });
+  }
+
+  const bundle = await refreshChatGptTokens(config, account.refreshToken);
+  const updated = chatGptOAuthStore.updateTokens(account.id, bundle);
+  return reply.send({
+    ok: true,
+    account: chatGptOAuthStore.listAccountsForUi().find((item) => item.id === updated.id) ?? null,
+  });
+});
+
+app.post("/api/account-auth/accounts/:accountId/refresh", async (request, reply) => {
+  if (!config.CHATGPT_OAUTH_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "ACCOUNT_AUTH_DISABLED",
+        message: "Account auth is disabled. Enable the account platform before refreshing accounts.",
+      },
+    });
+  }
+
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const account = chatGptOAuthStore.getAccount(accountId);
+  if (!account) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "ACCOUNT_AUTH_ACCOUNT_NOT_FOUND",
+        message: "Connected account was not found",
+      },
+    });
+  }
+
+  const bundle = await refreshChatGptTokens(config, account.refreshToken);
+  const updated = chatGptOAuthStore.updateTokens(account.id, bundle);
+  return reply.send({
+    ok: true,
+    account: chatGptOAuthStore.listAccountsForUi().find((item) => item.id === updated.id) ?? null,
+    accounts: chatGptOAuthStore.listAccountsForUi(),
+  });
+});
+
+app.post("/api/account-auth/accounts/:accountId/disable", async (request, reply) => {
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const ok = chatGptOAuthStore.disableAccount(accountId);
+  if (!ok) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "ACCOUNT_AUTH_ACCOUNT_NOT_FOUND",
+        message: "Connected account was not found",
+      },
+    });
+  }
+  return reply.send({
+    ok: true,
+    accounts: chatGptOAuthStore.listAccountsForUi(),
+  });
+});
+
+app.post("/api/account-auth/accounts/:accountId/enable", async (request, reply) => {
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const ok = chatGptOAuthStore.enableAccount(accountId);
+  if (!ok) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "ACCOUNT_AUTH_ACCOUNT_NOT_FOUND",
+        message: "Connected account was not found",
+      },
+    });
+  }
+  return reply.send({
+    ok: true,
+    accounts: chatGptOAuthStore.listAccountsForUi(),
+  });
+});
+
+app.delete("/api/account-auth/accounts/:accountId", async (request, reply) => {
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const ok = chatGptOAuthStore.deleteAccount(accountId);
+  if (!ok) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "ACCOUNT_AUTH_ACCOUNT_NOT_FOUND",
+        message: "Connected account was not found",
+      },
+    });
+  }
+  return reply.send({
+    ok: true,
+    accounts: chatGptOAuthStore.listAccountsForUi(),
+  });
+});
+
+app.delete("/api/chatgpt-oauth/accounts/:accountId", async (request, reply) => {
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  return reply.send({
+    ok: chatGptOAuthStore.deleteAccount(accountId),
+    accounts: chatGptOAuthStore.listAccountsForUi(),
+  });
+});
 
 app.get("/api/client-configs/status", async (_request, reply) => {
+  ensureAccountBackedProvidersForExistingAccounts();
   return reply.send({
     ok: true,
     runtime: quickApplyRuntime,
     proxyBaseUrl: localProxyBaseUrl,
+    providerOptions: providerRepository.listProviderOptionsForClientSetup(),
     clients: {
       hermes: buildQuickApplyClientStatus("hermes"),
       codex: buildQuickApplyClientStatus("codex"),
@@ -300,8 +612,8 @@ app.post("/api/client-configs/apply", async (request, reply) => {
   const body = request.body as {
     client?: unknown;
     baseUrl?: unknown;
-    model?: unknown;
-    providerId?: unknown;
+    routeApiKey?: unknown;
+    clientApiKey?: unknown;
   } | undefined;
   const client = normalizeQuickApplyClient(body?.client);
   if (!client) {
@@ -318,11 +630,7 @@ app.post("/api/client-configs/apply", async (request, reply) => {
     typeof body?.baseUrl === "string" && body.baseUrl.trim()
       ? body.baseUrl.trim()
       : localProxyBaseUrl;
-  const requestedModel =
-    typeof body?.model === "string" && body.model.trim()
-      ? body.model.trim()
-      : providerRepository.getModelOverride(client);
-  const providerId = typeof body?.providerId === "string" ? body.providerId.trim() : "";
+  const requestedModel = providerRepository.getModelOverride(client);
   const access = getQuickApplyAccess(client);
   if (!access.canPatch) {
     return reply.code(409).send({
@@ -335,18 +643,29 @@ app.post("/api/client-configs/apply", async (request, reply) => {
   }
 
   const routeApiKeys = providerRepository.getClientRouteApiKeys(client);
-  const routeApiKey = routeApiKeys[0] || generateRouteApiKey(client);
+  const allClientApiKeys = providerRepository
+    .getClientRoutesForUi()
+    .filter((route) => route.key !== "default")
+    .flatMap((route) => route.apiKeys);
+  const requestedRouteApiKey =
+    typeof body?.routeApiKey === "string" && body.routeApiKey.trim()
+      ? body.routeApiKey.trim()
+      : typeof body?.clientApiKey === "string" && body.clientApiKey.trim()
+        ? body.clientApiKey.trim()
+        : "";
+  if (requestedRouteApiKey && !allClientApiKeys.includes(requestedRouteApiKey)) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "CLIENT_API_KEY_NOT_FOUND",
+        message: "Selected client API key does not belong to any configured client.",
+      },
+    });
+  }
+  const routeApiKey = requestedRouteApiKey || routeApiKeys[0] || generateRouteApiKey(client);
   if (!routeApiKeys.length) {
     providerRepository.setClientRouteApiKeys(client, [routeApiKey]);
   }
-  if (providerId) {
-    try {
-      providerRepository.setClientRoute(client, providerId);
-    } catch (error) {
-      return sendProviderRepositoryError(reply, error);
-    }
-  }
-
   const configPath = client === "hermes" ? quickApplyPaths.hermesConfigPath : quickApplyPaths.codexConfigPath;
   const currentRaw = readQuickConfigFile(configPath);
   const nextRaw = applyQuickConfig(currentRaw, {
@@ -374,8 +693,8 @@ app.post("/api/provider-routes", async (request, reply) => {
     return reply.code(400).send({
       error: {
         type: "validation_error",
-        code: "INVALID_CLIENT_ROUTE",
-        message: "client route is required",
+        code: "INVALID_CLIENT",
+        message: "client is required",
       },
     });
   }
@@ -398,28 +717,119 @@ app.post("/api/provider-routes", async (request, reply) => {
 });
 
 app.post("/api/clients", async (request, reply) => {
-  const body = request.body as { client?: unknown; providerId?: unknown } | undefined;
+  const body = request.body as {
+    client?: unknown;
+    providerId?: unknown;
+    model?: unknown;
+    apiKeys?: unknown;
+  } | undefined;
   if (typeof body?.client !== "string" || !body.client.trim()) {
     return reply.code(400).send({
       error: {
         type: "validation_error",
-        code: "INVALID_CLIENT_ROUTE",
-        message: "client route is required",
+        code: "INVALID_CLIENT",
+        message: "client is required",
       },
     });
   }
 
   try {
     const client = normalizeClientRouteKey(body.client);
-    const resolvedProviderId = providerRepository.addClientRoute(
+    const apiKeys = normalizeClientApiKeysInput(body?.apiKeys);
+    if (client !== "default" && apiKeys.length === 0) {
+      return reply.code(400).send({
+        error: {
+          type: "validation_error",
+          code: "CLIENT_API_KEY_REQUIRED",
+          message: "At least one client API key is required.",
+        },
+      });
+    }
+    providerRepository.addClientRoute(
       client,
       typeof body?.providerId === "string" ? body.providerId : undefined,
     );
+    providerRepository.setModelOverride(
+      client,
+      typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined,
+    );
+    providerRepository.setClientRouteApiKeys(client, apiKeys);
     return reply.code(201).send({
       ok: true,
       client,
       clientRoutes: providerRepository.getClientRoutesForUi(),
-      provider: providerRepository.getProviderForUiOrThrow(resolvedProviderId),
+      providerOptions: providerRepository.listProviderOptionsForClientSetup(),
+    });
+  } catch (error) {
+    return sendProviderRepositoryError(reply, error);
+  }
+});
+
+app.put("/api/clients/:client", async (request, reply) => {
+  const params = request.params as { client?: string };
+  const body = request.body as { providerId?: unknown; model?: unknown; apiKeys?: unknown } | undefined;
+  if (typeof params.client !== "string" || !params.client.trim()) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_CLIENT",
+        message: "client is required",
+      },
+    });
+  }
+
+  try {
+    const client = normalizeClientRouteKey(params.client);
+    const apiKeys = normalizeClientApiKeysInput(body?.apiKeys);
+    if (client !== "default" && apiKeys.length === 0) {
+      return reply.code(400).send({
+        error: {
+          type: "validation_error",
+          code: "CLIENT_API_KEY_REQUIRED",
+          message: "At least one client API key is required.",
+        },
+      });
+    }
+    providerRepository.setClientRoute(
+      client,
+      typeof body?.providerId === "string" ? body.providerId : undefined,
+    );
+    providerRepository.setModelOverride(
+      client,
+      typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined,
+    );
+    providerRepository.setClientRouteApiKeys(client, apiKeys);
+    return reply.send({
+      ok: true,
+      client,
+      clientRoutes: providerRepository.getClientRoutesForUi(),
+      providerOptions: providerRepository.listProviderOptionsForClientSetup(),
+    });
+  } catch (error) {
+    return sendProviderRepositoryError(reply, error);
+  }
+});
+
+app.delete("/api/clients/:client", async (request, reply) => {
+  const params = request.params as { client?: string };
+  if (typeof params.client !== "string" || !params.client.trim()) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_CLIENT",
+        message: "client is required",
+      },
+    });
+  }
+
+  try {
+    const client = normalizeClientRouteKey(params.client);
+    providerRepository.deleteClientRoute(client);
+    return reply.send({
+      ok: true,
+      client,
+      clientRoutes: providerRepository.getClientRoutesForUi(),
+      providerOptions: providerRepository.listProviderOptionsForClientSetup(),
     });
   } catch (error) {
     return sendProviderRepositoryError(reply, error);
@@ -636,13 +1046,15 @@ app.get("/v1/models", async (request, reply) => {
   }
   const selectedProvider = providerResolution.provider;
 
-  const providerApiKey = getDefaultProviderApiKey(selectedProvider);
+  const target = await buildForwardTarget(selectedProvider);
   const response = await fetch(`${selectedProvider.baseUrl.replace(/\/+$/, "")}/models`, {
-    headers: providerApiKey
-      ? {
-          Authorization: `Bearer ${providerApiKey}`,
-        }
-      : undefined,
+    headers:
+      target.headers ??
+      (target.apiKey
+        ? {
+            Authorization: `Bearer ${target.apiKey}`,
+          }
+        : undefined),
   });
 
   if (!response.ok) {
@@ -1000,7 +1412,9 @@ async function handleResponsesRequest(
         ? (error as { body?: string }).body
         : undefined;
     const errorCode =
-      error instanceof ProviderUsageLimitError
+      error instanceof AccountPoolAuthError
+        ? error.body.code
+        : error instanceof ProviderUsageLimitError
         ? error.code
         : statusCode >= 500
           ? "UPSTREAM_REQUEST_FAILED"
@@ -1315,6 +1729,11 @@ function resolveClientRoute(
   body: Record<string, unknown>,
   routingApiKey?: string,
 ): ClientRouteKey {
+  const routedByApiKey = providerRepository.findClientRouteByApiKey(routingApiKey);
+  if (routedByApiKey) {
+    return routedByApiKey;
+  }
+
   const headerValue = readHeaderString(headers["x-client-route"]);
   if (headerValue) {
     return normalizeClientRouteKey(headerValue);
@@ -1323,11 +1742,6 @@ function resolveClientRoute(
   const metadataValue = readMetadataClientRoute(body.metadata);
   if (metadataValue) {
     return normalizeClientRouteKey(metadataValue);
-  }
-
-  const routedByApiKey = providerRepository.findClientRouteByApiKey(routingApiKey);
-  if (routedByApiKey) {
-    return routedByApiKey;
   }
 
   return "default";
@@ -1374,6 +1788,7 @@ type ForwardTarget = {
   name: string;
   url: string;
   apiKey?: string;
+  headers?: Record<string, string>;
 };
 
 async function resolveForwardTarget(args: {
@@ -1387,11 +1802,7 @@ async function resolveForwardTarget(args: {
   const activeProvider =
     (args.providerId ? providerRepository.getProvider(args.providerId) : undefined) ??
     requireProviderPresetForClient(args.clientRoute);
-  const primaryTarget: ForwardTarget = {
-    name: activeProvider.id,
-    url: activeProvider.responsesUrl,
-    apiKey: getDefaultProviderApiKey(activeProvider),
-  };
+  const primaryTarget = await buildForwardTarget(activeProvider);
 
   try {
     await runPrimaryPreflight(args);
@@ -1418,12 +1829,33 @@ async function resolveForwardTarget(args: {
       reason: error instanceof Error ? error.message : "Unknown preflight error",
     });
 
+    return buildForwardTarget(fallbackProvider);
+  }
+}
+
+async function buildForwardTarget(provider: RuntimeProviderPreset): Promise<ForwardTarget> {
+  if (provider.authMode === "chatgpt_oauth") {
+    const accessToken = await resolveChatGptAccessToken({
+      provider,
+      store: chatGptOAuthStore,
+      config,
+      rotationMode: chatGptOAuthStore.getRotationMode(),
+    });
     return {
-      name: fallbackProvider.id,
-      url: fallbackProvider.responsesUrl,
-      apiKey: getDefaultProviderApiKey(fallbackProvider),
+      name: provider.id,
+      url: provider.responsesUrl,
+      headers: {
+        ...buildChatGptCodexHeaders(),
+        Authorization: `Bearer ${accessToken}`,
+      },
     };
   }
+
+  return {
+    name: provider.id,
+    url: provider.responsesUrl,
+    apiKey: getDefaultProviderApiKey(provider),
+  };
 }
 
 async function forwardJsonWithFallback(args: {
@@ -1450,6 +1882,7 @@ async function forwardJsonWithFallback(args: {
     url: primaryTarget.url,
     body: args.body,
     apiKey: primaryTarget.apiKey,
+    headers: primaryTarget.headers,
     timeoutMs,
     logger: args.logger,
     onEvent: (entry) => args.sessionLog.write(entry),
@@ -1478,11 +1911,13 @@ async function forwardJsonWithFallback(args: {
     throw new Error("Fallback provider is not configured");
   }
 
+  const fallbackTarget = await buildForwardTarget(fallbackProvider);
   const fallbackResponse = await forwardJson({
     requestId: args.requestId,
-    url: fallbackProvider.responsesUrl,
+    url: fallbackTarget.url,
     body: rewriteBodyForProvider(args.body, fallbackProvider),
-    apiKey: getDefaultProviderApiKey(fallbackProvider),
+    apiKey: fallbackTarget.apiKey,
+    headers: fallbackTarget.headers,
     timeoutMs,
     logger: args.logger,
     onEvent: (entry) => args.sessionLog.write(entry),
@@ -1494,11 +1929,7 @@ async function forwardJsonWithFallback(args: {
 
   return {
     upstream: fallbackResponse,
-    target: {
-      name: fallbackProvider.id,
-      url: fallbackProvider.responsesUrl,
-      apiKey: getDefaultProviderApiKey(fallbackProvider),
-    },
+    target: fallbackTarget,
   };
 }
 
@@ -1681,6 +2112,7 @@ async function forwardSseWithFallback(args: {
       url: primaryTarget.url,
       body: args.body,
       apiKey: primaryTarget.apiKey,
+      headers: primaryTarget.headers,
       timeoutMs,
       idleTimeoutMs: config.STREAM_IDLE_TIMEOUT_MS,
       responseRaw: args.responseRaw,
@@ -1705,11 +2137,13 @@ async function forwardSseWithFallback(args: {
     }
 
     await logFallbackAttempt(args, "request", error);
+    const fallbackTarget = await buildForwardTarget(fallbackProvider);
     await forwardSse({
       requestId: args.requestId,
-      url: fallbackProvider.responsesUrl,
+      url: fallbackTarget.url,
       body: rewriteBodyForProvider(args.body, fallbackProvider),
-      apiKey: getDefaultProviderApiKey(fallbackProvider),
+      apiKey: fallbackTarget.apiKey,
+      headers: fallbackTarget.headers,
       timeoutMs,
       idleTimeoutMs: config.STREAM_IDLE_TIMEOUT_MS,
       responseRaw: args.responseRaw,
@@ -1722,22 +2156,20 @@ async function forwardSseWithFallback(args: {
         });
       },
     });
-    return {
-      name: fallbackProvider.id,
-      url: fallbackProvider.responsesUrl,
-      apiKey: getDefaultProviderApiKey(fallbackProvider),
-    };
+    return fallbackTarget;
   }
 }
 
 async function fetchProviderModels(provider: RuntimeProviderPreset): Promise<string[]> {
-  const providerApiKey = getDefaultProviderApiKey(provider);
+  const target = await buildForwardTarget(provider);
   const response = await fetch(`${provider.baseUrl.replace(/\/+$/, "")}/models`, {
-    headers: providerApiKey
-      ? {
-          Authorization: `Bearer ${providerApiKey}`,
-        }
-      : undefined,
+    headers:
+      target.headers ??
+      (target.apiKey
+        ? {
+            Authorization: `Bearer ${target.apiKey}`,
+          }
+        : undefined),
   });
 
   if (!response.ok) {
@@ -1772,7 +2204,7 @@ function requireProviderPresetForClient(client: ClientRouteKey): RuntimeProvider
   throw new RuntimeProviderError(503, {
     type: "configuration_error",
     code: "NO_PROVIDER_FOR_CLIENT",
-    message: `No provider is configured for client route ${client}`,
+    message: `No provider is configured for client ${client}`,
   });
 }
 
@@ -1794,6 +2226,170 @@ function getFallbackProviderPreset(): RuntimeProviderPreset | undefined {
 
 function getDefaultProviderApiKey(provider: RuntimeProviderPreset): string | undefined {
   return provider.providerApiKeys[0];
+}
+
+async function completeChatGptOAuthCallback(state: string, code: string) {
+  const session = chatGptOAuthStore.consumeSession(state);
+  const bundle = await exchangeChatGptCodeForTokens(
+    config,
+    code,
+    session.redirectUri,
+    session.codeVerifier,
+  );
+  const storedAccount = chatGptOAuthStore.upsertAccount(bundle);
+  const provider = ensureChatGptOAuthProvider();
+  return {
+    account: redactAccount(storedAccount),
+    provider: providerRepository.getProviderForUiOrThrow(provider.id),
+  };
+}
+
+function ensureAccountBackedProvidersForExistingAccounts(): void {
+  if (!config.CHATGPT_OAUTH_ENABLED) {
+    return;
+  }
+  if (!chatGptOAuthStore.listAccountsForUi().length) {
+    return;
+  }
+  ensureChatGptOAuthProvider();
+}
+
+function parseChatGptOAuthCallbackInput(input: unknown): {
+  code: string;
+  state: string;
+  errorMessage: string;
+} {
+  const record =
+    typeof input === "object" && input !== null && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : {};
+  const rawUrl =
+    stringOrUndefined(record.redirectUrl) ??
+    stringOrUndefined(record.redirect_url) ??
+    stringOrUndefined(record.callbackUrl) ??
+    stringOrUndefined(record.callback_url) ??
+    stringOrUndefined(record.url);
+  const urlParams = parseUrlSearchParams(rawUrl);
+  const code = stringOrUndefined(record.code) ?? urlParams?.get("code")?.trim() ?? "";
+  const state = stringOrUndefined(record.state) ?? urlParams?.get("state")?.trim() ?? "";
+  const errorMessage =
+    stringOrUndefined(record.error_description) ??
+    stringOrUndefined(record.errorDescription) ??
+    stringOrUndefined(record.error) ??
+    urlParams?.get("error_description")?.trim() ??
+    urlParams?.get("error")?.trim() ??
+    "";
+  return { code, state, errorMessage };
+}
+
+function parseUrlSearchParams(rawUrl?: string): URLSearchParams | undefined {
+  if (!rawUrl) {
+    return undefined;
+  }
+  try {
+    return new URL(rawUrl).searchParams;
+  } catch {
+    const queryStart = rawUrl.indexOf("?");
+    if (queryStart === -1) {
+      return undefined;
+    }
+    return new URLSearchParams(rawUrl.slice(queryStart + 1));
+  }
+}
+
+function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
+  const existing = providerRepository.listProviders().find(
+    (provider) =>
+      provider.id === CHATGPT_OAUTH_PROVIDER_ID ||
+      (provider.authMode === "chatgpt_oauth" && !provider.chatgptAccountId),
+  );
+  if (existing) {
+    if (
+      existing.capabilities.systemManaged &&
+      existing.capabilities.accountPlatform === "openai_codex" &&
+      existing.capabilities.accountPoolRequired
+    ) {
+      return existing;
+    }
+    return providerRepository.updateProvider(existing.id, {
+      name:
+        !existing.name || existing.name === "ChatGPT OAuth"
+          ? "OpenAI / Codex Account Pool"
+          : existing.name,
+      baseUrl: existing.baseUrl,
+      authMode: "chatgpt_oauth",
+      providerApiKeys: existing.providerApiKeys,
+      clientApiKeys: existing.clientApiKeys,
+      capabilities: {
+        ...existing.capabilities,
+        ownedBy: existing.capabilities.ownedBy || "account-auth",
+        systemManaged: true,
+        accountPlatform: "openai_codex",
+        accountPoolRequired: true,
+      },
+    });
+  }
+  const legacyPerAccountProvider = providerRepository
+    .listProviders()
+    .find((provider) => provider.authMode === "chatgpt_oauth");
+  if (legacyPerAccountProvider) {
+    return providerRepository.updateProvider(legacyPerAccountProvider.id, {
+      name: "OpenAI / Codex Account Pool",
+      baseUrl: config.CHATGPT_CODEX_BASE_URL,
+      authMode: "chatgpt_oauth",
+      providerApiKeys: [],
+      clientApiKeys: legacyPerAccountProvider.clientApiKeys,
+      capabilities: {
+        ...legacyPerAccountProvider.capabilities,
+        ownedBy: "chatgpt-oauth",
+        systemManaged: true,
+        accountPlatform: "openai_codex",
+        accountPoolRequired: true,
+      },
+    });
+  }
+  return providerRepository.createProvider({
+    id: CHATGPT_OAUTH_PROVIDER_ID,
+    name: "OpenAI / Codex Account Pool",
+    baseUrl: config.CHATGPT_CODEX_BASE_URL,
+    authMode: "chatgpt_oauth",
+    providerApiKeys: [],
+    clientApiKeys: [],
+    capabilities: {
+      ownedBy: "chatgpt-oauth",
+      systemManaged: true,
+      accountPlatform: "openai_codex",
+      accountPoolRequired: true,
+    },
+  });
+}
+
+function renderOAuthResultPage(message: string, providerId?: string): string {
+  const escapedMessage = escapeHtml(message);
+  const providerText = providerId ? `<p>Provider: <code>${escapeHtml(providerId)}</code></p>` : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChatGPT OAuth</title>
+</head>
+<body>
+  <h1>ChatGPT OAuth</h1>
+  <p>${escapedMessage}</p>
+  ${providerText}
+  <p>You can close this window and return to Responses Proxy.</p>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function buildInflightDedupeKey(
@@ -1836,10 +2432,14 @@ function buildQuickApplyClientStatus(
   const pathToRead = client === "hermes" ? quickApplyPaths.hermesConfigPath : quickApplyPaths.codexConfigPath;
   const route = providerRepository.getClientRoutesForUi().find((entry) => entry.key === client);
   const routeApiKeys = providerRepository.getClientRouteApiKeys(client);
-  const routeApiKey = routeApiKeys[0] || "";
+  const allClientApiKeys = providerRepository
+    .getClientRoutesForUi()
+    .filter((entry) => entry.key !== "default")
+    .flatMap((entry) => entry.apiKeys);
+  let routeApiKey = routeApiKeys[0] || "";
   const access = getQuickApplyAccess(client);
   const raw = readQuickConfigFile(pathToRead);
-  const status = readQuickApplyStatus(
+  let status = readQuickApplyStatus(
     raw,
     {
       client,
@@ -1849,6 +2449,20 @@ function buildQuickApplyClientStatus(
     },
     pathToRead,
   );
+  const detectedApiKey = typeof status.detected.apiKey === "string" ? status.detected.apiKey : "";
+  if (detectedApiKey && allClientApiKeys.includes(detectedApiKey) && detectedApiKey !== routeApiKey) {
+    routeApiKey = detectedApiKey;
+    status = readQuickApplyStatus(
+      raw,
+      {
+        client,
+        proxyBaseUrl,
+        routeApiKey,
+        model: providerRepository.getModelOverride(client),
+      },
+      pathToRead,
+    );
+  }
 
   return {
     ...status,
@@ -1906,6 +2520,17 @@ function getQuickApplyAccess(client: QuickApplyClient) {
       `and set ${client === "hermes" ? "QUICK_APPLY_HERMES_CONFIG_PATH" : "QUICK_APPLY_CODEX_CONFIG_PATH"} ` +
       "to that mounted path before using this action.",
   };
+}
+
+function normalizeClientApiKeysInput(value: unknown): string[] {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n|,/g)
+      : [];
+  return rawValues
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
 }
 
 function rewriteModelForProvider(model: string, provider: RuntimeProviderPreset): string {

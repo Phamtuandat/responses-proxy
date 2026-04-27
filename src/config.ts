@@ -33,6 +33,47 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => value === "true"),
+  CHATGPT_OAUTH_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  CHATGPT_OAUTH_CLIENT_ID: z.string().min(1).default("app_EMoamEEZ73f0CkXaXp7hrann"),
+  CHATGPT_OAUTH_REDIRECT_URI: z
+    .string()
+    .min(1)
+    .default("http://localhost:1455/auth/callback"),
+  CHATGPT_OAUTH_CALLBACK_PORT: z.coerce.number().int().positive().default(1455),
+  CHATGPT_OAUTH_AUTH_URL: z
+    .string()
+    .min(1)
+    .default("https://auth.openai.com/oauth/authorize")
+    .pipe(z.url()),
+  CHATGPT_OAUTH_TOKEN_URL: z
+    .string()
+    .min(1)
+    .default("https://auth.openai.com/oauth/token")
+    .pipe(z.url()),
+  CHATGPT_OAUTH_DEVICE_USER_CODE_URL: z
+    .string()
+    .min(1)
+    .default("https://auth.openai.com/api/accounts/deviceauth/usercode")
+    .pipe(z.url()),
+  CHATGPT_OAUTH_DEVICE_TOKEN_URL: z
+    .string()
+    .min(1)
+    .default("https://auth.openai.com/api/accounts/deviceauth/token")
+    .pipe(z.url()),
+  CHATGPT_OAUTH_DEVICE_VERIFICATION_URL: z
+    .string()
+    .min(1)
+    .default("https://auth.openai.com/codex/device")
+    .pipe(z.url()),
+  CHATGPT_CODEX_BASE_URL: z
+    .string()
+    .min(1)
+    .default("https://chatgpt.com/backend-api/codex")
+    .pipe(z.url()),
+  CHATGPT_OAUTH_REFRESH_LEAD_DAYS: z.coerce.number().positive().default(5),
   OPENCLAW_TOKEN_OPTIMIZATION_ENABLED: z
     .string()
     .optional()

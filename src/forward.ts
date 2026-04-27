@@ -6,6 +6,7 @@ type ForwardJsonArgs = {
   url: string;
   body: Record<string, unknown>;
   apiKey?: string;
+  headers?: Record<string, string>;
   timeoutMs: number;
   logger: FastifyBaseLogger;
   onEvent?: (entry: Record<string, unknown>) => Promise<void> | void;
@@ -26,6 +27,7 @@ export async function forwardJson({
   url,
   body,
   apiKey,
+  headers,
   timeoutMs,
   logger,
   onEvent,
@@ -37,7 +39,7 @@ export async function forwardJson({
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers: buildHeaders(apiKey),
+      headers: buildHeaders(apiKey, headers),
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -68,6 +70,7 @@ export async function forwardSse({
   url,
   body,
   apiKey,
+  headers,
   timeoutMs,
   idleTimeoutMs,
   responseRaw,
@@ -82,10 +85,10 @@ export async function forwardSse({
   try {
     upstream = await fetch(url, {
       method: "POST",
-      headers: {
-        ...buildHeaders(apiKey),
+      headers: buildHeaders(apiKey, {
+        ...headers,
         Accept: "text/event-stream",
-      },
+      }),
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -433,9 +436,10 @@ export async function buildUpstreamError(
   return error;
 }
 
-function buildHeaders(apiKey?: string): Record<string, string> {
+function buildHeaders(apiKey?: string, extraHeaders?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...extraHeaders,
   };
 
   if (apiKey) {
