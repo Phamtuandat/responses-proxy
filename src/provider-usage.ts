@@ -20,6 +20,9 @@ export type ProviderUsageSnapshot = {
   raw: unknown;
 };
 
+export const OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL =
+  "https://api.openai.com/v1/organization/usage/completions";
+
 type CheckProviderUsageArgs = {
   apiKey?: string;
   requestId: string;
@@ -114,6 +117,87 @@ export async function fetchProviderUsage({
       requestId,
       errorMessage: error instanceof Error ? error.message : "Unknown usage check error",
     });
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function fetchOpenAiCompletionsUsage({
+  accessToken,
+  requestId,
+  logger,
+  timeoutMs,
+  url = OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL,
+  now = new Date(),
+}: {
+  accessToken?: string;
+  requestId: string;
+  logger: FastifyBaseLogger;
+  timeoutMs: number;
+  url?: string;
+  now?: Date;
+}): Promise<ProviderUsageSnapshot | undefined> {
+  if (!accessToken) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+  const endTime = Math.floor(now.getTime() / 1000);
+  const startTime = endTime - 24 * 60 * 60;
+  const usageUrl = new URL(url);
+  usageUrl.searchParams.set("start_time", String(startTime));
+  usageUrl.searchParams.set("end_time", String(endTime));
+  usageUrl.searchParams.set("bucket_width", "1d");
+  usageUrl.searchParams.set("group_by", "model");
+
+  try {
+    const response = await fetch(usageUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal: controller.signal,
+    });
+    const rawText = await response.text();
+    const rawPayload = parseJsonSafely(rawText);
+
+    if (!response.ok) {
+      logger.warn(
+        {
+          requestId,
+          usageCheckStatus: response.status,
+          usageCheckBody: rawText,
+        },
+        "openai usage request failed",
+      );
+      return {
+        allowed: false,
+        raw: rawPayload,
+      };
+    }
+
+    const usage = extractOpenAiUsageSnapshot(rawPayload);
+    logger.info(
+      {
+        requestId,
+        usageCheckStatus: response.status,
+        usageCheckMs: Date.now() - startedAt,
+        usageUsed: usage.used,
+      },
+      "openai usage request completed",
+    );
+    return usage;
+  } catch (error) {
+    logger.warn(
+      {
+        err: error,
+        requestId,
+      },
+      "openai usage request skipped after request error",
+    );
     return undefined;
   } finally {
     clearTimeout(timeout);
@@ -222,6 +306,30 @@ function extractUsageSnapshot(raw: unknown): ProviderUsageSnapshot {
   };
 }
 
+function extractOpenAiUsageSnapshot(raw: unknown): ProviderUsageSnapshot {
+  const buckets = isRecord(raw) && Array.isArray(raw.data) ? raw.data : [];
+  let used = 0;
+  for (const bucket of buckets) {
+    if (!isRecord(bucket) || !Array.isArray(bucket.results)) {
+      continue;
+    }
+    for (const result of bucket.results) {
+      if (!isRecord(result)) {
+        continue;
+      }
+      used += toFiniteNumber(result.input_tokens) ?? 0;
+      used += toFiniteNumber(result.output_tokens) ?? 0;
+      used += toFiniteNumber(result.input_audio_tokens) ?? 0;
+      used += toFiniteNumber(result.output_audio_tokens) ?? 0;
+    }
+  }
+  return {
+    allowed: true,
+    used,
+    raw,
+  };
+}
+
 function deriveAllowed(raw: unknown, allowed: boolean | undefined): boolean | undefined {
   const isExpired = firstBoolean(raw, [["isExpired"], ["data", "isExpired"], ["result", "isExpired"]]);
   const isActive = firstBoolean(raw, [["isActive"], ["data", "isActive"], ["result", "isActive"]]);
@@ -245,6 +353,10 @@ function parseJsonSafely(value: string): unknown {
   } catch {
     return value;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function firstFiniteNumber(payload: unknown, paths: string[][]): number | undefined {

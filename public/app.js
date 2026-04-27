@@ -27,13 +27,12 @@ const screens = {
   [ROUTES.cache]: document.getElementById("screen-cache"),
 };
 
-const form = document.getElementById("check-form");
-const submitBtn = document.getElementById("submitBtn");
-const statusEl = document.getElementById("status");
-const allowedEl = document.getElementById("allowed");
-const remainingEl = document.getElementById("remaining");
-const usedLimitEl = document.getElementById("usedLimit");
-const rawEl = document.getElementById("raw");
+const usageLiveStatusEl = document.getElementById("usageLiveStatus");
+const usageProviderCountEl = document.getElementById("usageProviderCount");
+const usageOkCountEl = document.getElementById("usageOkCount");
+const usageUpdatedAtEl = document.getElementById("usageUpdatedAt");
+const usageLiveTableBodyEl = document.getElementById("usageLiveTableBody");
+const usageRawEl = document.getElementById("usageRaw");
 
 const cachePillEl = document.getElementById("cachePill");
 const cacheProviderSelectEl = document.getElementById("cacheProviderSelect");
@@ -208,6 +207,8 @@ let usageStatsState = null;
 let clientConfigState = null;
 let clientConfigModelCache = {};
 let clientConfigModelSelections = {};
+let usageLiveState = null;
+let usageLiveTimerId = 0;
 let currentRoute = "";
 let selectedCacheProviderId = "";
 let providerSearchTerm = "";
@@ -253,6 +254,7 @@ function setRoute(routeState) {
   if (routeState.name === ROUTES.clientEdit) {
     hydrateClientEditorFromRoute(routeState.query);
   }
+  syncUsageLivePolling();
   refreshActiveRoute();
 }
 
@@ -2669,6 +2671,103 @@ async function refreshUsageStats() {
   renderCacheProviderStats();
 }
 
+function renderLiveUsage() {
+  const providers = Array.isArray(usageLiveState?.providers) ? usageLiveState.providers : [];
+  if (usageProviderCountEl) usageProviderCountEl.textContent = formatNumber(providers.length);
+  if (usageOkCountEl) {
+    usageOkCountEl.textContent = formatNumber(
+      providers.filter((entry) => entry.ok === true && entry.usage?.allowed !== false).length,
+    );
+  }
+  if (usageUpdatedAtEl) {
+    usageUpdatedAtEl.textContent = usageLiveState?.timestamp
+      ? new Date(usageLiveState.timestamp).toLocaleTimeString()
+      : "-";
+  }
+  if (usageRawEl) {
+    usageRawEl.textContent = JSON.stringify(usageLiveState || {}, null, 2);
+  }
+  if (!usageLiveTableBodyEl) return;
+
+  usageLiveTableBodyEl.innerHTML = "";
+  if (!providers.length) {
+    const row = document.createElement("tr");
+    row.innerHTML = '<td colspan="5" class="mono">No provider usage data yet</td>';
+    usageLiveTableBodyEl.appendChild(row);
+    return;
+  }
+
+  for (const entry of providers) {
+    const usage = entry.usage || {};
+    const source =
+      entry.source === "openai_organization_usage"
+        ? "OpenAI Usage API"
+        : entry.configured
+          ? "Provider usage URL"
+          : "Not configured";
+    const status = entry.ok
+      ? usage.allowed === false
+        ? "Blocked"
+        : "Usable"
+      : entry.error || "Unavailable";
+    const row = document.createElement("tr");
+    row.innerHTML =
+      `<td><strong>${escapeHtml(entry.providerName || entry.providerId || "-")}</strong><div class="meta mono">${escapeHtml(entry.providerId || "-")}</div></td>` +
+      `<td>${escapeHtml(source)}</td>` +
+      `<td><span class="provider-badge">${escapeHtml(status)}</span></td>` +
+      `<td>${usage.remaining ?? "unknown"}</td>` +
+      `<td>${usage.used !== undefined || usage.limit !== undefined ? `${usage.used ?? "?"} / ${usage.limit ?? "?"}` : "unknown"}</td>`;
+    usageLiveTableBodyEl.appendChild(row);
+  }
+}
+
+async function refreshLiveUsage() {
+  if (currentRoute !== ROUTES.usage) {
+    return;
+  }
+  if (usageLiveStatusEl) {
+    usageLiveStatusEl.textContent = "Refreshing...";
+  }
+  try {
+    const response = await fetch("/api/providers/live-usage", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not load live usage");
+    }
+    usageLiveState = data;
+    if (usageLiveStatusEl) {
+      usageLiveStatusEl.textContent = "Live";
+    }
+  } catch (error) {
+    usageLiveState = {
+      timestamp: new Date().toISOString(),
+      providers: [],
+      error: error instanceof Error ? error.message : "Could not load live usage",
+    };
+    if (usageLiveStatusEl) {
+      usageLiveStatusEl.textContent = "Error";
+    }
+  }
+  renderLiveUsage();
+}
+
+function syncUsageLivePolling() {
+  if (usageLiveTimerId) {
+    window.clearInterval(usageLiveTimerId);
+    usageLiveTimerId = 0;
+  }
+  if (currentRoute !== ROUTES.usage) {
+    if (usageLiveStatusEl) {
+      usageLiveStatusEl.textContent = "Idle";
+    }
+    return;
+  }
+  void refreshLiveUsage();
+  usageLiveTimerId = window.setInterval(() => {
+    void refreshLiveUsage();
+  }, 15000);
+}
+
 async function refreshDashboard() {
   await refreshProviders();
   await refreshCacheSnapshot("");
@@ -2730,6 +2829,10 @@ async function refreshActiveRoute() {
   if (currentRoute === ROUTES.rtk) {
     await refreshProviders();
     await refreshUsageStats();
+    return;
+  }
+  if (currentRoute === ROUTES.usage) {
+    await refreshProviders();
     return;
   }
   if (currentRoute === ROUTES.cache) {
@@ -2932,47 +3035,6 @@ codexConfigApiKeySelectEl?.addEventListener("change", () => {
 
 codexConfigModelSelectEl?.addEventListener("change", () => {
   clientConfigModelSelections.codex = codexConfigModelSelectEl.value || "";
-});
-
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const apiKey = document.getElementById("apiKey").value.trim();
-  if (!apiKey) return;
-
-  submitBtn.disabled = true;
-  submitBtn.textContent = "Checking...";
-  statusEl.hidden = false;
-  statusEl.className = "status";
-  statusEl.textContent = "Checking provider usage...";
-
-  try {
-    const response = await fetch("/api/providers/check-usage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey }),
-    });
-    const data = await response.json();
-    if (!response.ok || data.error) throw new Error(data.error?.message || "Request failed");
-    const usage = data.usage || {};
-    allowedEl.textContent = usage.allowed === undefined ? "unknown" : String(usage.allowed);
-    remainingEl.textContent = usage.remaining ?? "unknown";
-    usedLimitEl.textContent =
-      usage.used !== undefined || usage.limit !== undefined
-        ? String(usage.used ?? "?") + " / " + String(usage.limit ?? "?")
-        : "unknown";
-    rawEl.textContent = JSON.stringify(data.raw, null, 2);
-    const ok = Boolean(data.ok);
-    statusEl.className = ok ? "status ok" : "status bad";
-    statusEl.textContent = ok
-      ? "The upstream provider key is still usable."
-      : "The upstream provider key is exhausted or not allowed.";
-  } catch (error) {
-    statusEl.className = "status bad";
-    statusEl.textContent = error instanceof Error ? error.message : "Unexpected error";
-  } finally {
-    submitBtn.disabled = false;
-    submitBtn.textContent = "Check usage";
-  }
 });
 
 customProviderBtnEl.addEventListener("click", async () => {

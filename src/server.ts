@@ -31,8 +31,10 @@ import {
 } from "./client-config-apply.js";
 import { buildUpstreamError, forwardJson, forwardSse } from "./forward.js";
 import {
+  OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL,
   ProviderUsageLimitError,
   ensureProviderUsageAvailable,
+  fetchOpenAiCompletionsUsage,
   fetchProviderUsage,
 } from "./provider-usage.js";
 import {
@@ -1073,6 +1075,20 @@ async function handleProviderUsageCheck(
 app.post("/api/providers/check-usage", async (request, reply) =>
   handleProviderUsageCheck(request, reply),
 );
+
+app.get("/api/providers/live-usage", async (request, reply) => {
+  ensureAccountBackedProvidersForExistingAccounts();
+  const requestId = randomUUID();
+  const providers = providerRepository.listProviders();
+  const entries = await Promise.all(
+    providers.map((provider) => buildLiveProviderUsageEntry(provider, requestId, request.log)),
+  );
+  return reply.send({
+    ok: true,
+    timestamp: new Date().toISOString(),
+    providers: entries,
+  });
+});
 
 app.get("/v1/models", async (request, reply) => {
   const routingApiKey = readBearerToken(request.headers.authorization);
@@ -2351,7 +2367,9 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
     if (
       existing.capabilities.systemManaged &&
       existing.capabilities.accountPlatform === "openai_codex" &&
-      existing.capabilities.accountPoolRequired
+      existing.capabilities.accountPoolRequired &&
+      existing.capabilities.usageCheckEnabled === true &&
+      existing.capabilities.usageCheckUrl === OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL
     ) {
       return existing;
     }
@@ -2370,6 +2388,8 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
         systemManaged: true,
         accountPlatform: "openai_codex",
         accountPoolRequired: true,
+        usageCheckEnabled: true,
+        usageCheckUrl: OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL,
       },
     });
   }
@@ -2389,6 +2409,8 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
         systemManaged: true,
         accountPlatform: "openai_codex",
         accountPoolRequired: true,
+        usageCheckEnabled: true,
+        usageCheckUrl: OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL,
       },
     });
   }
@@ -2404,6 +2426,8 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
       systemManaged: true,
       accountPlatform: "openai_codex",
       accountPoolRequired: true,
+      usageCheckEnabled: true,
+      usageCheckUrl: OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL,
     },
   });
 }
@@ -2618,6 +2642,100 @@ function summarizeUsage(usage: {
     limit: usage.limit,
     used: usage.used,
   };
+}
+
+async function buildLiveProviderUsageEntry(
+  provider: RuntimeProviderPreset,
+  requestId: string,
+  logger: FastifyBaseLogger,
+): Promise<Record<string, unknown>> {
+  const base = {
+    providerId: provider.id,
+    providerName: provider.name,
+    authMode: provider.authMode ?? "api_key",
+    upstreamKeyCount: provider.providerApiKeys.length,
+    usageCheckEnabled: isOpenAiCodexOAuthProvider(provider)
+      ? true
+      : provider.capabilities.usageCheckEnabled,
+    usageCheckUrl: isOpenAiCodexOAuthProvider(provider)
+      ? OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL
+      : provider.capabilities.usageCheckUrl ?? null,
+    timestamp: new Date().toISOString(),
+  };
+
+  if (isOpenAiCodexOAuthProvider(provider)) {
+    try {
+      const usage = await fetchOpenAiCompletionsUsage({
+        accessToken: await resolveChatGptAccessToken({
+          provider,
+          store: chatGptOAuthStore,
+          config,
+          rotationMode: chatGptOAuthStore.getRotationMode(),
+        }),
+        requestId,
+        logger,
+        timeoutMs: config.REQUEST_TIMEOUT_MS,
+        url: OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL,
+      });
+      return {
+        ...base,
+        source: "openai_organization_usage",
+        configured: true,
+        ok: Boolean(usage) && usage?.allowed !== false,
+        usage: usage ? summarizeUsage(usage) : null,
+        raw: usage?.raw ?? null,
+      };
+    } catch (error) {
+      return {
+        ...base,
+        source: "openai_organization_usage",
+        configured: true,
+        ok: false,
+        error: error instanceof Error ? error.message : "Could not fetch OpenAI usage",
+      };
+    }
+  }
+
+  if (!provider.capabilities.usageCheckEnabled || !provider.capabilities.usageCheckUrl) {
+    return {
+      ...base,
+      source: "custom_provider_usage_check",
+      configured: false,
+      ok: false,
+      error: "Usage check is not configured for this provider.",
+    };
+  }
+
+  const apiKey = getDefaultProviderApiKey(provider);
+  if (!apiKey) {
+    return {
+      ...base,
+      source: "custom_provider_usage_check",
+      configured: true,
+      ok: false,
+      error: "No upstream provider API key is configured.",
+    };
+  }
+
+  const usage = await fetchProviderUsage({
+    apiKey,
+    requestId,
+    logger,
+    timeoutMs: config.REQUEST_TIMEOUT_MS,
+    url: provider.capabilities.usageCheckUrl,
+  });
+  return {
+    ...base,
+    source: "custom_provider_usage_check",
+    configured: true,
+    ok: Boolean(usage) && usage?.allowed !== false,
+    usage: usage ? summarizeUsage(usage) : null,
+    raw: usage?.raw ?? null,
+  };
+}
+
+function isOpenAiCodexOAuthProvider(provider: RuntimeProviderPreset): boolean {
+  return provider.authMode === "chatgpt_oauth" && provider.capabilities.accountPlatform === "openai_codex";
 }
 
 function readStringField(payload: unknown, key: string): string | undefined {
