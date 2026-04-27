@@ -614,6 +614,7 @@ app.post("/api/client-configs/apply", async (request, reply) => {
     baseUrl?: unknown;
     routeApiKey?: unknown;
     clientApiKey?: unknown;
+    model?: unknown;
   } | undefined;
   const client = normalizeQuickApplyClient(body?.client);
   if (!client) {
@@ -630,7 +631,19 @@ app.post("/api/client-configs/apply", async (request, reply) => {
     typeof body?.baseUrl === "string" && body.baseUrl.trim()
       ? body.baseUrl.trim()
       : localProxyBaseUrl;
-  const requestedModel = providerRepository.getModelOverride(client);
+  const requestedModel =
+    typeof body?.model === "string" && body.model.trim()
+      ? body.model.trim()
+      : "";
+  if (!requestedModel) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "MODEL_REQUIRED",
+        message: "model must be selected from the available models for the chosen client API key.",
+      },
+    });
+  }
   const access = getQuickApplyAccess(client);
   if (!access.canPatch) {
     return reply.code(409).send({
@@ -663,7 +676,38 @@ app.post("/api/client-configs/apply", async (request, reply) => {
     });
   }
   const routeApiKey = requestedRouteApiKey || routeApiKeys[0] || generateRouteApiKey(client);
-  if (!routeApiKeys.length) {
+  const selectedClientRoute = providerRepository.findClientRouteByApiKey(routeApiKey) ?? client;
+  const selectedProvider = providerRepository.getProviderForClient(selectedClientRoute);
+  if (!selectedProvider) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "CLIENT_PROVIDER_NOT_FOUND",
+        message: "Selected client API key is not bound to a configured provider.",
+      },
+    });
+  }
+  try {
+    const availableModels = await fetchProviderModels(selectedProvider);
+    if (!availableModels.includes(requestedModel)) {
+      return reply.code(400).send({
+        error: {
+          type: "validation_error",
+          code: "MODEL_NOT_AVAILABLE",
+          message: "Selected model is not available for the chosen client API key provider.",
+        },
+      });
+    }
+  } catch (error) {
+    return reply.code(502).send({
+      error: {
+        type: "proxy_error",
+        code: "MODEL_LIST_FAILED",
+        message: error instanceof Error ? error.message : "Could not validate available models",
+      },
+    });
+  }
+  if (!routeApiKeys.length && !requestedRouteApiKey) {
     providerRepository.setClientRouteApiKeys(client, [routeApiKey]);
   }
   const configPath = client === "hermes" ? quickApplyPaths.hermesConfigPath : quickApplyPaths.codexConfigPath;

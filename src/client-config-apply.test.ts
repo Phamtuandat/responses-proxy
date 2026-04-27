@@ -59,6 +59,17 @@ test("applyCodexConfig switches active provider to responses_proxy and preserves
   assert.match(next, /\[projects\."\/Volumes\/Home_EX\/Projects\/responses-proxy"\]\ntrust_level = "trusted"/);
 });
 
+test("applyCodexConfig uses the selected helper model when provided", () => {
+  const next = applyCodexConfig('model = "gpt-5.5"\n', {
+    client: "codex",
+    proxyBaseUrl: "http://127.0.0.1:8318/v1",
+    routeApiKey: "sk-codex-route-abc",
+    model: "gpt-5.4",
+  });
+
+  assert.match(next, /^model = "gpt-5\.4"$/m);
+});
+
 test("readQuickApplyStatus marks Hermes as configured only when route key and base URL match", () => {
   const raw = [
     "model:",

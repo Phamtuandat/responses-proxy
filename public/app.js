@@ -100,7 +100,7 @@ const hermesConfigPathEl = document.getElementById("hermesConfigPath");
 const hermesConfigBaseUrlEl = document.getElementById("hermesConfigBaseUrl");
 const hermesConfigProviderEl = document.getElementById("hermesConfigProvider");
 const hermesConfigApiKeySelectEl = document.getElementById("hermesConfigApiKeySelect");
-const hermesConfigModelEl = document.getElementById("hermesConfigModel");
+const hermesConfigModelSelectEl = document.getElementById("hermesConfigModelSelect");
 const hermesConfigBackupsEl = document.getElementById("hermesConfigBackups");
 const codexConfigStateBadgeEl = document.getElementById("codexConfigStateBadge");
 const codexConfigRouteBadgeEl = document.getElementById("codexConfigRouteBadge");
@@ -109,7 +109,7 @@ const codexConfigPathEl = document.getElementById("codexConfigPath");
 const codexConfigBaseUrlEl = document.getElementById("codexConfigBaseUrl");
 const codexConfigProviderEl = document.getElementById("codexConfigProvider");
 const codexConfigApiKeySelectEl = document.getElementById("codexConfigApiKeySelect");
-const codexConfigModelEl = document.getElementById("codexConfigModel");
+const codexConfigModelSelectEl = document.getElementById("codexConfigModelSelect");
 const codexConfigBackupsEl = document.getElementById("codexConfigBackups");
 const clientCrudNameEl = document.getElementById("clientCrudName");
 const clientCrudProviderSelectEl = document.getElementById("clientCrudProviderSelect");
@@ -206,6 +206,8 @@ let chatgptOauthState = { enabled: false, accounts: [], authUrl: "", rotationMod
 let latestCacheSnapshot = null;
 let usageStatsState = null;
 let clientConfigState = null;
+let clientConfigModelCache = {};
+let clientConfigModelSelections = {};
 let currentRoute = "";
 let selectedCacheProviderId = "";
 let providerSearchTerm = "";
@@ -1536,6 +1538,138 @@ function renderClientApiKeySelect(selectEl, preferredApiKey) {
   selectEl.value = selectedValue;
 }
 
+function getClientApiKeyOption(apiKey) {
+  const key = typeof apiKey === "string" ? apiKey : "";
+  return getAllClientApiKeyOptions().find((option) => option.apiKey === key) || null;
+}
+
+function getClientRouteByKey(client) {
+  return (providerState.clientRoutes || []).find((route) => route.key === client) || null;
+}
+
+function renderClientModelSelect(selectEl, options = {}) {
+  if (!selectEl) return;
+  const models = Array.isArray(options.models) ? options.models.filter(Boolean) : [];
+  const preferredModel = typeof options.preferredModel === "string" ? options.preferredModel : "";
+  const currentValue = selectEl.value || "";
+  const selectedValue =
+    (currentValue && models.includes(currentValue) ? currentValue : "") ||
+    (preferredModel && models.includes(preferredModel) ? preferredModel : "") ||
+    models[0] ||
+    "";
+
+  selectEl.innerHTML = "";
+  if (options.loading) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Loading models...";
+    selectEl.appendChild(option);
+    selectEl.disabled = true;
+    return;
+  }
+  if (!models.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = options.emptyLabel || "No models available";
+    selectEl.appendChild(option);
+    selectEl.disabled = true;
+    return;
+  }
+  for (const model of models) {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    selectEl.appendChild(option);
+  }
+  selectEl.disabled = false;
+  selectEl.value = selectedValue;
+}
+
+function updateQuickApplyActionState(client) {
+  const entry = clientConfigState?.clients?.[client];
+  const actionBtn = client === "hermes" ? applyHermesConfigBtnEl : applyCodexConfigBtnEl;
+  const modelSelectEl = client === "hermes" ? hermesConfigModelSelectEl : codexConfigModelSelectEl;
+  if (!actionBtn) return;
+  const hasClientApiKey = getAllClientApiKeyOptions().length > 0;
+  const hasModel = Boolean(modelSelectEl?.value);
+  actionBtn.disabled = entry?.access?.canPatch === false || !hasClientApiKey || !hasModel;
+  actionBtn.title =
+    entry?.access?.reason ||
+    (!hasClientApiKey ? "Add a client API key before applying." : "") ||
+    (!hasModel ? "Choose an available model before applying." : "");
+}
+
+function updateClientConfigSelectedProviderSummary(client) {
+  const isHermes = client === "hermes";
+  const apiKeySelectEl = isHermes ? hermesConfigApiKeySelectEl : codexConfigApiKeySelectEl;
+  const providerEl = isHermes ? hermesConfigProviderEl : codexConfigProviderEl;
+  const routeBadgeEl = isHermes ? hermesConfigRouteBadgeEl : codexConfigRouteBadgeEl;
+  const entry = clientConfigState?.clients?.[client];
+  const selectedApiKeyOption = getClientApiKeyOption(apiKeySelectEl?.value || "");
+  const selectedRoute = selectedApiKeyOption ? getClientRouteByKey(selectedApiKeyOption.client) : entry?.route;
+
+  updateQuickApplyBadge(
+    routeBadgeEl,
+    selectedRoute?.providerName
+      ? `${selectedRoute.key} → ${selectedRoute.providerName}`
+      : selectedRoute?.key || client,
+    selectedRoute?.providerId ? "ok" : "warn",
+  );
+  setTextContent(providerEl, selectedRoute?.providerName || selectedRoute?.providerId || "-");
+}
+
+async function loadClientConfigModelsForSelection(client, apiKey) {
+  const selectEl = client === "hermes" ? hermesConfigModelSelectEl : codexConfigModelSelectEl;
+  const option = getClientApiKeyOption(apiKey);
+  const route = option ? getClientRouteByKey(option.client) : null;
+  const providerId = route?.providerId || "";
+  const preferredModel =
+    clientConfigModelSelections[client] ||
+    route?.modelOverride ||
+    "";
+  updateClientConfigSelectedProviderSummary(client);
+
+  if (!providerId) {
+    renderClientModelSelect(selectEl, { emptyLabel: "Select a client API key" });
+    updateQuickApplyActionState(client);
+    return;
+  }
+
+  if (Array.isArray(clientConfigModelCache[providerId])) {
+    renderClientModelSelect(selectEl, {
+      models: clientConfigModelCache[providerId],
+      preferredModel,
+    });
+    updateQuickApplyActionState(client);
+    return;
+  }
+
+  renderClientModelSelect(selectEl, { loading: true });
+  updateQuickApplyActionState(client);
+  try {
+    const { response, data } = await fetchJsonWithTimeout(
+      `/api/provider-models?providerId=${encodeURIComponent(providerId)}`,
+      12000,
+    );
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not load provider models");
+    }
+    const models = Array.isArray(data.models) ? data.models : [];
+    clientConfigModelCache[providerId] = models;
+    renderClientModelSelect(selectEl, {
+      models,
+      preferredModel,
+      emptyLabel: "No models returned",
+    });
+    updateQuickApplyActionState(client);
+  } catch (error) {
+    renderClientModelSelect(selectEl, {
+      emptyLabel: error instanceof Error ? error.message : "Could not load models",
+    });
+    updateQuickApplyActionState(client);
+  }
+}
+
 function setTextContent(element, value) {
   if (!element) return;
   element.textContent = value;
@@ -1793,7 +1927,7 @@ function renderSingleClientConfigStatus(client, entry) {
   const baseUrlEl = isHermes ? hermesConfigBaseUrlEl : codexConfigBaseUrlEl;
   const providerEl = isHermes ? hermesConfigProviderEl : codexConfigProviderEl;
   const apiKeySelectEl = isHermes ? hermesConfigApiKeySelectEl : codexConfigApiKeySelectEl;
-  const modelEl = isHermes ? hermesConfigModelEl : codexConfigModelEl;
+  const modelSelectEl = isHermes ? hermesConfigModelSelectEl : codexConfigModelSelectEl;
   const backupsEl = isHermes ? hermesConfigBackupsEl : codexConfigBackupsEl;
   const preserveDraft = isInteractiveClientRoute();
   const currentBaseUrlValue = baseUrlInputEl?.value || "";
@@ -1805,7 +1939,7 @@ function renderSingleClientConfigStatus(client, entry) {
     setTextContent(baseUrlEl, "-");
     setTextContent(providerEl, "-");
     renderClientApiKeySelect(apiKeySelectEl, "");
-    setTextContent(modelEl, "-");
+    renderClientModelSelect(modelSelectEl, { emptyLabel: "Select a client API key" });
     if (baseUrlInputEl && (!preserveDraft || document.activeElement !== baseUrlInputEl)) {
       baseUrlInputEl.value = preserveDraft ? currentBaseUrlValue || clientConfigState?.proxyBaseUrl || "" : clientConfigState?.proxyBaseUrl || "";
     }
@@ -1821,29 +1955,16 @@ function renderSingleClientConfigStatus(client, entry) {
     entry.configured ? "Applied" : entry.exists ? "Needs patch" : "Config missing",
     entry.configured ? "ok" : entry.exists ? "warn" : "bad",
   );
-  updateQuickApplyBadge(
-    routeBadgeEl,
-    entry.route?.providerName
-      ? `${entry.route.key} → ${entry.route.providerName}`
-      : client,
-    entry.route?.providerId ? "ok" : "warn",
-  );
   setTextContent(pathEl, entry.path || "-");
   setTextContent(baseUrlEl, entry.detected?.baseUrl || clientConfigState?.proxyBaseUrl || "-");
-  setTextContent(providerEl, entry.route?.providerName || entry.route?.providerId || "-");
   renderClientApiKeySelect(apiKeySelectEl, entry.detected?.apiKey || entry.routeApiKey || "");
-  setTextContent(modelEl, entry.detected?.model || entry.route?.modelOverride || "Unspecified");
+  loadClientConfigModelsForSelection(client, apiKeySelectEl?.value || "");
   if (baseUrlInputEl && (!preserveDraft || document.activeElement !== baseUrlInputEl)) {
     baseUrlInputEl.value =
       (preserveDraft ? currentBaseUrlValue : "") || entry.detected?.baseUrl || clientConfigState?.proxyBaseUrl || "";
   }
   renderQuickApplyBackups(backupsEl, entry.backups || []);
-  const actionBtn = isHermes ? applyHermesConfigBtnEl : applyCodexConfigBtnEl;
-  if (actionBtn) {
-    const hasClientApiKey = getAllClientApiKeyOptions().length > 0;
-    actionBtn.disabled = entry.access?.canPatch === false || !hasClientApiKey;
-    actionBtn.title = entry.access?.reason || (hasClientApiKey ? "" : "Add a client API key before applying.");
-  }
+  updateQuickApplyActionState(client);
 }
 
 function getSelectedCacheProvider() {
@@ -2727,6 +2848,7 @@ async function applyClientQuickConfig(
   buttonEl,
   baseUrlInputEl,
   apiKeySelectEl,
+  modelSelectEl,
 ) {
   buttonEl.disabled = true;
   const originalLabel = buttonEl.textContent;
@@ -2740,6 +2862,7 @@ async function applyClientQuickConfig(
         client,
         baseUrl: baseUrlInputEl?.value.trim() || undefined,
         routeApiKey: apiKeySelectEl?.value || undefined,
+        model: modelSelectEl?.value || undefined,
       }),
     });
     const data = await response.json();
@@ -2781,7 +2904,16 @@ applyHermesConfigBtnEl?.addEventListener("click", async () => {
     applyHermesConfigBtnEl,
     hermesBaseUrlInputEl,
     hermesConfigApiKeySelectEl,
+    hermesConfigModelSelectEl,
   );
+});
+
+hermesConfigApiKeySelectEl?.addEventListener("change", () => {
+  loadClientConfigModelsForSelection("hermes", hermesConfigApiKeySelectEl.value || "");
+});
+
+hermesConfigModelSelectEl?.addEventListener("change", () => {
+  clientConfigModelSelections.hermes = hermesConfigModelSelectEl.value || "";
 });
 
 applyCodexConfigBtnEl?.addEventListener("click", async () => {
@@ -2790,7 +2922,16 @@ applyCodexConfigBtnEl?.addEventListener("click", async () => {
     applyCodexConfigBtnEl,
     codexBaseUrlInputEl,
     codexConfigApiKeySelectEl,
+    codexConfigModelSelectEl,
   );
+});
+
+codexConfigApiKeySelectEl?.addEventListener("change", () => {
+  loadClientConfigModelsForSelection("codex", codexConfigApiKeySelectEl.value || "");
+});
+
+codexConfigModelSelectEl?.addEventListener("change", () => {
+  clientConfigModelSelections.codex = codexConfigModelSelectEl.value || "";
 });
 
 form.addEventListener("submit", async (event) => {
