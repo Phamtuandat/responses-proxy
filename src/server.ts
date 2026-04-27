@@ -2400,7 +2400,6 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
       baseUrl: existing.baseUrl,
       authMode: "chatgpt_oauth",
       providerApiKeys: existing.providerApiKeys,
-      clientApiKeys: existing.clientApiKeys,
       capabilities: {
         ...existing.capabilities,
         ownedBy: existing.capabilities.ownedBy || "account-auth",
@@ -2421,7 +2420,6 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
       baseUrl: config.CHATGPT_CODEX_BASE_URL,
       authMode: "chatgpt_oauth",
       providerApiKeys: [],
-      clientApiKeys: legacyPerAccountProvider.clientApiKeys,
       capabilities: {
         ...legacyPerAccountProvider.capabilities,
         ownedBy: "chatgpt-oauth",
@@ -2439,7 +2437,6 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
     baseUrl: config.CHATGPT_CODEX_BASE_URL,
     authMode: "chatgpt_oauth",
     providerApiKeys: [],
-    clientApiKeys: [],
     capabilities: {
       ownedBy: "chatgpt-oauth",
       systemManaged: true,

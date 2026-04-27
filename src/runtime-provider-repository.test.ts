@@ -312,7 +312,7 @@ test("routes client CRUD api keys to the bound provider", async () => {
   }
 });
 
-test("allows sharing one client API key across multiple providers", async () => {
+test("does not resolve access by legacy provider-level client API keys", async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
   const dbFile = path.join(tempDir, "app.sqlite");
   const legacyStateFile = path.join(tempDir, "providers.json");
@@ -348,11 +348,7 @@ test("allows sharing one client API key across multiple providers", async () => 
     });
 
     const matchedProviders = repository.findProvidersByAccessKey("shared-client-key");
-    assert.equal(matchedProviders.length, 2);
-    assert.deepEqual(
-      matchedProviders.map((provider) => provider.name).sort(),
-      ["provider-a", "provider-b"],
-    );
+    assert.equal(matchedProviders.length, 0);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

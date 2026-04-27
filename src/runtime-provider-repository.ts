@@ -100,9 +100,6 @@ export type RuntimeProviderView = {
   hasProviderApiKey: boolean;
   providerApiKeys: string[];
   providerApiKeysCount: number;
-  hasClientApiKey: boolean;
-  clientApiKeys: string[];
-  clientApiKeysCount: number;
   authMode: RuntimeProviderAuthMode;
   chatgptAccountId: string | null;
   capabilities: RuntimeProviderCapabilities;
@@ -430,14 +427,6 @@ export class RuntimeProviderRepository {
     return this.providerPresets.find((provider) => provider.id === id);
   }
 
-  findProviderByClientApiKey(apiKey?: string): RuntimeProviderPreset | undefined {
-    const normalized = typeof apiKey === "string" ? apiKey.trim() : "";
-    if (!normalized) {
-      return undefined;
-    }
-    return this.providerPresets.find((provider) => provider.clientApiKeys.includes(normalized));
-  }
-
   findProviderByProviderApiKey(apiKey?: string): RuntimeProviderPreset | undefined {
     const normalized = typeof apiKey === "string" ? apiKey.trim() : "";
     if (!normalized) {
@@ -460,10 +449,7 @@ export class RuntimeProviderRepository {
       const provider = this.getProviderForClient(clientRoute);
       return provider ? [provider] : [];
     }
-    return this.providerPresets.filter(
-      (provider) =>
-        provider.clientApiKeys.includes(normalized) || provider.providerApiKeys.includes(normalized),
-    );
+    return this.providerPresets.filter((provider) => provider.providerApiKeys.includes(normalized));
   }
 
   getProviderOrThrow(id?: string): RuntimeProviderPreset {
@@ -620,9 +606,6 @@ export class RuntimeProviderRepository {
       typeof body.chatgptAccountId === "string" && body.chatgptAccountId.trim()
         ? body.chatgptAccountId.trim()
         : undefined;
-    const hasExplicitClientApiKeys = Object.prototype.hasOwnProperty.call(body, "clientApiKeys");
-    const clientApiKeys = normalizeApiKeysInput(body.clientApiKeys);
-
     if (!name) {
       throw new RuntimeProviderError(400, {
         type: "validation_error",
@@ -649,11 +632,7 @@ export class RuntimeProviderRepository {
       authMode,
       chatgptAccountId,
       providerApiKeys,
-      clientApiKeys: hasExplicitClientApiKeys
-        ? clientApiKeys
-        : clientApiKeys.length > 0
-          ? clientApiKeys
-          : [...providerApiKeys],
+      clientApiKeys: [],
       capabilities: parseProviderCapabilitiesInput(body.capabilities),
     };
   }
@@ -666,9 +645,6 @@ export class RuntimeProviderRepository {
       hasProviderApiKey: provider.providerApiKeys.length > 0,
       providerApiKeys: [...provider.providerApiKeys],
       providerApiKeysCount: provider.providerApiKeys.length,
-      hasClientApiKey: provider.clientApiKeys.length > 0,
-      clientApiKeys: [...provider.clientApiKeys],
-      clientApiKeysCount: provider.clientApiKeys.length,
       authMode: parseRuntimeProviderAuthMode(provider.authMode),
       chatgptAccountId: provider.chatgptAccountId ?? null,
       capabilities: cloneCapabilities(provider.capabilities),
@@ -682,7 +658,6 @@ export class RuntimeProviderRepository {
     return {
       ...view,
       providerApiKeys: [],
-      clientApiKeys: [],
     };
   }
 
@@ -771,10 +746,6 @@ export class RuntimeProviderRepository {
         INSERT INTO provider_api_keys (provider_id, api_key, position)
         VALUES (?, ?, ?)
       `);
-      const insertClientApiKey = this.db.prepare(`
-        INSERT INTO client_api_keys (provider_id, api_key, position)
-        VALUES (?, ?, ?)
-      `);
       const insertClientRoute = this.db.prepare(`
         INSERT INTO client_routes (client_route, provider_id)
         VALUES (?, ?)
@@ -821,9 +792,6 @@ export class RuntimeProviderRepository {
         provider.providerApiKeys.forEach((apiKey, index) => {
           insertApiKey.run(provider.id, apiKey, index);
         });
-        provider.clientApiKeys.forEach((apiKey, index) => {
-          insertClientApiKey.run(provider.id, apiKey, index);
-        });
       }
 
       Object.entries(this.clientRoutes).forEach(([clientRoute, providerId]) => {
@@ -862,7 +830,7 @@ export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderP
       responsesUrl: config.upstreamResponsesUrl,
       authMode: "api_key",
       providerApiKeys: normalizeApiKeys(config.UPSTREAM_API_KEY ? [config.UPSTREAM_API_KEY] : []),
-      clientApiKeys: normalizeApiKeys(config.UPSTREAM_API_KEY ? [config.UPSTREAM_API_KEY] : []),
+      clientApiKeys: [],
       capabilities: buildDefaultCapabilitiesFromConfig(config),
     },
   ];
@@ -1005,10 +973,6 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
     db,
     "SELECT provider_id, api_key FROM provider_api_keys ORDER BY provider_id, position, api_key",
   );
-  const clientApiKeyRows = queryRows<ApiKeyRow>(
-    db,
-    "SELECT provider_id, api_key FROM client_api_keys ORDER BY provider_id, position, api_key",
-  );
   const clientRouteRows = queryRows<RouteRow>(
     db,
     "SELECT client_route, provider_id FROM client_routes ORDER BY client_route",
@@ -1033,13 +997,6 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
     providerApiKeysByProvider.set(row.provider_id, current);
   }
 
-  const clientApiKeysByProvider = new Map<string, string[]>();
-  for (const row of clientApiKeyRows) {
-    const current = clientApiKeysByProvider.get(row.provider_id) ?? [];
-    current.push(row.api_key);
-    clientApiKeysByProvider.set(row.provider_id, current);
-  }
-
   const providers = providerRows.map((row) => ({
     id: row.id,
     name: row.name,
@@ -1048,10 +1005,7 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
     authMode: parseRuntimeProviderAuthMode(row.auth_mode),
     chatgptAccountId: row.chatgpt_account_id?.trim() ? row.chatgpt_account_id.trim() : undefined,
     providerApiKeys: providerApiKeysByProvider.get(row.id) ?? [],
-    clientApiKeys:
-      clientApiKeysByProvider.get(row.id) ??
-      providerApiKeysByProvider.get(row.id) ??
-      [],
+    clientApiKeys: [],
     capabilities: {
       ownedBy: row.owned_by ?? undefined,
       systemManaged: row.system_managed === 1,
@@ -1185,7 +1139,6 @@ function sanitizeCustomProvider(value: unknown): RuntimeProviderPreset | undefin
     record.apiKeys,
     record.apiKey,
   );
-  const clientApiKeys = normalizeApiKeysInput(record.clientApiKeys);
   const createdAt =
     typeof record.createdAt === "string" && record.createdAt.trim()
       ? record.createdAt.trim()
@@ -1216,7 +1169,7 @@ function sanitizeCustomProvider(value: unknown): RuntimeProviderPreset | undefin
       authMode,
       chatgptAccountId,
       providerApiKeys,
-      clientApiKeys: clientApiKeys.length > 0 ? clientApiKeys : [...providerApiKeys],
+      clientApiKeys: [],
       capabilities,
       createdAt,
       updatedAt,
@@ -1465,7 +1418,6 @@ function shouldPersistSeededProviders(
       original.authMode !== provider.authMode ||
       original.chatgptAccountId !== provider.chatgptAccountId ||
       JSON.stringify(original.providerApiKeys) !== JSON.stringify(provider.providerApiKeys) ||
-      JSON.stringify(original.clientApiKeys) !== JSON.stringify(provider.clientApiKeys) ||
       JSON.stringify(cloneCapabilities(original.capabilities)) !==
         JSON.stringify(cloneCapabilities(provider.capabilities))
     );

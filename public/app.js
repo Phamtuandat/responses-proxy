@@ -1070,7 +1070,6 @@ function renderProviderTable() {
       '<td class="mono">' + escapeHtml(capabilitySummary || "Default") + "</td>" +
       '<td class="mono">' + escapeHtml(formatRtkPolicySummary(capabilities.rtkPolicy)) + "</td>" +
       `<td>${provider.providerApiKeysCount ? `${provider.providerApiKeysCount} key${provider.providerApiKeysCount === 1 ? "" : "s"}` : "Not set"}</td>` +
-      `<td>${provider.clientApiKeysCount ? `${provider.clientApiKeysCount} key${provider.clientApiKeysCount === 1 ? "" : "s"}` : "Not set"}</td>` +
       "<td></td>";
 
     const actionCell = row.lastElementChild;
@@ -1146,9 +1145,7 @@ function renderProviderCrudSummary() {
   providerCrudWithProviderKeysEl.textContent = String(
     providers.filter((provider) => (provider.providerApiKeysCount || 0) > 0).length,
   );
-  providerCrudWithClientKeysEl.textContent = String(
-    providers.filter((provider) => (provider.clientApiKeysCount || 0) > 0).length,
-  );
+  providerCrudWithClientKeysEl.textContent = "0";
   providerCrudUsageCheckEl.textContent = String(
     providers.filter((provider) => provider.capabilities?.usageCheckEnabled === true).length,
   );
@@ -1292,7 +1289,6 @@ function renderProviderCrudList() {
       "</div>" +
       '<div class="provider-crud-grid">' +
       `<div class="provider-crud-stat"><span>Provider keys</span><strong>${provider.providerApiKeysCount || 0}</strong></div>` +
-      `<div class="provider-crud-stat"><span>Client keys</span><strong>${provider.clientApiKeysCount || 0}</strong></div>` +
       `<div class="provider-crud-stat"><span>Request policy</span><strong>${escapeHtml(countRequestPolicyOverrides(provider) ? "Custom" : "Default")}</strong></div>` +
       `<div class="provider-crud-stat"><span>Owner</span><strong>${escapeHtml(capabilities.ownedBy || "-")}</strong></div>` +
       "</div>";
