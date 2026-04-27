@@ -164,7 +164,6 @@ const providerEditorIdEl = document.getElementById("providerEditorId");
 const providerSummaryIdEl = document.getElementById("providerSummaryId");
 const providerSummaryBaseUrlEl = document.getElementById("providerSummaryBaseUrl");
 const providerSummaryProviderKeysEl = document.getElementById("providerSummaryProviderKeys");
-const providerSummaryClientKeysEl = document.getElementById("providerSummaryClientKeys");
 const providerSummaryRequestPolicyEl = document.getElementById("providerSummaryRequestPolicy");
 const providerSummaryRtkPolicyEl = document.getElementById("providerSummaryRtkPolicy");
 const providerSummaryErrorPolicyEl = document.getElementById("providerSummaryErrorPolicy");
@@ -173,9 +172,6 @@ const customProviderBaseUrlEl = document.getElementById("customProviderBaseUrl")
 const providerApiKeysListEl = document.getElementById("providerApiKeysList");
 const providerApiKeyTemplateEl = document.getElementById("providerApiKeyTemplate");
 const addProviderApiKeyBtnEl = document.getElementById("addProviderApiKeyBtn");
-const clientApiKeysListEl = document.getElementById("clientApiKeysList");
-const clientApiKeyTemplateEl = document.getElementById("clientApiKeyTemplate");
-const addClientApiKeyBtnEl = document.getElementById("addClientApiKeyBtn");
 const providerOwnedByEl = document.getElementById("providerOwnedBy");
 const providerUsageCheckUrlEl = document.getElementById("providerUsageCheckUrl");
 const providerUsageCheckEnabledEl = document.getElementById("providerUsageCheckEnabled");
@@ -278,7 +274,6 @@ function isEditingProviderForm() {
     active === providerRtkTailCharsEl ||
     active === providerRtkDetectFormatEl ||
     providerApiKeysListEl.contains(active) ||
-    clientApiKeysListEl.contains(active) ||
     providerModelAliasesListEl.contains(active) ||
     providerErrorRulesListEl.contains(active)
   );
@@ -456,14 +451,12 @@ function renderProviderEditorSummary() {
   const providerId = providerEditorIdEl.value.trim() || "Generated on save";
   const baseUrl = customProviderBaseUrlEl.value.trim() || "Not set";
   const providerKeys = collectProviderApiKeys().length;
-  const clientKeys = collectClientApiKeys().length;
   const capabilities = collectProviderCapabilities();
   const requestPolicySummary = formatRequestPolicySummary(capabilities);
 
   providerSummaryIdEl.textContent = providerId;
   providerSummaryBaseUrlEl.textContent = baseUrl;
   providerSummaryProviderKeysEl.textContent = String(providerKeys);
-  providerSummaryClientKeysEl.textContent = String(clientKeys);
   providerSummaryRequestPolicyEl.textContent = requestPolicySummary;
   providerSummaryRtkPolicyEl.textContent = formatRtkPolicySummary(capabilities.rtkPolicy);
   providerSummaryErrorPolicyEl.textContent = formatErrorPolicySummary(capabilities.errorPolicy);
@@ -524,9 +517,6 @@ function setProviderEditor(provider) {
   renderProviderApiKeyInputs(
     Array.isArray(provider?.providerApiKeys) ? provider.providerApiKeys : [""],
   );
-  renderClientApiKeyInputs(
-    Array.isArray(provider?.clientApiKeys) ? provider.clientApiKeys : [""],
-  );
   customProviderBtnEl.textContent = provider ? "Update provider" : "Save provider";
   providerDeleteBtnEl.hidden = !provider;
   providerDeleteBtnEl.disabled = !provider;
@@ -581,48 +571,6 @@ function syncProviderApiKeyRemoveButtons() {
   const rows = [...providerApiKeysListEl.querySelectorAll(".api-key-row")];
   for (const row of rows) {
     const removeBtn = row.querySelector(".provider-api-key-remove");
-    removeBtn.disabled = rows.length === 1;
-  }
-}
-
-function renderClientApiKeyInputs(values) {
-  clientApiKeysListEl.innerHTML = "";
-  const items = Array.isArray(values) && values.length ? values : [""];
-  for (const value of items) {
-    appendClientApiKeyInput(value);
-  }
-  syncClientApiKeyRemoveButtons();
-}
-
-function appendClientApiKeyInput(value = "") {
-  const fragment = clientApiKeyTemplateEl.content.cloneNode(true);
-  const row = fragment.querySelector(".api-key-row");
-  const input = fragment.querySelector(".client-api-key-input");
-  const toggleBtn = fragment.querySelector(".api-key-toggle");
-  const copyBtn = fragment.querySelector(".api-key-copy");
-  const removeBtn = fragment.querySelector(".client-api-key-remove");
-  input.value = value;
-  bindApiKeyRowActions(input, toggleBtn, copyBtn);
-  removeBtn.addEventListener("click", () => {
-    row.remove();
-    if (!clientApiKeysListEl.children.length) {
-      appendClientApiKeyInput("");
-    }
-    syncClientApiKeyRemoveButtons();
-    markProviderEditorDirty();
-    renderProviderEditorSummary();
-  });
-  input.addEventListener("input", () => {
-    markProviderEditorDirty();
-    renderProviderEditorSummary();
-  });
-  clientApiKeysListEl.appendChild(fragment);
-}
-
-function syncClientApiKeyRemoveButtons() {
-  const rows = [...clientApiKeysListEl.querySelectorAll(".api-key-row")];
-  for (const row of rows) {
-    const removeBtn = row.querySelector(".client-api-key-remove");
     removeBtn.disabled = rows.length === 1;
   }
 }
@@ -968,12 +916,6 @@ function collectProviderErrorPolicy() {
     .filter(Boolean);
 
   return rules.length ? { rules } : undefined;
-}
-
-function collectClientApiKeys() {
-  return [...clientApiKeysListEl.querySelectorAll(".client-api-key-input")]
-    .map((input) => input.value.trim())
-    .filter(Boolean);
 }
 
 function collectProviderCapabilities() {
@@ -3046,7 +2988,6 @@ customProviderBtnEl.addEventListener("click", async () => {
   const name = customProviderNameEl.value.trim();
   const baseUrl = customProviderBaseUrlEl.value.trim();
   const providerApiKeys = collectProviderApiKeys();
-  const clientApiKeys = collectClientApiKeys();
   const capabilities = collectProviderCapabilities();
   if (!name || !baseUrl) {
     setProviderEditorStatus("Provider name and base URL are required.", "bad");
@@ -3061,7 +3002,7 @@ customProviderBtnEl.addEventListener("click", async () => {
       {
         method: editingProviderId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, baseUrl, providerApiKeys, clientApiKeys, capabilities }),
+        body: JSON.stringify({ name, baseUrl, providerApiKeys, clientApiKeys: [], capabilities }),
       },
     );
     const data = await response.json();
@@ -3086,16 +3027,6 @@ addProviderApiKeyBtnEl.addEventListener("click", () => {
   markProviderEditorDirty();
   renderProviderEditorSummary();
   const inputs = providerApiKeysListEl.querySelectorAll(".provider-api-key-input");
-  const lastInput = inputs[inputs.length - 1];
-  lastInput?.focus();
-});
-
-addClientApiKeyBtnEl.addEventListener("click", () => {
-  appendClientApiKeyInput("");
-  syncClientApiKeyRemoveButtons();
-  markProviderEditorDirty();
-  renderProviderEditorSummary();
-  const inputs = clientApiKeysListEl.querySelectorAll(".client-api-key-input");
   const lastInput = inputs[inputs.length - 1];
   lastInput?.focus();
 });

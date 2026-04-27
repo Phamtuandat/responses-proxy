@@ -666,7 +666,7 @@
                       <div class="provider-card-header">
                         <div>
                           <h3>API Keys</h3>
-                          <p>Keep upstream credentials and client access keys visually separated.</p>
+                          <p>Manage only upstream credentials here. Client API keys live in the Clients tab.</p>
                         </div>
                       </div>
                       <div class="provider-keys-grid">
@@ -680,17 +680,6 @@
                           </div>
                           <div id="providerApiKeysList" class="api-key-list"></div>
                         </section>
-
-                        <section class="provider-key-box">
-                          <div class="provider-card-header">
-                            <div>
-                              <h4>Proxy Client Keys</h4>
-                              <p>Keys that clients send in the <span class="mono">Authorization</span> header to access this provider.</p>
-                            </div>
-                            <button id="addClientApiKeyBtn" type="button" class="table-button table-button-secondary">Add key</button>
-                          </div>
-                          <div id="clientApiKeysList" class="api-key-list"></div>
-                        </section>
                       </div>
 
                       <template id="providerApiKeyTemplate">
@@ -700,16 +689,6 @@
                             <button type="button" class="table-button table-button-utility api-key-toggle">Show</button>
                             <button type="button" class="table-button table-button-utility api-key-copy">Copy</button>
                             <button type="button" class="table-button table-button-danger-soft provider-api-key-remove">Remove</button>
-                          </div>
-                        </div>
-                      </template>
-                      <template id="clientApiKeyTemplate">
-                        <div class="api-key-row">
-                          <input class="client-api-key-input" type="password" placeholder="client-..." />
-                          <div class="api-key-actions">
-                            <button type="button" class="table-button table-button-utility api-key-toggle">Show</button>
-                            <button type="button" class="table-button table-button-utility api-key-copy">Copy</button>
-                            <button type="button" class="table-button table-button-danger-soft client-api-key-remove">Remove</button>
                           </div>
                         </div>
                       </template>
