@@ -20,21 +20,21 @@ let activeBot: TelegramBot | undefined;
 
 async function registerCommandMetadata(bot: TelegramBot): Promise<void> {
   await bot.api.setMyCommands([
+    { command: "grant", description: "Activate paid access for a customer" },
+    { command: "renewuser", description: "Renew access or rotate a customer key" },
+    { command: "renew", description: "Customer renew request and admin review" },
+    { command: "apikey", description: "Show or issue customer API keys" },
+    { command: "usage", description: "Show customer usage for the current period" },
+    { command: "quota", description: "Show customer quota and expiration" },
+    { command: "help", description: "Show ops help, /help customer, /help proxy" },
     { command: "status", description: "Check proxy health and active provider" },
-    { command: "providers", description: "Show providers and route mapping" },
-    { command: "clients", description: "Show Hermes and Codex client status" },
-    { command: "models", description: "List models through the proxy" },
+    { command: "providers", description: "Show provider and client route mapping" },
+    { command: "clients", description: "Show Hermes and Codex quick config status" },
+    { command: "models", description: "List routed models through the proxy" },
     { command: "apply", description: "Apply proxy config to Hermes or Codex" },
-    { command: "oauth", description: "Start or inspect ChatGPT OAuth setup" },
-    { command: "accounts", description: "Manage OAuth accounts" },
-    { command: "grant", description: "Grant paid customer access manually" },
-    { command: "renewuser", description: "Renew customer access or replace customer key" },
-    { command: "renew", description: "Create or manage renewal requests" },
-    { command: "apikey", description: "Show or issue customer Responses API keys" },
-    { command: "usage", description: "Show customer token usage for the current period" },
-    { command: "quota", description: "Show customer quota, remaining balance, and expiration" },
-    { command: "test", description: "Send a small Responses API test request" },
-    { command: "help", description: "Show bot help" },
+    { command: "oauth", description: "Inspect or start ChatGPT OAuth setup" },
+    { command: "accounts", description: "List and manage OAuth accounts" },
+    { command: "test", description: "Send a small proxy test request" },
   ]);
 }
 
