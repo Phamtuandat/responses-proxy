@@ -1,11 +1,21 @@
 import Fastify from "fastify";
 import type { FastifyBaseLogger } from "fastify";
 import { randomUUID } from "node:crypto";
-import { createReadStream, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import readline from "node:readline";
 import path from "node:path";
 import { readConfig } from "./config.js";
+import {
+  applyQuickConfig,
+  generateRouteApiKey,
+  listRecentConfigBackups,
+  readQuickApplyStatus,
+  readQuickConfigFile,
+  resolveQuickApplyPaths,
+  writeQuickConfigFile,
+  type QuickApplyClient,
+} from "./client-config-apply.js";
 import { buildUpstreamError, forwardJson, forwardSse } from "./forward.js";
 import {
   ProviderUsageLimitError,
@@ -21,6 +31,10 @@ import {
   applyProviderRequestParameterPolicy,
   resolveMaxOutputTokensRule,
 } from "./provider-request-parameters.js";
+import {
+  readRequestProviderHint,
+  resolveProviderForRequest,
+} from "./provider-routing.js";
 import { resolveRequestTimeoutMs } from "./request-timeout-policy.js";
 import {
   type ClientRouteKey,
@@ -69,6 +83,13 @@ const publicAssets = {
     ]),
   ) as Record<(typeof publicAssetFiles)[number], { body: string; contentType: string }>,
 };
+const quickApplyPaths = resolveQuickApplyPaths({
+  hermesConfigPath: process.env.QUICK_APPLY_HERMES_CONFIG_PATH,
+  codexConfigPath: process.env.QUICK_APPLY_CODEX_CONFIG_PATH,
+  backupDir: path.resolve(config.SESSION_LOG_DIR, "..", "client-config-backups"),
+});
+const localProxyBaseUrl = `http://127.0.0.1:${config.PORT}/v1`;
+const quickApplyRuntime = existsSync("/.dockerenv") ? "container" : "native";
 let latestPromptCacheObservation: PromptCacheObservation | undefined;
 const latestPromptCacheObservationByProvider = new Map<string, PromptCacheObservation>();
 const inflightJsonRequests = new Map<
@@ -262,6 +283,90 @@ app.get("/api/providers", async () => ({
   clientRoutes: providerRepository.getClientRoutesForUi(),
   providers: providerRepository.listProvidersForUi(),
 }));
+
+app.get("/api/client-configs/status", async (_request, reply) => {
+  return reply.send({
+    ok: true,
+    runtime: quickApplyRuntime,
+    proxyBaseUrl: localProxyBaseUrl,
+    clients: {
+      hermes: buildQuickApplyClientStatus("hermes"),
+      codex: buildQuickApplyClientStatus("codex"),
+    },
+  });
+});
+
+app.post("/api/client-configs/apply", async (request, reply) => {
+  const body = request.body as {
+    client?: unknown;
+    baseUrl?: unknown;
+    model?: unknown;
+    providerId?: unknown;
+  } | undefined;
+  const client = normalizeQuickApplyClient(body?.client);
+  if (!client) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_CLIENT",
+        message: "client must be either hermes or codex",
+      },
+    });
+  }
+
+  const requestedBaseUrl =
+    typeof body?.baseUrl === "string" && body.baseUrl.trim()
+      ? body.baseUrl.trim()
+      : localProxyBaseUrl;
+  const requestedModel =
+    typeof body?.model === "string" && body.model.trim()
+      ? body.model.trim()
+      : providerRepository.getModelOverride(client);
+  const providerId = typeof body?.providerId === "string" ? body.providerId.trim() : "";
+  const access = getQuickApplyAccess(client);
+  if (!access.canPatch) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "QUICK_APPLY_HOST_PATH_UNAVAILABLE",
+        message: access.reason,
+      },
+    });
+  }
+
+  const routeApiKeys = providerRepository.getClientRouteApiKeys(client);
+  const routeApiKey = routeApiKeys[0] || generateRouteApiKey(client);
+  if (!routeApiKeys.length) {
+    providerRepository.setClientRouteApiKeys(client, [routeApiKey]);
+  }
+  if (providerId) {
+    try {
+      providerRepository.setClientRoute(client, providerId);
+    } catch (error) {
+      return sendProviderRepositoryError(reply, error);
+    }
+  }
+
+  const configPath = client === "hermes" ? quickApplyPaths.hermesConfigPath : quickApplyPaths.codexConfigPath;
+  const currentRaw = readQuickConfigFile(configPath);
+  const nextRaw = applyQuickConfig(currentRaw, {
+    client,
+    proxyBaseUrl: requestedBaseUrl,
+    routeApiKey,
+    model: requestedModel,
+  });
+  writeQuickConfigFile(configPath, nextRaw, {
+    backupDir: quickApplyPaths.backupDir,
+  });
+
+  return reply.send({
+    ok: true,
+    client,
+    proxyBaseUrl: requestedBaseUrl,
+    status: buildQuickApplyClientStatus(client, requestedBaseUrl),
+    clientRoutes: providerRepository.getClientRoutesForUi(),
+  });
+});
 
 app.post("/api/provider-routes", async (request, reply) => {
   const body = request.body as { client?: unknown; providerId?: unknown } | undefined;
@@ -517,18 +622,19 @@ app.post("/api/providers/check-usage", async (request, reply) =>
 
 app.get("/v1/models", async (request, reply) => {
   const routingApiKey = readBearerToken(request.headers.authorization);
-  const selectedProvider = providerRepository.findProviderByAccessKey(routingApiKey);
+  const providerHint = readRequestProviderHint(request.headers, undefined);
+  const providerResolution = resolveProviderForRequest({
+    providers: providerRepository.findProvidersByAccessKey(routingApiKey),
+    explicitProviderId: providerHint.providerId,
+    explicitProviderName: providerHint.providerName,
+  });
 
-  if (!selectedProvider) {
-    return reply.code(401).send({
-      error: {
-        type: "authentication_error",
-        code: "INVALID_ROUTING_API_KEY",
-        message:
-          "Authorization Bearer token must match one of the configured client or provider API keys",
-      },
+  if ("error" in providerResolution) {
+    return reply.code(providerResolution.error.statusCode).send({
+      error: providerResolution.error,
     });
   }
+  const selectedProvider = providerResolution.provider;
 
   const providerApiKey = getDefaultProviderApiKey(selectedProvider);
   const response = await fetch(`${selectedProvider.baseUrl.replace(/\/+$/, "")}/models`, {
@@ -607,17 +713,18 @@ async function handleResponsesRequest(
 
   const routingApiKey = readBearerToken(request.headers.authorization);
   const clientRoute = resolveClientRoute(request.headers, parsed.data, routingApiKey);
-  const selectedProvider = providerRepository.findProviderByAccessKey(routingApiKey);
-  if (!selectedProvider) {
-    return reply.code(401).send({
-      error: {
-        type: "authentication_error",
-        code: "INVALID_ROUTING_API_KEY",
-        message:
-          "Authorization Bearer token must match one of the configured client or provider API keys",
-      },
+  const providerHint = readRequestProviderHint(request.headers, parsed.data.metadata);
+  const providerResolution = resolveProviderForRequest({
+    providers: providerRepository.findProvidersByAccessKey(routingApiKey),
+    explicitProviderId: providerHint.providerId,
+    explicitProviderName: providerHint.providerName,
+  });
+  if ("error" in providerResolution) {
+    return reply.code(providerResolution.error.statusCode).send({
+      error: providerResolution.error,
     });
   }
+  const selectedProvider = providerResolution.provider;
   const currentModelOverride = providerRepository.getModelOverride(clientRoute);
   const clientRouteRtkPolicy = providerRepository.getClientRouteRtkPolicy(clientRoute);
   const maxOutputTokensRule = resolveMaxOutputTokensRule(selectedProvider.capabilities);
@@ -1722,7 +1829,91 @@ function rewriteBodyForProvider(
   return applyProviderRequestParameterPolicy(nextBody, provider.capabilities);
 }
 
+function buildQuickApplyClientStatus(
+  client: QuickApplyClient,
+  proxyBaseUrl: string = localProxyBaseUrl,
+) {
+  const pathToRead = client === "hermes" ? quickApplyPaths.hermesConfigPath : quickApplyPaths.codexConfigPath;
+  const route = providerRepository.getClientRoutesForUi().find((entry) => entry.key === client);
+  const routeApiKeys = providerRepository.getClientRouteApiKeys(client);
+  const routeApiKey = routeApiKeys[0] || "";
+  const access = getQuickApplyAccess(client);
+  const raw = readQuickConfigFile(pathToRead);
+  const status = readQuickApplyStatus(
+    raw,
+    {
+      client,
+      proxyBaseUrl,
+      routeApiKey,
+      model: providerRepository.getModelOverride(client),
+    },
+    pathToRead,
+  );
+
+  return {
+    ...status,
+    runtime: quickApplyRuntime,
+    access,
+    backups: listRecentConfigBackups(pathToRead, 1, {
+      backupDir: quickApplyPaths.backupDir,
+    }),
+    route: route
+      ? {
+          key: route.key,
+          providerId: route.providerId,
+          providerName: route.providerName,
+          modelOverride: route.modelOverride,
+          apiKeys: route.apiKeys,
+        }
+      : null,
+  };
+}
+
+function normalizeQuickApplyClient(value: unknown): QuickApplyClient | undefined {
+  if (value === "hermes" || value === "codex") {
+    return value;
+  }
+  return undefined;
+}
+
+function getQuickApplyAccess(client: QuickApplyClient) {
+  const overridePath =
+    client === "hermes"
+      ? process.env.QUICK_APPLY_HERMES_CONFIG_PATH?.trim()
+      : process.env.QUICK_APPLY_CODEX_CONFIG_PATH?.trim();
+
+  if (quickApplyRuntime === "native") {
+    return {
+      canPatch: true,
+      usesOverridePath: Boolean(overridePath),
+      reason: null,
+    };
+  }
+
+  if (overridePath) {
+    return {
+      canPatch: true,
+      usesOverridePath: true,
+      reason: null,
+    };
+  }
+
+  return {
+    canPatch: false,
+    usesOverridePath: false,
+    reason:
+      `Quick Apply is running inside the container. Bind-mount the host ${client} config file into the container ` +
+      `and set ${client === "hermes" ? "QUICK_APPLY_HERMES_CONFIG_PATH" : "QUICK_APPLY_CODEX_CONFIG_PATH"} ` +
+      "to that mounted path before using this action.",
+  };
+}
+
 function rewriteModelForProvider(model: string, provider: RuntimeProviderPreset): string {
+  const aliasTarget = provider.capabilities.modelAliases?.[model];
+  if (typeof aliasTarget === "string" && aliasTarget.trim()) {
+    return aliasTarget.trim();
+  }
+
   for (const prefix of provider.capabilities.stripModelPrefixes) {
     if (prefix && model.startsWith(prefix)) {
       return model.slice(prefix.length);

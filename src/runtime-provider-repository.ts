@@ -24,6 +24,7 @@ export type RuntimeProviderCapabilities = {
   requestParameterPolicy: ProviderRequestParameterPolicy;
   sanitizeReasoningSummary: boolean;
   stripModelPrefixes: string[];
+  modelAliases?: Record<string, string>;
   rtkPolicy?: RtkLayerPolicy;
   errorPolicy?: ProviderErrorPolicy;
 };
@@ -132,6 +133,7 @@ type ProviderRow = {
   request_parameter_policy: string | null;
   sanitize_reasoning_summary: number | null;
   strip_model_prefixes: string | null;
+  model_aliases: string | null;
   rtk_policy: string | null;
   error_policy: string | null;
   created_at: string | null;
@@ -403,7 +405,18 @@ export class RuntimeProviderRepository {
   }
 
   findProviderByAccessKey(apiKey?: string): RuntimeProviderPreset | undefined {
-    return this.findProviderByClientApiKey(apiKey) ?? this.findProviderByProviderApiKey(apiKey);
+    return this.findProvidersByAccessKey(apiKey)[0];
+  }
+
+  findProvidersByAccessKey(apiKey?: string): RuntimeProviderPreset[] {
+    const normalized = typeof apiKey === "string" ? apiKey.trim() : "";
+    if (!normalized) {
+      return [];
+    }
+    return this.providerPresets.filter(
+      (provider) =>
+        provider.clientApiKeys.includes(normalized) || provider.providerApiKeys.includes(normalized),
+    );
   }
 
   getProviderOrThrow(id?: string): RuntimeProviderPreset {
@@ -461,8 +474,12 @@ export class RuntimeProviderRepository {
       updatedAt: now,
     };
     this.providerPresets = [...this.providerPresets, provider];
-    this.activeProviderId = provider.id;
-    this.clientRoutes.default = provider.id;
+    if (!this.activeProviderId) {
+      this.activeProviderId = provider.id;
+    }
+    if (!this.clientRoutes.default && this.activeProviderId) {
+      this.clientRoutes.default = this.activeProviderId;
+    }
     this.persistRuntimeState();
     return provider;
   }
@@ -484,8 +501,6 @@ export class RuntimeProviderRepository {
     this.providerPresets = this.providerPresets.map((provider) =>
       provider.id === id ? updated : provider,
     );
-    this.activeProviderId = id;
-    this.clientRoutes.default = id;
     this.persistRuntimeState();
     return updated;
   }
@@ -538,18 +553,6 @@ export class RuntimeProviderRepository {
       });
     }
 
-    const conflictingClientApiKey = input.clientApiKeys.find((apiKey) =>
-      this.providerPresets.some(
-        (provider) => provider.id !== ignoreId && provider.clientApiKeys.includes(apiKey),
-      ),
-    );
-    if (conflictingClientApiKey) {
-      throw new RuntimeProviderError(409, {
-        type: "validation_error",
-        code: "CLIENT_API_KEY_ALREADY_EXISTS",
-        message: "A client API key is already assigned to another provider",
-      });
-    }
   }
 
   private parseProviderInput(body: RuntimeProviderInput): ValidatedProviderInput {
@@ -560,6 +563,7 @@ export class RuntimeProviderRepository {
       body.apiKeys,
       body.apiKey,
     );
+    const hasExplicitClientApiKeys = Object.prototype.hasOwnProperty.call(body, "clientApiKeys");
     const clientApiKeys = normalizeApiKeysInput(body.clientApiKeys);
 
     if (!name) {
@@ -585,7 +589,11 @@ export class RuntimeProviderRepository {
       name,
       baseUrl: parsedBaseUrl.toString().replace(/\/+$/, ""),
       providerApiKeys,
-      clientApiKeys: clientApiKeys.length > 0 ? clientApiKeys : [...providerApiKeys],
+      clientApiKeys: hasExplicitClientApiKeys
+        ? clientApiKeys
+        : clientApiKeys.length > 0
+          ? clientApiKeys
+          : [...providerApiKeys],
       capabilities: parseProviderCapabilitiesInput(body.capabilities),
     };
   }
@@ -675,12 +683,13 @@ export class RuntimeProviderRepository {
           request_parameter_policy,
           sanitize_reasoning_summary,
           strip_model_prefixes,
+          model_aliases,
           rtk_policy,
           error_policy,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertApiKey = this.db.prepare(`
         INSERT INTO provider_api_keys (provider_id, api_key, position)
@@ -722,6 +731,7 @@ export class RuntimeProviderRepository {
           ),
           provider.capabilities.sanitizeReasoningSummary ? 1 : 0,
           JSON.stringify(provider.capabilities.stripModelPrefixes),
+          JSON.stringify(provider.capabilities.modelAliases ?? {}),
           JSON.stringify(cloneRtkLayerPolicy(provider.capabilities.rtkPolicy) ?? {}),
           JSON.stringify(cloneProviderErrorPolicy(provider.capabilities.errorPolicy) ?? {}),
           provider.createdAt ?? null,
@@ -812,6 +822,7 @@ function ensureSchema(db: Database): void {
       request_parameter_policy TEXT NOT NULL DEFAULT '{}',
       sanitize_reasoning_summary INTEGER NOT NULL DEFAULT 0,
       strip_model_prefixes TEXT NOT NULL DEFAULT '[]',
+      model_aliases TEXT NOT NULL DEFAULT '{}',
       rtk_policy TEXT NOT NULL DEFAULT '{}',
       error_policy TEXT NOT NULL DEFAULT '{}',
       created_at TEXT,
@@ -820,7 +831,7 @@ function ensureSchema(db: Database): void {
 
     CREATE TABLE IF NOT EXISTS provider_api_keys (
       provider_id TEXT NOT NULL,
-      api_key TEXT NOT NULL UNIQUE,
+      api_key TEXT NOT NULL,
       position INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (provider_id, api_key),
       FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
@@ -828,7 +839,7 @@ function ensureSchema(db: Database): void {
 
     CREATE TABLE IF NOT EXISTS client_api_keys (
       provider_id TEXT NOT NULL,
-      api_key TEXT NOT NULL UNIQUE,
+      api_key TEXT NOT NULL,
       position INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (provider_id, api_key),
       FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
@@ -862,8 +873,11 @@ function ensureSchema(db: Database): void {
   ensureProvidersColumn(db, "request_parameter_policy", "TEXT NOT NULL DEFAULT '{}'");
   ensureProvidersColumn(db, "sanitize_reasoning_summary", "INTEGER NOT NULL DEFAULT 0");
   ensureProvidersColumn(db, "strip_model_prefixes", "TEXT NOT NULL DEFAULT '[]'");
+  ensureProvidersColumn(db, "model_aliases", "TEXT NOT NULL DEFAULT '{}'");
   ensureProvidersColumn(db, "rtk_policy", "TEXT NOT NULL DEFAULT '{}'");
   ensureProvidersColumn(db, "error_policy", "TEXT NOT NULL DEFAULT '{}'");
+  ensureSharedApiKeyTable(db, "provider_api_keys");
+  ensureSharedApiKeyTable(db, "client_api_keys");
 }
 
 function readStateFromDatabase(db: Database): RuntimeProviderState {
@@ -881,6 +895,7 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       request_parameter_policy,
       sanitize_reasoning_summary,
       strip_model_prefixes,
+      model_aliases,
       rtk_policy,
       error_policy,
       created_at,
@@ -948,6 +963,7 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       ),
       sanitizeReasoningSummary: row.sanitize_reasoning_summary === 1,
       stripModelPrefixes: normalizeStringList(row.strip_model_prefixes),
+      modelAliases: normalizeStringMap(row.model_aliases),
       rtkPolicy: parseRtkLayerPolicyInput(safeJsonParse(row.rtk_policy ?? "{}")),
       errorPolicy: parseProviderErrorPolicyInput(safeJsonParse(row.error_policy ?? "{}")),
     },
@@ -986,6 +1002,37 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
 
 function queryRows<T extends Record<string, unknown>>(db: Database, sql: string): T[] {
   return db.prepare(sql).all() as T[];
+}
+
+function ensureSharedApiKeyTable(db: Database, tableName: "provider_api_keys" | "client_api_keys"): void {
+  const tableSql = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+    )
+    .get(tableName) as { sql?: string } | undefined;
+
+  if (!tableSql?.sql?.includes("api_key TEXT NOT NULL UNIQUE")) {
+    return;
+  }
+
+  const tempTableName = `${tableName}_legacy_unique`;
+  db.exec(`
+    ALTER TABLE ${tableName} RENAME TO ${tempTableName};
+
+    CREATE TABLE ${tableName} (
+      provider_id TEXT NOT NULL,
+      api_key TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (provider_id, api_key),
+      FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+    );
+
+    INSERT OR IGNORE INTO ${tableName} (provider_id, api_key, position)
+    SELECT provider_id, api_key, position
+    FROM ${tempTableName};
+
+    DROP TABLE ${tempTableName};
+  `);
 }
 
 function loadLegacyState(stateFile: string): RuntimeProviderState | undefined {
@@ -1391,6 +1438,7 @@ function parseProviderCapabilitiesInput(value: unknown): RuntimeProviderCapabili
     requestParameterPolicy,
     sanitizeReasoningSummary: coerceBoolean(record.sanitizeReasoningSummary),
     stripModelPrefixes: normalizeStringList(record.stripModelPrefixes),
+    modelAliases: normalizeStringMap(record.modelAliases ?? record.model_aliases),
     rtkPolicy: parseRtkLayerPolicyInput(record.rtkPolicy ?? record.rtk_policy),
     errorPolicy: parseProviderErrorPolicyInput(record.errorPolicy ?? record.error_policy),
   };
@@ -1410,6 +1458,7 @@ function cloneCapabilities(
     }),
     sanitizeReasoningSummary: capabilities?.sanitizeReasoningSummary ?? false,
     stripModelPrefixes: [...(capabilities?.stripModelPrefixes ?? [])],
+    modelAliases: { ...(capabilities?.modelAliases ?? {}) },
     rtkPolicy: cloneRtkLayerPolicy(capabilities?.rtkPolicy),
     errorPolicy: cloneProviderErrorPolicy(capabilities?.errorPolicy),
   };
@@ -1452,6 +1501,29 @@ function normalizeStringList(value: unknown): string[] {
         .filter(Boolean),
     ),
   ];
+}
+
+function normalizeStringMap(value: unknown): Record<string, string> | undefined {
+  const parsed =
+    typeof value === "string"
+      ? safeJsonParse(value)
+      : value;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  const entries = Object.entries(parsed)
+    .map(([key, rawValue]) => [
+      typeof key === "string" ? key.trim() : "",
+      typeof rawValue === "string" ? rawValue.trim() : "",
+    ] as const)
+    .filter(([key, mapped]) => key && mapped);
+
+  if (!entries.length) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries);
 }
 
 function normalizeStoredRequestParameterPolicy(

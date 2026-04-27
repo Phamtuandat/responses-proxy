@@ -16,7 +16,12 @@
     "app:stop": "./scripts/stop.sh",
     "app:status": "./scripts/status.sh",
     "app:logs": "./scripts/logs.sh",
-    "app:open": "./scripts/open.sh"
+    "app:open": "./scripts/open.sh",
+    "tailnet:serve": "./scripts/tailnet-serve.sh",
+    "tailnet:funnel": "./scripts/tailnet-funnel.sh",
+    "tailnet:status": "./scripts/tailnet-status.sh",
+    "tailnet:open": "./scripts/tailnet-open.sh",
+    "tailnet:reset": "./scripts/tailnet-reset.sh"
   },
   "engines": {
     "node": ">=20.0.0"

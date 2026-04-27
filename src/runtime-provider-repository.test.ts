@@ -255,6 +255,148 @@ test("persists client-route api key bindings and resolves route by key", async (
   }
 });
 
+test("allows sharing one client API key across multiple providers", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-a-key"],
+          clientApiKeys: ["shared-client-key"],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.createProvider({
+      name: "provider-b",
+      baseUrl: "https://provider-b.example/v1",
+      providerApiKeys: ["provider-b-key"],
+      clientApiKeys: ["shared-client-key"],
+    });
+
+    const matchedProviders = repository.findProvidersByAccessKey("shared-client-key");
+    assert.equal(matchedProviders.length, 2);
+    assert.deepEqual(
+      matchedProviders.map((provider) => provider.name).sort(),
+      ["provider-a", "provider-b"],
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("creating and updating a provider does not switch the default route when one already exists", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-a-key"],
+          clientApiKeys: ["client-a-key"],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    assert.equal(repository.getActiveProviderId(), "provider-a");
+    assert.equal(repository.getProviderIdForClient("default"), "provider-a");
+
+    const created = repository.createProvider({
+      name: "provider-b",
+      baseUrl: "https://provider-b.example/v1",
+      providerApiKeys: ["provider-b-key"],
+      clientApiKeys: ["client-b-key"],
+    });
+
+    assert.equal(repository.getActiveProviderId(), "provider-a");
+    assert.equal(repository.getProviderIdForClient("default"), "provider-a");
+
+    repository.updateProvider(created.id, {
+      name: "provider-b-renamed",
+      baseUrl: "https://provider-b.example/v1",
+      providerApiKeys: ["provider-b-key"],
+      clientApiKeys: ["client-b-key"],
+    });
+
+    assert.equal(repository.getActiveProviderId(), "provider-a");
+    assert.equal(repository.getProviderIdForClient("default"), "provider-a");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("explicit empty client api keys stay empty instead of falling back to provider keys", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-a-key"],
+          clientApiKeys: ["client-a-key"],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+          },
+        },
+      ],
+    });
+
+    repository.updateProvider("provider-a", {
+      name: "provider-a",
+      baseUrl: "https://provider-a.example/v1",
+      providerApiKeys: ["provider-a-key"],
+      clientApiKeys: [],
+    });
+
+    assert.deepEqual(repository.getProvider("provider-a")?.clientApiKeys, []);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("keeps explicit hermes and codex client routes distinct", () => {
   assert.equal(normalizeClientRouteKey("hermes"), "hermes");
   assert.equal(normalizeClientRouteKey("codex"), "codex");
@@ -323,6 +465,57 @@ test("persists provider error policy rules in the database", async () => {
           retryable: false,
         },
       ],
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("persists provider model aliases in the database", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [
+        {
+          id: "provider-a",
+          name: "provider-a",
+          baseUrl: "https://provider-a.example/v1",
+          responsesUrl: "https://provider-a.example/v1/responses",
+          providerApiKeys: ["provider-key"],
+          clientApiKeys: ["client-key"],
+          capabilities: {
+            usageCheckEnabled: false,
+            stripMaxOutputTokens: false,
+            requestParameterPolicy: {},
+            sanitizeReasoningSummary: false,
+            stripModelPrefixes: [],
+            modelAliases: {
+              "cheap-default": "gpt-5.4-mini",
+              "quality-default": "gpt-5.4",
+            },
+          },
+        },
+      ],
+    });
+
+    const reloaded = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [],
+    });
+
+    assert.deepEqual(reloaded.getProvider("provider-a")?.capabilities.modelAliases, {
+      "cheap-default": "gpt-5.4-mini",
+      "quality-default": "gpt-5.4",
+    });
+    assert.deepEqual(repository.getProvider("provider-a")?.capabilities.modelAliases, {
+      "cheap-default": "gpt-5.4-mini",
+      "quality-default": "gpt-5.4",
     });
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

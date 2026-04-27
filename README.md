@@ -25,6 +25,20 @@ npm run app:status
 npm run app:logs
 ```
 
+Tailscale exposure on macOS host:
+
+```bash
+npm run tailnet:serve
+npm run tailnet:funnel
+npm run tailnet:status
+npm run tailnet:reset
+```
+
+`tailnet:serve` exposes `responses-proxy` only inside your tailnet.
+
+`tailnet:funnel` makes the same local port public on the internet through
+Tailscale Funnel.
+
 macOS auto-start at login:
 
 ```bash
@@ -38,6 +52,24 @@ allowance, the proxy returns `429`.
 `GET /v1/models` is forwarded through to the selected upstream provider, so
 model metadata stays owned by the real provider rather than being synthesized
 by the proxy.
+
+## Provider Routing With Shared Client Keys
+
+One client API key can be assigned to more than one provider.
+
+Routing order for `/v1/responses` is:
+
+- if `metadata.provider_id` or `x-provider-id` is present, the proxy uses that provider
+- else if `metadata.provider`, `metadata.provider_name`, or `x-provider-name` is present, the proxy matches by provider name
+- else if the key matches exactly one provider, the proxy uses that provider
+- else the proxy returns `409 AMBIGUOUS_PROVIDER_SELECTION`
+
+Model aliasing:
+
+- provider selection does not depend on the `model` prefix
+- each provider may define `modelAliases` to rewrite a client-facing alias into the real upstream model name
+- alias rewriting only happens after the provider has already been selected
+- a provider hint that is not allowed for the current API key returns `403 PROVIDER_NOT_ALLOWED_FOR_API_KEY`
 
 If the primary upstream fails with a retryable status, the proxy can
 automatically fall back to the active Codex provider declared in
@@ -108,6 +140,18 @@ export RESPONSES_PROXY_BASE_URL=http://127.0.0.1:8318/v1
 ```
 
 Then point Hermes at `http://127.0.0.1:8318/v1` and keep the provider wire format on Responses/OpenAI-compatible mode.
+
+The dashboard now includes a Quick Apply panel for both Hermes and Codex:
+
+- it points the client to `http://127.0.0.1:8318/v1`
+- it ensures the client has a dedicated route API key
+- it lets you enter an optional model before patching
+- it writes a timestamped backup beside the original config before every patch
+
+Current config files:
+
+- Hermes: `~/.hermes/config.yaml`
+- Codex: `~/.codex/config.toml`
 
 ## Fallback behavior
 

@@ -26,6 +26,7 @@
             <nav class="topnav sidenav sidebar-card" aria-label="Sections">
               <div class="sidenav-label">Workspace</div>
               <a href="#/dashboard" data-route-link><span class="nav-dot"></span><span class="nav-label">Dashboard</span></a>
+              <a href="#/clients" data-route-link><span class="nav-dot"></span><span class="nav-label">Clients</span></a>
               <a href="#/providers" data-route-link><span class="nav-dot"></span><span class="nav-label">Providers</span></a>
               <a href="#/rtk" data-route-link><span class="nav-dot"></span><span class="nav-label">RTK</span></a>
               <a href="#/usage" data-route-link><span class="nav-dot"></span><span class="nav-label">Usage</span></a>
@@ -111,6 +112,15 @@
                 <pre id="docsCurlSnippet" class="docs-pre">Loading example...</pre>
               </div>
 
+              <div class="section section-nested section-divider">
+                <div class="row">
+                  <div>
+                    <h3>Client Setup</h3>
+                    <p>Use the dedicated Clients tab to patch Hermes and Codex config with provider, base URL, and model overrides.</p>
+                  </div>
+                </div>
+              </div>
+
               <div class="stats-split dashboard-split" style="margin-top:18px;">
                 <section class="section section-nested">
                   <h3>Today</h3>
@@ -138,6 +148,96 @@
 
             </div>
 
+          </section>
+
+          <section id="screen-clients" class="screen">
+            <div class="section">
+              <div class="row">
+                <div>
+                  <h2>Clients</h2>
+                  <p>Apply client config changes with provider, base URL, and model overrides.</p>
+                </div>
+              </div>
+
+              <div class="quick-apply-grid">
+                <section class="quick-apply-card">
+                  <div class="quick-apply-header">
+                    <div>
+                      <div class="eyebrow">Hermes</div>
+                      <h4>Hermes Gateway</h4>
+                    </div>
+                    <div class="quick-apply-actions">
+                      <button type="button" id="applyHermesConfigBtn">Apply</button>
+                    </div>
+                  </div>
+                  <div class="provider-crud-badges">
+                    <span class="provider-badge" id="hermesConfigStateBadge">Loading</span>
+                    <span class="provider-badge" id="hermesConfigRouteBadge">Route</span>
+                  </div>
+                  <div class="quick-apply-meta">
+                    <div>
+                      <span>Provider</span>
+                      <select id="hermesProviderSelect"></select>
+                    </div>
+                    <div>
+                      <span>Base URL</span>
+                      <input id="hermesBaseUrlInput" type="text" placeholder="http://127.0.0.1:8318/v1" />
+                    </div>
+                    <div>
+                      <span>Model</span>
+                      <select id="hermesModelSelect"></select>
+                      <input id="hermesQuickApplyModel" type="text" placeholder="Custom model name" />
+                    </div>
+                    <div><span>Path</span><strong id="hermesConfigPath" class="mono">-</strong></div>
+                    <div><span>Route API Key</span><strong id="hermesConfigApiKey" class="mono">-</strong></div>
+                    <div><span>Current Model</span><strong id="hermesConfigModel" class="mono">-</strong></div>
+                  </div>
+                  <div class="quick-apply-backups">
+                    <span>Latest backup</span>
+                    <div id="hermesConfigBackups" class="quick-apply-backup-list"></div>
+                  </div>
+                </section>
+
+                <section class="quick-apply-card">
+                  <div class="quick-apply-header">
+                    <div>
+                      <div class="eyebrow">Codex</div>
+                      <h4>Codex CLI</h4>
+                    </div>
+                    <div class="quick-apply-actions">
+                      <button type="button" id="applyCodexConfigBtn">Apply</button>
+                    </div>
+                  </div>
+                  <div class="provider-crud-badges">
+                    <span class="provider-badge" id="codexConfigStateBadge">Loading</span>
+                    <span class="provider-badge" id="codexConfigRouteBadge">Route</span>
+                  </div>
+                  <div class="quick-apply-meta">
+                    <div>
+                      <span>Provider</span>
+                      <select id="codexProviderSelect"></select>
+                    </div>
+                    <div>
+                      <span>Base URL</span>
+                      <input id="codexBaseUrlInput" type="text" placeholder="http://127.0.0.1:8318/v1" />
+                    </div>
+                    <div>
+                      <span>Model</span>
+                      <select id="codexModelSelect"></select>
+                      <input id="codexQuickApplyModel" type="text" placeholder="Custom model name" />
+                    </div>
+                    <div><span>Path</span><strong id="codexConfigPath" class="mono">-</strong></div>
+                    <div><span>Route API Key</span><strong id="codexConfigApiKey" class="mono">-</strong></div>
+                    <div><span>Current Model</span><strong id="codexConfigModel" class="mono">-</strong></div>
+                  </div>
+                  <div class="quick-apply-backups">
+                    <span>Latest backup</span>
+                    <div id="codexConfigBackups" class="quick-apply-backup-list"></div>
+                  </div>
+                </section>
+              </div>
+              <div id="quickApplyStatus" class="compact-status" hidden></div>
+            </div>
           </section>
 
           <section id="screen-providers" class="screen">
@@ -378,18 +478,9 @@
 
               <div id="providerEditorStatus" class="status" hidden></div>
 
-              <div class="provider-editor-tabs" role="tablist" aria-label="Provider editor sections">
-                <button type="button" class="provider-editor-tab active" data-provider-tab="basics">Basics</button>
-                <button type="button" class="provider-editor-tab" data-provider-tab="keys">Keys</button>
-                <button type="button" class="provider-editor-tab" data-provider-tab="policy">Policy</button>
-                <button type="button" class="provider-editor-tab" data-provider-tab="errors">Errors</button>
-                <button type="button" class="provider-editor-tab" data-provider-tab="rtk">RTK</button>
-              </div>
-
               <div class="provider-editor-layout">
-                <div class="provider-editor-main">
-                  <div class="provider-editor-grid">
-                    <section class="section section-nested provider-card provider-tab-panel active" data-provider-panel="basics">
+                <div class="provider-editor-grid">
+                    <section class="section section-nested provider-card">
                       <div class="provider-card-header">
                         <div>
                           <h3>Basics</h3>
@@ -420,7 +511,7 @@
                       </div>
                     </section>
 
-                    <section class="section section-nested provider-card provider-tab-panel" data-provider-panel="keys">
+                    <section class="section section-nested provider-card">
                       <div class="provider-card-header">
                         <div>
                           <h3>API Keys</h3>
@@ -434,7 +525,7 @@
                               <h4>Upstream Provider Keys</h4>
                               <p>Secrets used by the proxy when forwarding requests.</p>
                             </div>
-                            <button id="addProviderApiKeyBtn" type="button" class="table-button">Add key</button>
+                            <button id="addProviderApiKeyBtn" type="button" class="table-button table-button-secondary">Add key</button>
                           </div>
                           <div id="providerApiKeysList" class="api-key-list"></div>
                         </section>
@@ -443,9 +534,9 @@
                           <div class="provider-card-header">
                             <div>
                               <h4>Proxy Client Keys</h4>
-                              <p>Keys issued to clients that should route into this provider.</p>
+                              <p>Keys that clients send in the <span class="mono">Authorization</span> header to access this provider.</p>
                             </div>
-                            <button id="addClientApiKeyBtn" type="button" class="table-button">Add key</button>
+                            <button id="addClientApiKeyBtn" type="button" class="table-button table-button-secondary">Add key</button>
                           </div>
                           <div id="clientApiKeysList" class="api-key-list"></div>
                         </section>
@@ -454,18 +545,26 @@
                       <template id="providerApiKeyTemplate">
                         <div class="api-key-row">
                           <input class="provider-api-key-input" type="password" placeholder="sk-..." />
-                          <button type="button" class="table-button provider-api-key-remove">Remove</button>
+                          <div class="api-key-actions">
+                            <button type="button" class="table-button table-button-utility api-key-toggle">Show</button>
+                            <button type="button" class="table-button table-button-utility api-key-copy">Copy</button>
+                            <button type="button" class="table-button table-button-danger-soft provider-api-key-remove">Remove</button>
+                          </div>
                         </div>
                       </template>
                       <template id="clientApiKeyTemplate">
                         <div class="api-key-row">
                           <input class="client-api-key-input" type="password" placeholder="client-..." />
-                          <button type="button" class="table-button client-api-key-remove">Remove</button>
+                          <div class="api-key-actions">
+                            <button type="button" class="table-button table-button-utility api-key-toggle">Show</button>
+                            <button type="button" class="table-button table-button-utility api-key-copy">Copy</button>
+                            <button type="button" class="table-button table-button-danger-soft client-api-key-remove">Remove</button>
+                          </div>
                         </div>
                       </template>
                     </section>
 
-                    <section class="section section-nested provider-card provider-tab-panel" data-provider-panel="policy">
+                    <section class="section section-nested provider-card">
                       <div class="provider-card-header">
                         <div>
                           <h3>Request Policy</h3>
@@ -488,20 +587,48 @@
                           <p class="field-help">Only used when the policy is set to rename.</p>
                         </div>
                         <div class="field field-span-full">
-                          <label for="providerStripModelPrefixes">Strip model prefixes</label>
+                          <label for="providerStripModelPrefixes">Legacy model rewrite prefixes</label>
                           <input id="providerStripModelPrefixes" type="text" placeholder="cx/, vendor/" />
-                          <p class="field-help">Comma-separated prefixes removed before forwarding upstream.</p>
+                          <p class="field-help">Optional legacy rewrite prefixes removed from the model name after this provider is already selected.</p>
                         </div>
                       </div>
+                      <div class="provider-card-header" style="margin-top:16px;">
+                        <div>
+                          <h4>Model Aliases</h4>
+                          <p>Rewrite a client-facing alias into the real upstream model after provider selection.</p>
+                        </div>
+                        <button id="addProviderModelAliasBtn" type="button" class="table-button table-button-secondary">Add alias</button>
+                      </div>
+                      <div class="alias-rule-head" aria-hidden="true">
+                        <span>Alias</span>
+                        <span>Upstream model</span>
+                        <span>Action</span>
+                      </div>
+                      <div id="providerModelAliasesList" class="alias-rule-list"></div>
+                      <div id="providerModelAliasesError" class="status bad compact-status" hidden></div>
+
+                      <template id="providerModelAliasTemplate">
+                        <div class="alias-rule-row">
+                          <div class="field-inline">
+                            <span class="field-inline-label">Alias</span>
+                            <input class="provider-model-alias-source" type="text" placeholder="quality-default" />
+                          </div>
+                          <div class="field-inline">
+                            <span class="field-inline-label">Upstream model</span>
+                            <input class="provider-model-alias-target" type="text" placeholder="gpt-5.4" />
+                          </div>
+                          <button type="button" class="table-button table-button-danger-soft provider-model-alias-remove">Remove</button>
+                        </div>
+                      </template>
                     </section>
 
-                    <section class="section section-nested provider-card provider-tab-panel" data-provider-panel="errors">
+                    <section class="section section-nested provider-card">
                       <div class="provider-card-header">
                         <div>
                           <h3>Error Policy</h3>
                           <p>Optional provider-specific rules to normalize verbose upstream errors into cleaner proxy codes and messages.</p>
                         </div>
-                        <button id="addProviderErrorRuleBtn" type="button" class="table-button">Add rule</button>
+                        <button id="addProviderErrorRuleBtn" type="button" class="table-button table-button-secondary">Add rule</button>
                       </div>
                       <div id="providerErrorRulesList" class="error-rule-list"></div>
 
@@ -512,7 +639,7 @@
                               <h4 class="error-rule-title">Rule</h4>
                               <p>Match upstream failures, then rewrite the proxy-facing error.</p>
                             </div>
-                            <button type="button" class="table-button provider-error-rule-remove">Remove</button>
+                            <button type="button" class="table-button table-button-danger-soft provider-error-rule-remove">Remove</button>
                           </div>
                           <div class="form-grid">
                             <div class="field">
@@ -576,7 +703,7 @@
                       </template>
                     </section>
 
-                    <section class="section section-nested provider-card provider-tab-panel" data-provider-panel="rtk">
+                    <section class="section section-nested provider-card">
                       <div class="provider-card-header">
                         <div>
                           <h3>RTK</h3>
@@ -640,47 +767,7 @@
                         </div>
                       </div>
                     </section>
-                  </div>
                 </div>
-
-                <aside class="section section-nested provider-editor-sidebar">
-                  <div class="provider-card-header">
-                    <div>
-                      <h3>Record Summary</h3>
-                      <p>Live snapshot of the current provider form.</p>
-                    </div>
-                  </div>
-                  <div class="provider-summary-grid">
-                    <div class="provider-summary-item">
-                      <span>Provider ID</span>
-                      <strong id="providerSummaryId" class="mono">-</strong>
-                    </div>
-                    <div class="provider-summary-item">
-                      <span>Base URL</span>
-                      <strong id="providerSummaryBaseUrl" class="mono">-</strong>
-                    </div>
-                    <div class="provider-summary-item">
-                      <span>Provider keys</span>
-                      <strong id="providerSummaryProviderKeys">0</strong>
-                    </div>
-                    <div class="provider-summary-item">
-                      <span>Client keys</span>
-                      <strong id="providerSummaryClientKeys">0</strong>
-                    </div>
-                    <div class="provider-summary-item provider-summary-span">
-                      <span>Request policy</span>
-                      <strong id="providerSummaryRequestPolicy">Default</strong>
-                    </div>
-                    <div class="provider-summary-item provider-summary-span">
-                      <span>RTK policy</span>
-                      <strong id="providerSummaryRtkPolicy">Inherit</strong>
-                    </div>
-                    <div class="provider-summary-item provider-summary-span">
-                      <span>Error policy</span>
-                      <strong id="providerSummaryErrorPolicy">None</strong>
-                    </div>
-                  </div>
-                </aside>
               </div>
 
               <div class="provider-editor-footer">

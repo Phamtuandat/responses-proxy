@@ -1,5 +1,6 @@
 const ROUTES = {
   dashboard: "dashboard",
+  clients: "clients",
   providers: "providers",
   rtk: "rtk",
   providerEdit: "provider-edit",
@@ -10,6 +11,7 @@ const ROUTES = {
 const routeLinks = [...document.querySelectorAll("[data-route-link]")];
 const screens = {
   [ROUTES.dashboard]: document.getElementById("screen-dashboard"),
+  [ROUTES.clients]: document.getElementById("screen-clients"),
   [ROUTES.providers]: document.getElementById("screen-providers"),
   [ROUTES.rtk]: document.getElementById("screen-rtk"),
   [ROUTES.providerEdit]: document.getElementById("screen-provider-edit"),
@@ -69,6 +71,31 @@ const statLastRequestIdEl = document.getElementById("statLastRequestId");
 const docsBaseUrlEl = document.getElementById("docsBaseUrl");
 const docsResponsesUrlEl = document.getElementById("docsResponsesUrl");
 const docsCurlSnippetEl = document.getElementById("docsCurlSnippet");
+const applyHermesConfigBtnEl = document.getElementById("applyHermesConfigBtn");
+const applyCodexConfigBtnEl = document.getElementById("applyCodexConfigBtn");
+const quickApplyStatusEl = document.getElementById("quickApplyStatus");
+const hermesConfigStateBadgeEl = document.getElementById("hermesConfigStateBadge");
+const hermesConfigRouteBadgeEl = document.getElementById("hermesConfigRouteBadge");
+const hermesProviderSelectEl = document.getElementById("hermesProviderSelect");
+const hermesBaseUrlInputEl = document.getElementById("hermesBaseUrlInput");
+const hermesModelSelectEl = document.getElementById("hermesModelSelect");
+const hermesConfigPathEl = document.getElementById("hermesConfigPath");
+const hermesConfigBaseUrlEl = document.getElementById("hermesConfigBaseUrl");
+const hermesConfigApiKeyEl = document.getElementById("hermesConfigApiKey");
+const hermesConfigModelEl = document.getElementById("hermesConfigModel");
+const hermesQuickApplyModelEl = document.getElementById("hermesQuickApplyModel");
+const hermesConfigBackupsEl = document.getElementById("hermesConfigBackups");
+const codexConfigStateBadgeEl = document.getElementById("codexConfigStateBadge");
+const codexConfigRouteBadgeEl = document.getElementById("codexConfigRouteBadge");
+const codexProviderSelectEl = document.getElementById("codexProviderSelect");
+const codexBaseUrlInputEl = document.getElementById("codexBaseUrlInput");
+const codexModelSelectEl = document.getElementById("codexModelSelect");
+const codexConfigPathEl = document.getElementById("codexConfigPath");
+const codexConfigBaseUrlEl = document.getElementById("codexConfigBaseUrl");
+const codexConfigApiKeyEl = document.getElementById("codexConfigApiKey");
+const codexConfigModelEl = document.getElementById("codexConfigModel");
+const codexQuickApplyModelEl = document.getElementById("codexQuickApplyModel");
+const codexConfigBackupsEl = document.getElementById("codexConfigBackups");
 const statsTodayRequestsEl = document.getElementById("statsTodayRequests");
 const statsTodayHitRateEl = document.getElementById("statsTodayHitRate");
 const statsTodayTelemetryEl = document.getElementById("statsTodayTelemetry");
@@ -109,8 +136,6 @@ const providerEditorTitleEl = document.getElementById("providerEditorTitle");
 const providerEditorSubtitleEl = document.getElementById("providerEditorSubtitle");
 const providerEditorMetaEl = document.getElementById("providerEditorMeta");
 const providerEditorIdEl = document.getElementById("providerEditorId");
-const providerEditorTabEls = [...document.querySelectorAll("[data-provider-tab]")];
-const providerEditorPanelEls = [...document.querySelectorAll("[data-provider-panel]")];
 const providerSummaryIdEl = document.getElementById("providerSummaryId");
 const providerSummaryBaseUrlEl = document.getElementById("providerSummaryBaseUrl");
 const providerSummaryProviderKeysEl = document.getElementById("providerSummaryProviderKeys");
@@ -133,6 +158,10 @@ const providerMaxOutputTokensModeEl = document.getElementById("providerMaxOutput
 const providerMaxOutputTokensTargetEl = document.getElementById("providerMaxOutputTokensTarget");
 const providerSanitizeReasoningSummaryEl = document.getElementById("providerSanitizeReasoningSummary");
 const providerStripModelPrefixesEl = document.getElementById("providerStripModelPrefixes");
+const providerModelAliasesListEl = document.getElementById("providerModelAliasesList");
+const providerModelAliasTemplateEl = document.getElementById("providerModelAliasTemplate");
+const addProviderModelAliasBtnEl = document.getElementById("addProviderModelAliasBtn");
+const providerModelAliasesErrorEl = document.getElementById("providerModelAliasesError");
 const providerRtkEnabledEl = document.getElementById("providerRtkEnabled");
 const providerRtkToolOutputEnabledEl = document.getElementById("providerRtkToolOutputEnabled");
 const providerRtkMaxCharsEl = document.getElementById("providerRtkMaxChars");
@@ -149,11 +178,22 @@ const providerDeleteBtnEl = document.getElementById("providerDeleteBtn");
 let providerState = { activeProviderId: "", providers: [], clientRoutes: [] };
 let latestCacheSnapshot = null;
 let usageStatsState = null;
+let clientConfigState = null;
 let currentRoute = "";
+let clientModelCatalogState = { hermes: { providerId: "", models: [] }, codex: { providerId: "", models: [] } };
+let clientProviderAvailabilityState = { byId: {}, loading: false };
 let selectedCacheProviderId = "";
 let providerSearchTerm = "";
-let activeProviderEditorTab = "basics";
+let providerEditorDirty = false;
 const TRI_STATE_INHERIT = "inherit";
+
+function isInteractiveClientRoute() {
+  return currentRoute === ROUTES.clients;
+}
+
+function shouldSkipBackgroundRefresh() {
+  return currentRoute === ROUTES.clients || currentRoute === ROUTES.providerEdit;
+}
 
 function normalizeRoute() {
   const route = window.location.hash.replace(/^#\/?/, "").trim();
@@ -197,7 +237,9 @@ function isEditingProviderForm() {
     active === providerRtkTailCharsEl ||
     active === providerRtkDetectFormatEl ||
     providerApiKeysListEl.contains(active) ||
-    clientApiKeysListEl.contains(active)
+    clientApiKeysListEl.contains(active) ||
+    providerModelAliasesListEl.contains(active) ||
+    providerErrorRulesListEl.contains(active)
   );
 }
 
@@ -351,21 +393,6 @@ function setProviderEditorStatus(message = "", tone = "") {
   providerEditorStatusEl.textContent = message;
 }
 
-function setProviderEditorTab(tabKey) {
-  const nextTab = providerEditorTabEls.some((element) => element.dataset.providerTab === tabKey)
-    ? tabKey
-    : "basics";
-  activeProviderEditorTab = nextTab;
-  for (const element of providerEditorTabEls) {
-    const active = element.dataset.providerTab === nextTab;
-    element.classList.toggle("active", active);
-    element.setAttribute("aria-selected", active ? "true" : "false");
-  }
-  for (const element of providerEditorPanelEls) {
-    element.classList.toggle("active", element.dataset.providerPanel === nextTab);
-  }
-}
-
 function renderProviderEditorSummary() {
   if (!providerSummaryIdEl) {
     return;
@@ -375,15 +402,7 @@ function renderProviderEditorSummary() {
   const providerKeys = collectProviderApiKeys().length;
   const clientKeys = collectClientApiKeys().length;
   const capabilities = collectProviderCapabilities();
-  const maxOutputTokens = capabilities.requestParameterPolicy?.maxOutputTokens;
-  const requestPolicySummary =
-    maxOutputTokens?.mode && maxOutputTokens.mode !== "forward"
-      ? maxOutputTokens.mode === "rename" && maxOutputTokens.target
-        ? `max-output: rename -> ${maxOutputTokens.target}`
-        : `max-output: ${maxOutputTokens.mode}`
-      : capabilities.stripModelPrefixes?.length
-        ? `strip prefixes: ${capabilities.stripModelPrefixes.join(", ")}`
-        : "Default";
+  const requestPolicySummary = formatRequestPolicySummary(capabilities);
 
   providerSummaryIdEl.textContent = providerId;
   providerSummaryBaseUrlEl.textContent = baseUrl;
@@ -394,7 +413,27 @@ function renderProviderEditorSummary() {
   providerSummaryErrorPolicyEl.textContent = formatErrorPolicySummary(capabilities.errorPolicy);
 }
 
+function formatRequestPolicySummary(capabilities) {
+  const maxOutputTokens = capabilities.requestParameterPolicy?.maxOutputTokens;
+  const parts = [
+    maxOutputTokens?.mode && maxOutputTokens.mode !== "forward"
+      ? maxOutputTokens.mode === "rename" && maxOutputTokens.target
+        ? `max-output: rename -> ${maxOutputTokens.target}`
+        : `max-output: ${maxOutputTokens.mode}`
+      : "",
+    capabilities.modelAliases && Object.keys(capabilities.modelAliases).length
+      ? `aliases: ${Object.keys(capabilities.modelAliases).length}`
+      : "",
+    capabilities.stripModelPrefixes?.length
+      ? `prefixes: ${capabilities.stripModelPrefixes.join(", ")}`
+      : "",
+  ].filter(Boolean);
+
+  return parts.length ? parts.join(" | ") : "Default";
+}
+
 function setProviderEditor(provider) {
+  providerEditorDirty = false;
   const capabilities = provider?.capabilities || {};
   const maxOutputTokensPolicy = capabilities.requestParameterPolicy?.maxOutputTokens || null;
   const maxOutputTokensMode = maxOutputTokensPolicy?.mode || (capabilities.stripMaxOutputTokens ? "strip" : "forward");
@@ -413,6 +452,7 @@ function setProviderEditor(provider) {
   providerStripModelPrefixesEl.value = Array.isArray(capabilities.stripModelPrefixes)
     ? capabilities.stripModelPrefixes.join(", ")
     : "";
+  renderProviderModelAliasInputs(capabilities.modelAliases || {});
   setTriStateBooleanSelectValue(providerRtkEnabledEl, rtkPolicy?.enabled);
   setTriStateBooleanSelectValue(providerRtkToolOutputEnabledEl, rtkPolicy?.toolOutputEnabled);
   providerRtkMaxCharsEl.value =
@@ -444,7 +484,6 @@ function setProviderEditor(provider) {
   providerEditorMetaEl.textContent = provider
     ? `Editing provider ${provider.id}. Save to apply changes.`
     : "A provider ID will be generated when you save this record.";
-  setProviderEditorTab(activeProviderEditorTab);
   renderProviderEditorSummary();
 }
 
@@ -461,17 +500,24 @@ function appendProviderApiKeyInput(value = "") {
   const fragment = providerApiKeyTemplateEl.content.cloneNode(true);
   const row = fragment.querySelector(".api-key-row");
   const input = fragment.querySelector(".provider-api-key-input");
+  const toggleBtn = fragment.querySelector(".api-key-toggle");
+  const copyBtn = fragment.querySelector(".api-key-copy");
   const removeBtn = fragment.querySelector(".provider-api-key-remove");
   input.value = value;
+  bindApiKeyRowActions(input, toggleBtn, copyBtn);
   removeBtn.addEventListener("click", () => {
     row.remove();
     if (!providerApiKeysListEl.children.length) {
       appendProviderApiKeyInput("");
     }
     syncProviderApiKeyRemoveButtons();
+    markProviderEditorDirty();
     renderProviderEditorSummary();
   });
-  input.addEventListener("input", () => renderProviderEditorSummary());
+  input.addEventListener("input", () => {
+    markProviderEditorDirty();
+    renderProviderEditorSummary();
+  });
   providerApiKeysListEl.appendChild(fragment);
 }
 
@@ -496,17 +542,24 @@ function appendClientApiKeyInput(value = "") {
   const fragment = clientApiKeyTemplateEl.content.cloneNode(true);
   const row = fragment.querySelector(".api-key-row");
   const input = fragment.querySelector(".client-api-key-input");
+  const toggleBtn = fragment.querySelector(".api-key-toggle");
+  const copyBtn = fragment.querySelector(".api-key-copy");
   const removeBtn = fragment.querySelector(".client-api-key-remove");
   input.value = value;
+  bindApiKeyRowActions(input, toggleBtn, copyBtn);
   removeBtn.addEventListener("click", () => {
     row.remove();
     if (!clientApiKeysListEl.children.length) {
       appendClientApiKeyInput("");
     }
     syncClientApiKeyRemoveButtons();
+    markProviderEditorDirty();
     renderProviderEditorSummary();
   });
-  input.addEventListener("input", () => renderProviderEditorSummary());
+  input.addEventListener("input", () => {
+    markProviderEditorDirty();
+    renderProviderEditorSummary();
+  });
   clientApiKeysListEl.appendChild(fragment);
 }
 
@@ -522,6 +575,151 @@ function collectProviderApiKeys() {
   return [...providerApiKeysListEl.querySelectorAll(".provider-api-key-input")]
     .map((input) => input.value.trim())
     .filter(Boolean);
+}
+
+function renderProviderModelAliasInputs(aliases) {
+  providerModelAliasesListEl.innerHTML = "";
+  const entries = Object.entries(aliases || {});
+  if (!entries.length) {
+    appendProviderModelAliasInput("", "");
+    syncProviderModelAliasRemoveButtons();
+    validateProviderModelAliases();
+    return;
+  }
+  for (const [source, target] of entries) {
+    appendProviderModelAliasInput(source, target);
+  }
+  syncProviderModelAliasRemoveButtons();
+  validateProviderModelAliases();
+}
+
+function appendProviderModelAliasInput(source = "", target = "") {
+  const fragment = providerModelAliasTemplateEl.content.cloneNode(true);
+  const row = fragment.querySelector(".alias-rule-row");
+  const sourceInput = fragment.querySelector(".provider-model-alias-source");
+  const targetInput = fragment.querySelector(".provider-model-alias-target");
+  const removeBtn = fragment.querySelector(".provider-model-alias-remove");
+  sourceInput.value = source;
+  targetInput.value = target;
+  removeBtn.addEventListener("click", () => {
+    row.remove();
+    if (!providerModelAliasesListEl.children.length) {
+      appendProviderModelAliasInput("", "");
+    }
+    syncProviderModelAliasRemoveButtons();
+    markProviderEditorDirty();
+    validateProviderModelAliases();
+    renderProviderEditorSummary();
+  });
+  sourceInput.addEventListener("input", () => {
+    markProviderEditorDirty();
+    validateProviderModelAliases();
+    renderProviderEditorSummary();
+  });
+  targetInput.addEventListener("input", () => {
+    markProviderEditorDirty();
+    validateProviderModelAliases();
+    renderProviderEditorSummary();
+  });
+  providerModelAliasesListEl.appendChild(fragment);
+}
+
+function syncProviderModelAliasRemoveButtons() {
+  const rows = [...providerModelAliasesListEl.querySelectorAll(".alias-rule-row")];
+  for (const row of rows) {
+    const removeBtn = row.querySelector(".provider-model-alias-remove");
+    removeBtn.disabled = rows.length === 1;
+  }
+}
+
+function collectProviderModelAliases() {
+  const entries = [...providerModelAliasesListEl.querySelectorAll(".alias-rule-row")]
+    .map((row) => {
+      const source = row.querySelector(".provider-model-alias-source")?.value.trim() || "";
+      const target = row.querySelector(".provider-model-alias-target")?.value.trim() || "";
+      return source && target ? [source, target] : null;
+    })
+    .filter(Boolean);
+
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function findDuplicateProviderModelAliases() {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const row of providerModelAliasesListEl.querySelectorAll(".alias-rule-row")) {
+    const source = row.querySelector(".provider-model-alias-source")?.value.trim() || "";
+    if (!source) continue;
+    const normalized = source.toLowerCase();
+    if (seen.has(normalized)) {
+      duplicates.add(source);
+    } else {
+      seen.add(normalized);
+    }
+  }
+  return [...duplicates];
+}
+
+function validateProviderModelAliases() {
+  const duplicates = findDuplicateProviderModelAliases();
+  const hasDuplicates = duplicates.length > 0;
+
+  for (const row of providerModelAliasesListEl.querySelectorAll(".alias-rule-row")) {
+    const sourceInput = row.querySelector(".provider-model-alias-source");
+    const source = sourceInput?.value.trim().toLowerCase() || "";
+    sourceInput?.classList.toggle(
+      "input-invalid",
+      Boolean(source) && duplicates.some((entry) => entry.toLowerCase() === source),
+    );
+  }
+
+  if (providerModelAliasesErrorEl) {
+    providerModelAliasesErrorEl.hidden = !hasDuplicates;
+    providerModelAliasesErrorEl.textContent = hasDuplicates
+      ? `Duplicate aliases are not allowed: ${duplicates.join(", ")}`
+      : "";
+  }
+
+  return !hasDuplicates;
+}
+
+function bindApiKeyRowActions(input, toggleBtn, copyBtn) {
+  const refreshToggleLabel = () => {
+    if (toggleBtn) {
+      toggleBtn.textContent = input.type === "password" ? "Show" : "Hide";
+    }
+  };
+
+  toggleBtn?.addEventListener("click", () => {
+    input.type = input.type === "password" ? "text" : "password";
+    refreshToggleLabel();
+  });
+
+  copyBtn?.addEventListener("click", async () => {
+    const value = input.value.trim();
+    if (!value) {
+      copyBtn.textContent = "Empty";
+      window.setTimeout(() => {
+        copyBtn.textContent = "Copy";
+      }, 900);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+      copyBtn.textContent = "Copied";
+    } catch (_error) {
+      input.focus();
+      input.select();
+      copyBtn.textContent = "Select";
+    }
+
+    window.setTimeout(() => {
+      copyBtn.textContent = "Copy";
+    }, 1200);
+  });
+
+  refreshToggleLabel();
 }
 
 function renderProviderErrorRuleInputs(rules) {
@@ -603,6 +801,7 @@ function appendProviderErrorRuleInput(rule = {}) {
     card.remove();
     syncProviderErrorRuleRemoveButtons();
     syncProviderErrorRuleTitles();
+    markProviderEditorDirty();
     renderProviderEditorSummary();
   });
 
@@ -617,11 +816,13 @@ function appendProviderErrorRuleInput(rule = {}) {
     messageEl,
   ].forEach((element) => {
     element?.addEventListener("input", () => {
+      markProviderEditorDirty();
       refreshTitle();
       refreshPreview();
       renderProviderEditorSummary();
     });
     element?.addEventListener("change", () => {
+      markProviderEditorDirty();
       refreshTitle();
       refreshPreview();
       renderProviderEditorSummary();
@@ -722,6 +923,7 @@ function collectClientApiKeys() {
 function collectProviderCapabilities() {
   const maxOutputTokensMode = providerMaxOutputTokensModeEl.value || "forward";
   const maxOutputTokensTarget = providerMaxOutputTokensTargetEl.value.trim();
+  const providerModelAliases = collectProviderModelAliases();
   const providerRtkPolicy = {
     ...(readTriStateBooleanSelectValue(providerRtkEnabledEl) !== undefined
       ? { enabled: readTriStateBooleanSelectValue(providerRtkEnabledEl) }
@@ -763,6 +965,7 @@ function collectProviderCapabilities() {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean),
+    ...(providerModelAliases ? { modelAliases: providerModelAliases } : {}),
     ...(collectProviderErrorPolicy() ? { errorPolicy: collectProviderErrorPolicy() } : {}),
     ...(Object.keys(providerRtkPolicy).length ? { rtkPolicy: providerRtkPolicy } : {}),
   };
@@ -777,7 +980,7 @@ function goToProviderEditor(providerId) {
 }
 
 function hydrateProviderEditorFromRoute(query) {
-  if (isEditingProviderForm()) return;
+  if (isEditingProviderForm() || providerEditorDirty) return;
   const providerId = query.get("id") || "";
   if (!providerId) {
     setProviderEditor();
@@ -785,6 +988,10 @@ function hydrateProviderEditorFromRoute(query) {
   }
   const provider = getEditableProviders().find((item) => item.id === providerId);
   setProviderEditor(provider || null);
+}
+
+function markProviderEditorDirty() {
+  providerEditorDirty = true;
 }
 
 function renderProviderTable() {
@@ -810,6 +1017,9 @@ function renderProviderTable() {
         ? `max-output:${maxOutputTokensMode}${maxOutputTokensMode === "rename" && maxOutputTokensPolicy?.target ? `->${maxOutputTokensPolicy.target}` : ""}`
         : "",
       capabilities.sanitizeReasoningSummary ? "sanitize-reasoning" : "",
+      capabilities.modelAliases && Object.keys(capabilities.modelAliases).length
+        ? `aliases:${Object.keys(capabilities.modelAliases).length}`
+        : "",
       Array.isArray(capabilities.stripModelPrefixes) && capabilities.stripModelPrefixes.length
         ? `prefixes:${capabilities.stripModelPrefixes.join(",")}`
         : "",
@@ -858,6 +1068,9 @@ function getProviderCapabilitySummary(provider) {
       ? `max-output:${maxOutputTokensMode}${maxOutputTokensMode === "rename" && maxOutputTokensPolicy?.target ? `->${maxOutputTokensPolicy.target}` : ""}`
       : "",
     capabilities.sanitizeReasoningSummary ? "sanitize-reasoning" : "",
+    capabilities.modelAliases && Object.keys(capabilities.modelAliases).length
+      ? `aliases:${Object.keys(capabilities.modelAliases).length}`
+      : "",
     Array.isArray(capabilities.stripModelPrefixes) && capabilities.stripModelPrefixes.length
       ? `prefixes:${capabilities.stripModelPrefixes.join(",")}`
       : "",
@@ -1106,6 +1319,282 @@ function renderDashboardDocs() {
     '  -H "Authorization: Bearer <client-api-key>" \\',
     '  --data-raw \'{"model":"gpt-5.4","input":"Hello"}\'',
   ].join("\n");
+}
+
+async function copyTextWithButton(buttonEl, value, options = {}) {
+  if (!buttonEl) return;
+  const idleLabel = options.idleLabel || "Copy";
+  const emptyLabel = options.emptyLabel || "Empty";
+  const copiedLabel = options.copiedLabel || "Copied";
+  const selectLabel = options.selectLabel || "Select";
+
+  if (!value) {
+    buttonEl.textContent = emptyLabel;
+    window.setTimeout(() => {
+      buttonEl.textContent = idleLabel;
+    }, 900);
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(value);
+    buttonEl.textContent = copiedLabel;
+  } catch (_error) {
+    buttonEl.textContent = selectLabel;
+  }
+
+  window.setTimeout(() => {
+    buttonEl.textContent = idleLabel;
+  }, 1200);
+}
+
+function maskApiKey(value) {
+  if (!value) return "Missing";
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 6)}...${value.slice(-6)}`;
+}
+
+function setTextContent(element, value) {
+  if (!element) return;
+  element.textContent = value;
+}
+
+function setQuickApplyStatus(message, tone = "") {
+  if (!quickApplyStatusEl) return;
+  if (!message) {
+    quickApplyStatusEl.hidden = true;
+    quickApplyStatusEl.className = "compact-status";
+    quickApplyStatusEl.textContent = "";
+    return;
+  }
+  quickApplyStatusEl.hidden = false;
+  quickApplyStatusEl.className = `compact-status${tone ? ` ${tone}` : ""}`;
+  quickApplyStatusEl.textContent = message;
+}
+
+function updateQuickApplyBadge(element, label, tone) {
+  if (!element) return;
+  element.textContent = label;
+  element.className = `provider-badge${tone ? ` provider-badge-${tone}` : ""}`;
+}
+
+function syncQuickApplyModelInput(inputEl, preferredValue) {
+  if (!inputEl) return;
+  if (document.activeElement === inputEl) return;
+  inputEl.value = preferredValue || "";
+}
+
+function renderClientModelSelect(selectEl, inputEl, models, currentModel) {
+  if (!selectEl) return;
+  const normalizedModels = Array.isArray(models) ? models : [];
+  const selectedModel = currentModel || "";
+  const hasSelected = selectedModel && normalizedModels.includes(selectedModel);
+
+  selectEl.innerHTML = "";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = normalizedModels.length ? "Provider default" : "No models loaded";
+  selectEl.appendChild(defaultOption);
+
+  for (const model of normalizedModels) {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    selectEl.appendChild(option);
+  }
+
+  const customOption = document.createElement("option");
+  customOption.value = "__custom__";
+  customOption.textContent = "Custom model...";
+  selectEl.appendChild(customOption);
+
+  if (hasSelected) {
+    selectEl.value = selectedModel;
+  } else if (selectedModel) {
+    selectEl.value = "__custom__";
+  } else {
+    selectEl.value = "";
+  }
+
+  if (inputEl) {
+    inputEl.hidden = selectEl.value !== "__custom__";
+    if (selectEl.value === "__custom__") {
+      syncQuickApplyModelInput(inputEl, selectedModel);
+    } else if (document.activeElement !== inputEl) {
+      inputEl.value = "";
+    }
+  }
+}
+
+function formatRelativeTimestamp(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.toLocaleString()}`;
+}
+
+function renderQuickApplyBackups(container, backups) {
+  if (!container) return;
+  container.innerHTML = "";
+  if (!Array.isArray(backups) || !backups.length) {
+    const empty = document.createElement("div");
+    empty.className = "quick-apply-backup-item";
+    empty.innerHTML = "<strong>No backups yet</strong><span>A timestamped backup will appear here after the first patch.</span>";
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const backup of backups) {
+    const item = document.createElement("div");
+    item.className = "quick-apply-backup-item";
+    item.innerHTML =
+      `<strong class="mono">${escapeHtml(backup.fileName || "-")}</strong>` +
+      `<span>${escapeHtml(formatRelativeTimestamp(backup.modifiedAt))} · ${escapeHtml(formatNumber(backup.sizeBytes) || "0")} bytes</span>`;
+    container.appendChild(item);
+  }
+}
+
+function renderClientConfigStatus() {
+  const clients = clientConfigState?.clients || {};
+  renderSingleClientConfigStatus("hermes", clients.hermes);
+  renderSingleClientConfigStatus("codex", clients.codex);
+}
+
+function getClientAvailableProviders(entry) {
+  const providers = Array.isArray(providerState.providers) ? providerState.providers : [];
+  const currentProviderId = entry?.route?.providerId || "";
+  if (!providers.length) {
+    return [];
+  }
+  if (clientProviderAvailabilityState.loading && !Object.keys(clientProviderAvailabilityState.byId || {}).length) {
+    return providers;
+  }
+  return providers.filter((provider) => {
+    const availability = clientProviderAvailabilityState.byId?.[provider.id];
+    if (provider.id === currentProviderId) {
+      return true;
+    }
+    if (!availability) {
+      return true;
+    }
+    return availability?.available === true;
+  });
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 3500) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const data = await response.json();
+    return { response, data };
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function renderSingleClientConfigStatus(client, entry) {
+  const isHermes = client === "hermes";
+  const stateBadgeEl = isHermes ? hermesConfigStateBadgeEl : codexConfigStateBadgeEl;
+  const routeBadgeEl = isHermes ? hermesConfigRouteBadgeEl : codexConfigRouteBadgeEl;
+  const providerSelectEl = isHermes ? hermesProviderSelectEl : codexProviderSelectEl;
+  const baseUrlInputEl = isHermes ? hermesBaseUrlInputEl : codexBaseUrlInputEl;
+  const modelSelectEl = isHermes ? hermesModelSelectEl : codexModelSelectEl;
+  const pathEl = isHermes ? hermesConfigPathEl : codexConfigPathEl;
+  const baseUrlEl = isHermes ? hermesConfigBaseUrlEl : codexConfigBaseUrlEl;
+  const apiKeyEl = isHermes ? hermesConfigApiKeyEl : codexConfigApiKeyEl;
+  const modelEl = isHermes ? hermesConfigModelEl : codexConfigModelEl;
+  const inputEl = isHermes ? hermesQuickApplyModelEl : codexQuickApplyModelEl;
+  const backupsEl = isHermes ? hermesConfigBackupsEl : codexConfigBackupsEl;
+  const catalog = isHermes ? clientModelCatalogState.hermes : clientModelCatalogState.codex;
+  const providers = getClientAvailableProviders(entry);
+  const preserveDraft = isInteractiveClientRoute();
+  const currentProviderValue = providerSelectEl?.value || "";
+  const currentBaseUrlValue = baseUrlInputEl?.value || "";
+  const currentModelValue = resolveClientModelValue(modelSelectEl, inputEl) || "";
+
+  if (providerSelectEl) {
+    const previous = providerSelectEl.value;
+    providerSelectEl.innerHTML = "";
+    if (!providers.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = clientProviderAvailabilityState.loading
+        ? "Checking available providers..."
+        : "No available providers";
+      providerSelectEl.appendChild(option);
+      providerSelectEl.disabled = true;
+    }
+    for (const provider of providers) {
+      const option = document.createElement("option");
+      option.value = provider.id;
+      option.textContent = `${provider.name} (${provider.id})`;
+      providerSelectEl.appendChild(option);
+    }
+    if (providers.length) {
+      providerSelectEl.disabled = false;
+    }
+    const targetProviderId =
+      (preserveDraft ? currentProviderValue : "") || entry?.route?.providerId || previous || providers[0]?.id || "";
+    if (targetProviderId) {
+      providerSelectEl.value = targetProviderId;
+    }
+  }
+
+  if (!entry) {
+    updateQuickApplyBadge(stateBadgeEl, "Unavailable", "bad");
+    updateQuickApplyBadge(routeBadgeEl, "Route unknown", "warn");
+    setTextContent(pathEl, "-");
+    setTextContent(baseUrlEl, "-");
+    setTextContent(apiKeyEl, "-");
+    setTextContent(modelEl, "-");
+    syncQuickApplyModelInput(inputEl, preserveDraft ? currentModelValue : "");
+    renderClientModelSelect(modelSelectEl, inputEl, catalog.models, preserveDraft ? currentModelValue : "");
+    if (baseUrlInputEl && (!preserveDraft || document.activeElement !== baseUrlInputEl)) {
+      baseUrlInputEl.value = preserveDraft ? currentBaseUrlValue || clientConfigState?.proxyBaseUrl || "" : clientConfigState?.proxyBaseUrl || "";
+    }
+    renderQuickApplyBackups(backupsEl, []);
+    if (isHermes ? applyHermesConfigBtnEl : applyCodexConfigBtnEl) {
+      (isHermes ? applyHermesConfigBtnEl : applyCodexConfigBtnEl).disabled = true;
+    }
+    return;
+  }
+
+  updateQuickApplyBadge(
+    stateBadgeEl,
+    entry.configured ? "Applied" : entry.exists ? "Needs patch" : "Config missing",
+    entry.configured ? "ok" : entry.exists ? "warn" : "bad",
+  );
+  updateQuickApplyBadge(
+    routeBadgeEl,
+    entry.route?.providerName
+      ? `${entry.route.key} → ${entry.route.providerName}`
+      : `${client} route`,
+    entry.route?.providerId ? "ok" : "warn",
+  );
+  setTextContent(pathEl, entry.path || "-");
+  setTextContent(baseUrlEl, entry.detected?.baseUrl || clientConfigState?.proxyBaseUrl || "-");
+  setTextContent(apiKeyEl, maskApiKey(entry.routeApiKey || entry.detected?.apiKey || ""));
+  setTextContent(modelEl, entry.detected?.model || entry.route?.modelOverride || "Unspecified");
+  renderClientModelSelect(
+    modelSelectEl,
+    inputEl,
+    catalog.models,
+    (preserveDraft ? currentModelValue : "") || entry.route?.modelOverride || entry.detected?.model || "",
+  );
+  if (baseUrlInputEl && (!preserveDraft || document.activeElement !== baseUrlInputEl)) {
+    baseUrlInputEl.value =
+      (preserveDraft ? currentBaseUrlValue : "") || entry.detected?.baseUrl || clientConfigState?.proxyBaseUrl || "";
+  }
+  renderQuickApplyBackups(backupsEl, entry.backups || []);
+  const actionBtn = isHermes ? applyHermesConfigBtnEl : applyCodexConfigBtnEl;
+  if (actionBtn) {
+    actionBtn.disabled = entry.access?.canPatch === false;
+    actionBtn.title = entry.access?.reason || "";
+  }
 }
 
 function getSelectedCacheProvider() {
@@ -1445,6 +1934,92 @@ async function refreshProviders() {
   }
 }
 
+async function refreshClientConfigStatus() {
+  try {
+    const response = await fetch("/api/client-configs/status", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not load client config status");
+    }
+    clientConfigState = data;
+    if (data.runtime === "container") {
+      const blocked = [data.clients?.hermes, data.clients?.codex].filter(
+        (entry) => entry?.access?.canPatch === false,
+      );
+      if (blocked.length) {
+        setQuickApplyStatus(blocked[0].access.reason, "warn");
+      }
+    }
+  } catch (error) {
+    clientConfigState = null;
+    setQuickApplyStatus(error instanceof Error ? error.message : "Could not load client config status", "bad");
+  }
+  renderClientConfigStatus();
+}
+
+async function refreshClientModelCatalog(client, providerId) {
+  if (!providerId) {
+    clientModelCatalogState[client] = { providerId: "", models: [] };
+    renderClientConfigStatus();
+    return;
+  }
+
+  const currentCatalog = clientModelCatalogState[client];
+  if (currentCatalog?.providerId === providerId && currentCatalog.models.length) {
+    return;
+  }
+
+  try {
+    const { response, data } = await fetchJsonWithTimeout(
+      `/api/provider-models?providerId=${encodeURIComponent(providerId)}`,
+      3500,
+    );
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || "Could not load models");
+    }
+    clientModelCatalogState[client] = {
+      providerId,
+      models: Array.isArray(data.models) ? data.models : [],
+    };
+  } catch (_error) {
+    clientModelCatalogState[client] = { providerId, models: [] };
+  }
+  renderClientConfigStatus();
+}
+
+async function refreshClientProviderAvailability() {
+  const providers = Array.isArray(providerState.providers) ? providerState.providers : [];
+  clientProviderAvailabilityState = { ...clientProviderAvailabilityState, loading: true };
+  renderClientConfigStatus();
+
+  const checks = await Promise.all(
+    providers.map(async (provider) => {
+      if (!provider?.id || !provider?.baseUrl || (provider.providerApiKeysCount || 0) <= 0) {
+        return [provider.id, { available: false, reason: "missing_provider_key" }];
+      }
+      try {
+        const { response, data } = await fetchJsonWithTimeout(
+          `/api/provider-models?providerId=${encodeURIComponent(provider.id)}`,
+          2500,
+        );
+        const models = Array.isArray(data.models) ? data.models : [];
+        if (!response.ok || data.error) {
+          return [provider.id, { available: false, reason: data.error?.message || "probe_failed" }];
+        }
+        return [provider.id, { available: true, modelsCount: models.length }];
+      } catch (error) {
+        return [provider.id, { available: false, reason: error instanceof Error ? error.message : "probe_failed" }];
+      }
+    }),
+  );
+
+  clientProviderAvailabilityState = {
+    byId: Object.fromEntries(checks),
+    loading: false,
+  };
+  renderClientConfigStatus();
+}
+
 async function refreshUsageStats() {
   try {
     const response = await fetch("/api/stats/usage", { cache: "no-store" });
@@ -1461,11 +2036,29 @@ async function refreshDashboard() {
   await refreshProviders();
   await refreshCacheSnapshot("");
   await refreshUsageStats();
+  await refreshClientConfigStatus();
+}
+
+async function refreshClientsScreen() {
+  await refreshProviders();
+  await refreshClientConfigStatus();
+  renderClientConfigStatus();
+  void refreshClientProviderAvailability();
+  const hermesProviderId =
+    clientConfigState?.clients?.hermes?.route?.providerId || hermesProviderSelectEl?.value || "";
+  const codexProviderId =
+    clientConfigState?.clients?.codex?.route?.providerId || codexProviderSelectEl?.value || "";
+  void refreshClientModelCatalog("hermes", hermesProviderId);
+  void refreshClientModelCatalog("codex", codexProviderId);
 }
 
 async function refreshActiveRoute() {
   if (currentRoute === ROUTES.dashboard) {
     await refreshDashboard();
+    return;
+  }
+  if (currentRoute === ROUTES.clients) {
+    await refreshClientsScreen();
     return;
   }
   if (currentRoute === ROUTES.providers) {
@@ -1499,12 +2092,6 @@ providerSearchInputEl?.addEventListener("input", () => {
   providerSearchTerm = providerSearchInputEl.value || "";
   renderProviderCrudList();
 });
-
-for (const element of providerEditorTabEls) {
-  element.addEventListener("click", () => {
-    setProviderEditorTab(element.dataset.providerTab || "basics");
-  });
-}
 
 rtkClientRouteSelectEl?.addEventListener("change", () => {
   hydrateClientRouteRtkForm(rtkClientRouteSelectEl.value);
@@ -1560,6 +2147,126 @@ clearClientRtkPolicyBtnEl?.addEventListener("click", async () => {
   }
 });
 
+function resolveClientModelValue(modelSelectEl, modelInputEl) {
+  if (!modelSelectEl) {
+    return modelInputEl?.value.trim() || undefined;
+  }
+  if (modelSelectEl.value === "__custom__") {
+    return modelInputEl?.value.trim() || undefined;
+  }
+  return modelSelectEl.value.trim() || undefined;
+}
+
+async function applyClientQuickConfig(
+  client,
+  buttonEl,
+  modelInputEl,
+  providerSelectEl,
+  baseUrlInputEl,
+  modelSelectEl,
+) {
+  buttonEl.disabled = true;
+  const originalLabel = buttonEl.textContent;
+  buttonEl.textContent = "Applying...";
+  setQuickApplyStatus("");
+  try {
+    const response = await fetch("/api/client-configs/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client,
+        providerId: providerSelectEl?.value || undefined,
+        baseUrl: baseUrlInputEl?.value.trim() || undefined,
+        model: resolveClientModelValue(modelSelectEl, modelInputEl),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || `Could not apply ${client} config`);
+    }
+    clientConfigState = {
+      proxyBaseUrl: data.proxyBaseUrl,
+      clients: {
+        ...(clientConfigState?.clients || {}),
+        [client]: data.status,
+      },
+    };
+    if (Array.isArray(data.clientRoutes)) {
+      providerState = {
+        ...providerState,
+        clientRoutes: data.clientRoutes,
+      };
+    }
+    const providerId = data.status?.route?.providerId || providerSelectEl?.value || "";
+    clientModelCatalogState[client] = { providerId, models: clientModelCatalogState[client]?.models || [] };
+    renderClientConfigStatus();
+    renderProviderCrudList();
+    renderClientRoutePolicySection();
+    await refreshClientModelCatalog(client, providerId);
+    setQuickApplyStatus(
+      `${client} config applied. Backup created with a timestamp before patching.`,
+      "ok",
+    );
+  } catch (error) {
+    setQuickApplyStatus(error instanceof Error ? error.message : `Could not apply ${client} config`, "bad");
+  } finally {
+    buttonEl.disabled = false;
+    buttonEl.textContent = originalLabel;
+  }
+}
+
+applyHermesConfigBtnEl?.addEventListener("click", async () => {
+  await applyClientQuickConfig(
+    "hermes",
+    applyHermesConfigBtnEl,
+    hermesQuickApplyModelEl,
+    hermesProviderSelectEl,
+    hermesBaseUrlInputEl,
+    hermesModelSelectEl,
+  );
+});
+
+applyCodexConfigBtnEl?.addEventListener("click", async () => {
+  await applyClientQuickConfig(
+    "codex",
+    applyCodexConfigBtnEl,
+    codexQuickApplyModelEl,
+    codexProviderSelectEl,
+    codexBaseUrlInputEl,
+    codexModelSelectEl,
+  );
+});
+
+hermesProviderSelectEl?.addEventListener("change", async () => {
+  clientModelCatalogState.hermes = { providerId: "", models: [] };
+  renderClientConfigStatus();
+  await refreshClientModelCatalog("hermes", hermesProviderSelectEl.value);
+});
+
+codexProviderSelectEl?.addEventListener("change", async () => {
+  clientModelCatalogState.codex = { providerId: "", models: [] };
+  renderClientConfigStatus();
+  await refreshClientModelCatalog("codex", codexProviderSelectEl.value);
+});
+
+hermesModelSelectEl?.addEventListener("change", () => {
+  renderClientModelSelect(
+    hermesModelSelectEl,
+    hermesQuickApplyModelEl,
+    clientModelCatalogState.hermes.models,
+    hermesModelSelectEl.value === "__custom__" ? hermesQuickApplyModelEl?.value.trim() || "" : hermesModelSelectEl.value,
+  );
+});
+
+codexModelSelectEl?.addEventListener("change", () => {
+  renderClientModelSelect(
+    codexModelSelectEl,
+    codexQuickApplyModelEl,
+    clientModelCatalogState.codex.models,
+    codexModelSelectEl.value === "__custom__" ? codexQuickApplyModelEl?.value.trim() || "" : codexModelSelectEl.value,
+  );
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const apiKey = document.getElementById("apiKey").value.trim();
@@ -1602,6 +2309,10 @@ form.addEventListener("submit", async (event) => {
 });
 
 customProviderBtnEl.addEventListener("click", async () => {
+  if (!validateProviderModelAliases()) {
+    setProviderEditorStatus("Fix duplicate model aliases before saving.", "bad");
+    return;
+  }
   const editingProviderId = providerEditorIdEl.value.trim();
   const name = customProviderNameEl.value.trim();
   const baseUrl = customProviderBaseUrlEl.value.trim();
@@ -1626,9 +2337,9 @@ customProviderBtnEl.addEventListener("click", async () => {
     );
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error?.message || "Save failed");
+    providerEditorDirty = false;
     await refreshProviders();
     setProviderEditorStatus("Provider saved successfully.", "ok");
-    setProviderEditorTab("basics");
     goToProviderEditor(data.provider?.id || editingProviderId || "");
   } catch (error) {
     setProviderEditorStatus(error instanceof Error ? error.message : "Save failed", "bad");
@@ -1643,6 +2354,7 @@ customProviderBtnEl.addEventListener("click", async () => {
 addProviderApiKeyBtnEl.addEventListener("click", () => {
   appendProviderApiKeyInput("");
   syncProviderApiKeyRemoveButtons();
+  markProviderEditorDirty();
   renderProviderEditorSummary();
   const inputs = providerApiKeysListEl.querySelectorAll(".provider-api-key-input");
   const lastInput = inputs[inputs.length - 1];
@@ -1652,8 +2364,19 @@ addProviderApiKeyBtnEl.addEventListener("click", () => {
 addClientApiKeyBtnEl.addEventListener("click", () => {
   appendClientApiKeyInput("");
   syncClientApiKeyRemoveButtons();
+  markProviderEditorDirty();
   renderProviderEditorSummary();
   const inputs = clientApiKeysListEl.querySelectorAll(".client-api-key-input");
+  const lastInput = inputs[inputs.length - 1];
+  lastInput?.focus();
+});
+
+addProviderModelAliasBtnEl?.addEventListener("click", () => {
+  appendProviderModelAliasInput("", "");
+  syncProviderModelAliasRemoveButtons();
+  markProviderEditorDirty();
+  renderProviderEditorSummary();
+  const inputs = providerModelAliasesListEl.querySelectorAll(".provider-model-alias-source");
   const lastInput = inputs[inputs.length - 1];
   lastInput?.focus();
 });
@@ -1662,6 +2385,7 @@ addProviderErrorRuleBtnEl?.addEventListener("click", () => {
   appendProviderErrorRuleInput({});
   syncProviderErrorRuleRemoveButtons();
   syncProviderErrorRuleTitles();
+  markProviderEditorDirty();
   renderProviderEditorSummary();
   const inputs = providerErrorRulesListEl.querySelectorAll(".provider-error-status-codes");
   const lastInput = inputs[inputs.length - 1];
@@ -1678,6 +2402,7 @@ addProviderErrorRuleBtnEl?.addEventListener("click", () => {
   providerMaxOutputTokensTargetEl,
   providerSanitizeReasoningSummaryEl,
   providerStripModelPrefixesEl,
+  providerModelAliasesListEl,
   providerRtkEnabledEl,
   providerRtkToolOutputEnabledEl,
   providerRtkMaxCharsEl,
@@ -1686,13 +2411,31 @@ addProviderErrorRuleBtnEl?.addEventListener("click", () => {
   providerRtkTailCharsEl,
   providerRtkDetectFormatEl,
 ].forEach((element) => {
-  element?.addEventListener("input", () => renderProviderEditorSummary());
-  element?.addEventListener("change", () => renderProviderEditorSummary());
+  element?.addEventListener("input", () => {
+    markProviderEditorDirty();
+    renderProviderEditorSummary();
+  });
+  element?.addEventListener("change", () => {
+    markProviderEditorDirty();
+    renderProviderEditorSummary();
+  });
 });
 
 providerDeleteBtnEl.addEventListener("click", async () => {
   const providerId = providerEditorIdEl.value.trim();
   if (!providerId) return;
+  const impactedRoutes = (providerState.clientRoutes || [])
+    .filter((route) => route.providerId === providerId)
+    .map((route) => route.key);
+  const impactMessage = impactedRoutes.length
+    ? `This will remove provider routing for: ${impactedRoutes.join(", ")}.`
+    : "This provider is not assigned to any client route.";
+  const confirmed = window.confirm(
+    `Delete provider "${customProviderNameEl.value.trim() || providerId}"?\n\n${impactMessage}`,
+  );
+  if (!confirmed) {
+    return;
+  }
   setProviderEditorStatus("");
   providerDeleteBtnEl.disabled = true;
   providerDeleteBtnEl.textContent = "Deleting...";
@@ -1703,6 +2446,7 @@ providerDeleteBtnEl.addEventListener("click", async () => {
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error?.message || "Delete failed");
     setProviderEditor();
+    providerEditorDirty = false;
     await refreshProviders();
     window.location.hash = "#/providers";
   } catch (error) {
@@ -1716,9 +2460,11 @@ providerDeleteBtnEl.addEventListener("click", async () => {
 window.addEventListener("hashchange", () => setRoute(normalizeRoute()));
 
 setProviderEditor();
-setProviderEditorTab("basics");
 renderProviderEditorSummary();
 setRoute(normalizeRoute());
 setInterval(() => {
+  if (shouldSkipBackgroundRefresh()) {
+    return;
+  }
   refreshActiveRoute();
 }, 5000);

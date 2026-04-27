@@ -6,6 +6,8 @@ services:
       - "8318:8318"
     volumes:
       - ./logs:/app/logs
+      - ${HOME}/.hermes/config.yaml:/host-home/.hermes/config.yaml
+      - ${HOME}/.codex/config.toml:/host-home/.codex/config.toml
     environment:
       PORT: "8318"
       HOST: "0.0.0.0"
@@ -38,6 +40,8 @@ services:
       APP_DB_PATH: "${APP_DB_PATH:-/app/logs/app.sqlite}"
       SESSION_LOG_DIR: "/app/logs/sessions"
       SESSION_LOG_RETENTION_DAYS: "${SESSION_LOG_RETENTION_DAYS:-14}"
+      QUICK_APPLY_HERMES_CONFIG_PATH: "/host-home/.hermes/config.yaml"
+      QUICK_APPLY_CODEX_CONFIG_PATH: "/host-home/.codex/config.toml"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8318/health"]
