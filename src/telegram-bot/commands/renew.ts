@@ -6,9 +6,10 @@ import { renderAdminScreen } from "../admin-actions.js";
 import { isAdmin } from "../auth.js";
 import type { BotDependencies } from "../actions.js";
 import type { BotIdentityRepository } from "../bot-identity-repository.js";
+import { buildCustomerActionKeyboard } from "../customer-actions.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
 import { readCustomerBillingOverview } from "../customer-billing.js";
-import { answerCallbackQuerySafely } from "../callbacks.js";
+import { answerCallbackQuerySafely, replyOrEditMessage } from "../callbacks.js";
 import { renewCustomerAccess } from "../grants.js";
 import { replyWithProxyError } from "../actions.js";
 import { buildTelegramSessionScope, type TelegramBotStateStore } from "../sessions.js";
@@ -345,29 +346,29 @@ async function handleCustomerRenewCommand(
   rawArgs: string,
 ): Promise<void> {
   if (ctx.chat?.type !== "private") {
-    await ctx.reply("For safety, open a private chat with this bot and run /renew there.");
+    await replyOrEditMessage(ctx, "For safety, open a private chat with this bot and run /renew there.");
     return;
   }
 
   const telegramUserId = ctx.from?.id?.toString();
   if (!telegramUserId) {
-    await ctx.reply("Could not determine your Telegram user.");
+    await replyOrEditMessage(ctx, "Could not determine your Telegram user.");
     return;
   }
 
   const workspace = workspaces.getDefaultWorkspace(telegramUserId);
   if (!workspace) {
-    await ctx.reply("No customer workspace has been assigned to your Telegram user yet.");
+    await replyOrEditMessage(ctx, "No customer workspace has been assigned to your Telegram user yet.");
     return;
   }
 
   if (!rawArgs.trim()) {
     const plans = billing.listPlans().filter((plan) => plan.status === "active");
     if (plans.length === 0) {
-      await ctx.reply("No billing plans are available right now. Please contact admin.");
+      await replyOrEditMessage(ctx, "No billing plans are available right now. Please contact admin.");
       return;
     }
-    await ctx.reply("Choose a plan for your renewal request.", {
+    await replyOrEditMessage(ctx, "Choose a plan for your renewal request.", {
       reply_markup: buildRenewPlanKeyboard(stateStore, plans),
     });
     return;
@@ -375,7 +376,7 @@ async function handleCustomerRenewCommand(
 
   const parsed = parseCustomerRenewArgs(rawArgs);
   if (!parsed) {
-    await ctx.reply("Usage: /renew or /renew <planId> <days>");
+    await replyOrEditMessage(ctx, "Usage: /renew or /renew <planId> <days>");
     return;
   }
 
@@ -395,13 +396,13 @@ async function handleCustomerRenewRequest(
 ): Promise<void> {
   const telegramUserId = ctx.from?.id?.toString();
   if (!telegramUserId) {
-    await ctx.reply("Could not determine your Telegram user.");
+    await replyOrEditMessage(ctx, "Could not determine your Telegram user.");
     return;
   }
 
   const workspace = workspaces.getDefaultWorkspace(telegramUserId);
   if (!workspace) {
-    await ctx.reply("No customer workspace has been assigned to your Telegram user yet.");
+    await replyOrEditMessage(ctx, "No customer workspace has been assigned to your Telegram user yet.");
     return;
   }
 
@@ -442,7 +443,8 @@ async function handleCustomerRenewRequest(
         created.request.requestedDays ? `requested_days: ${created.request.requestedDays}` : undefined,
         "Please wait for admin review.",
       ];
-  await ctx.reply(message.filter(Boolean).join("\n"));
+  const activeKey = customerKeys.getActiveKeyForUser(telegramUserId);
+  const resultLines = [...message];
 
   if (created.created) {
     const notification = await notifyAdminsAboutRenewalRequest(
@@ -456,9 +458,12 @@ async function handleCustomerRenewRequest(
       created.request,
     );
     if (notification.sent === 0) {
-      await ctx.reply("Admin notification could not be delivered. Your request is saved, but please contact support.");
+      resultLines.push("admin_notification: pending_manual_follow_up");
     }
   }
+  await replyOrEditMessage(ctx, resultLines.filter(Boolean).join("\n"), {
+    reply_markup: buildCustomerActionKeyboard(activeKey?.status === "active"),
+  });
 }
 
 async function handleAdminRenewCommand(

@@ -293,7 +293,7 @@ test("customer can open the plan picker from the start button", async () => {
 
     await found.handler(ctx as any);
 
-    assert.equal(ctx.replies[0], "Choose a plan for your renewal request.");
+    assert.equal(ctx.replies[0] ?? ctx.editedTexts[0], "Choose a plan for your renewal request.");
   });
 });
 
@@ -382,10 +382,7 @@ test("customer sees a warning when admin notification fails", async () => {
 
     assert.equal(billing.listRenewalRequests("open").length, 1);
     assert.equal(ctx.replies[0]?.includes("Renewal request submitted."), true);
-    assert.equal(
-      ctx.replies[1],
-      "Admin notification could not be delivered. Your request is saved, but please contact support.",
-    );
+    assert.equal(ctx.replies[0]?.includes("admin_notification: pending_manual_follow_up"), true);
   });
 });
 

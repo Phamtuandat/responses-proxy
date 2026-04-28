@@ -10,6 +10,7 @@ import {
   formatProxyError,
   formatTestResult,
 } from "./format.js";
+import { replyOrEditMessage } from "./callbacks.js";
 import { ProxyClientError, ResponsesProxyClient } from "./proxy-client.js";
 
 export type BotDependencies = {
@@ -17,12 +18,15 @@ export type BotDependencies = {
   proxyClient: ResponsesProxyClient;
 };
 
-export async function replyWithProxyError(ctx: Context, error: unknown): Promise<void> {
+export function getProxyErrorMessage(error: unknown): string {
   if (error instanceof ProxyClientError) {
-    await ctx.reply(formatProxyError(error.body?.error ?? error));
-    return;
+    return formatProxyError(error.body?.error ?? error);
   }
-  await ctx.reply(error instanceof Error ? error.message : "Unknown bot error");
+  return error instanceof Error ? error.message : "Unknown bot error";
+}
+
+export async function replyWithProxyError(ctx: Context, error: unknown): Promise<void> {
+  await replyOrEditMessage(ctx, getProxyErrorMessage(error));
 }
 
 export async function loadStatusText(deps: BotDependencies): Promise<string> {

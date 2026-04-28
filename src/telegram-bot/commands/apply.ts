@@ -1,6 +1,6 @@
 import { InlineKeyboard, type Bot } from "grammy";
 import { buildApplyClientKeyboard, renderAdminScreen } from "../admin-actions.js";
-import { replyWithProxyError, sendClients, type BotDependencies } from "../actions.js";
+import { getProxyErrorMessage, replyWithProxyError, sendClients, type BotDependencies } from "../actions.js";
 import { answerCallbackQuerySafely } from "../callbacks.js";
 import { maskApiKey } from "../format.js";
 import { ProxyClientError } from "../proxy-client.js";
@@ -185,7 +185,10 @@ async function showProviderPicker(
       primaryKeyboard: keyboard,
     });
   } catch (error) {
-    await replyWithProxyError(ctx, error);
+    await renderAdminScreen(ctx, {
+      text: getProxyErrorMessage(error),
+      loop: "apply",
+    });
   }
 }
 
@@ -226,7 +229,10 @@ async function showModelPicker(
       primaryKeyboard: keyboard,
     });
   } catch (error) {
-    await replyWithProxyError(ctx, error);
+    await renderAdminScreen(ctx, {
+      text: getProxyErrorMessage(error),
+      loop: "apply",
+    });
   }
 }
 
@@ -282,7 +288,10 @@ async function applySelection(
       });
       return;
     }
-    await replyWithProxyError(ctx, error);
+    await renderAdminScreen(ctx, {
+      text: getProxyErrorMessage(error),
+      loop: "apply",
+    });
   }
 }
 

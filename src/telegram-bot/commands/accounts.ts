@@ -3,7 +3,7 @@ import { renderAdminScreen } from "../admin-actions.js";
 import { isAdmin } from "../auth.js";
 import { answerCallbackQuerySafely } from "../callbacks.js";
 import { formatOauthStatus } from "../format.js";
-import { replyWithProxyError, type BotDependencies } from "../actions.js";
+import { getProxyErrorMessage, type BotDependencies } from "../actions.js";
 import type { TelegramBotStateStore } from "../sessions.js";
 
 type OauthStatusPayload = Awaited<ReturnType<BotDependencies["proxyClient"]["getOauthStatus"]>>;
@@ -70,7 +70,10 @@ export function registerAccountsCommand(
       await renderAccountsScreen(ctx, deps, stateStore);
     } catch (error) {
       await answerCallbackQuerySafely(ctx);
-      await replyWithProxyError(ctx, error);
+      await renderAdminScreen(ctx, {
+        text: getProxyErrorMessage(error),
+        loop: "accounts",
+      });
     }
   });
 
@@ -125,7 +128,10 @@ export function registerAccountsCommand(
       await renderAccountsScreen(ctx, deps, stateStore);
     } catch (error) {
       await answerCallbackQuerySafely(ctx);
-      await replyWithProxyError(ctx, error);
+      await renderAdminScreen(ctx, {
+        text: getProxyErrorMessage(error),
+        loop: "accounts",
+      });
     }
   });
 }
@@ -143,6 +149,9 @@ async function renderAccountsScreen(
       primaryKeyboard: buildAccountsKeyboard(payload, stateStore, isAdmin(ctx, deps.config)),
     });
   } catch (error) {
-    await replyWithProxyError(ctx, error);
+    await renderAdminScreen(ctx, {
+      text: getProxyErrorMessage(error),
+      loop: "accounts",
+    });
   }
 }

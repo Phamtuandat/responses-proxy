@@ -21,7 +21,7 @@ import {
 import { isAdmin } from "../auth.js";
 import type { BotIdentityRepository } from "../bot-identity-repository.js";
 import { answerCallbackQuerySafely } from "../callbacks.js";
-import { buildCustomerActionKeyboard } from "../customer-actions.js";
+import { renderCustomerActionText } from "../customer-actions.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
 import { buildAdminKeyListKeyboard } from "./apikey.js";
 
@@ -60,7 +60,8 @@ export function registerStartCommand(
           })
         : undefined;
 
-    await ctx.reply(
+    await renderCustomerActionText(
+      ctx,
       [
         "Responses Proxy bot is ready.",
         user ? `account: ${user.status}` : undefined,
@@ -69,9 +70,7 @@ export function registerStartCommand(
       ]
         .filter(Boolean)
         .join("\n"),
-      {
-        reply_markup: buildCustomerActionKeyboard(!!activeKey),
-      },
+      !!activeKey,
     );
   });
 

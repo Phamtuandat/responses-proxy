@@ -23,7 +23,15 @@ export async function replyOrEditMessage(
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.toLowerCase().includes("message is not modified")) {
+      const normalized = message.toLowerCase();
+      if (normalized.includes("message is not modified")) {
+        return;
+      }
+      if (
+        normalized.includes("message to edit not found")
+        || normalized.includes("message can't be edited")
+        || normalized.includes("message is too old")
+      ) {
         return;
       }
     }

@@ -2,7 +2,7 @@ import { InlineKeyboard, type Bot, type Context } from "grammy";
 import type { AuditLogRepository } from "../audit-log.js";
 import type { BillingRepository } from "../billing.js";
 import type { CustomerKeyRepository } from "../customer-keys.js";
-import { answerCallbackQuerySafely } from "./callbacks.js";
+import { answerCallbackQuerySafely, replyOrEditMessage } from "./callbacks.js";
 import { readCustomerBillingOverview, type CustomerBillingOverview } from "./customer-billing.js";
 import type { CustomerWorkspaceRepository } from "./customer-workspace-repository.js";
 
@@ -33,6 +33,16 @@ export function registerCustomerActionCallbacks(
   });
 }
 
+export async function renderCustomerActionText(
+  ctx: Context,
+  text: string,
+  hasActiveKey: boolean,
+): Promise<void> {
+  await replyOrEditMessage(ctx, text, {
+    reply_markup: buildCustomerActionKeyboard(hasActiveKey),
+  });
+}
+
 export async function replyWithCustomerView(
   ctx: Context,
   view: CustomerActionView,
@@ -42,13 +52,13 @@ export async function replyWithCustomerView(
   auditLog?: AuditLogRepository,
 ): Promise<void> {
   if (ctx.chat?.type !== "private") {
-    await ctx.reply("For safety, open a private chat with this bot.");
+    await replyOrEditMessage(ctx, "For safety, open a private chat with this bot.");
     return;
   }
 
   const userId = ctx.from?.id?.toString();
   if (!userId) {
-    await ctx.reply("Could not determine your Telegram user.");
+    await replyOrEditMessage(ctx, "Could not determine your Telegram user.");
     return;
   }
 
@@ -60,15 +70,15 @@ export async function replyWithCustomerView(
   });
 
   if (!overview.workspace) {
-    await ctx.reply("No customer workspace has been assigned to your Telegram user yet.", {
-      reply_markup: buildCustomerActionKeyboard(false),
-    });
+    await renderCustomerActionText(ctx, "No customer workspace has been assigned to your Telegram user yet.", false);
     return;
   }
 
-  await ctx.reply(formatCustomerView(view, userId, overview, customerKeys, auditLog), {
-    reply_markup: buildCustomerActionKeyboard(overview.apiKey?.status === "active"),
-  });
+  await renderCustomerActionText(
+    ctx,
+    formatCustomerView(view, userId, overview, customerKeys, auditLog),
+    overview.apiKey?.status === "active",
+  );
 }
 
 function formatCustomerView(

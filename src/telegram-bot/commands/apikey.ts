@@ -5,10 +5,10 @@ import type { AuditLogRepository } from "../../audit-log.js";
 import { renderAdminScreen } from "../admin-actions.js";
 import { isAdmin } from "../auth.js";
 import { answerCallbackQuerySafely } from "../callbacks.js";
-import { buildCustomerActionKeyboard } from "../customer-actions.js";
+import { renderCustomerActionText } from "../customer-actions.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
 import { maskApiKey } from "../format.js";
-import { replyWithProxyError, type BotDependencies } from "../actions.js";
+import { getProxyErrorMessage, replyWithProxyError, type BotDependencies } from "../actions.js";
 import { assertWorkspaceApiKeyCapacity } from "../grants.js";
 
 type AdminKeyAction = "show" | "suspend" | "activate" | "revoke" | "rotate";
@@ -40,7 +40,7 @@ export function registerApiKeyCommand(
     const userId = ctx.from?.id?.toString();
     const record = userId ? customerKeys.getActiveKeyForUser(userId) : undefined;
     if (!record) {
-      await ctx.reply("No Responses API key has been assigned to your Telegram user yet.");
+      await renderCustomerActionText(ctx, "No Responses API key has been assigned to your Telegram user yet.", false);
       return;
     }
     const apiKey = customerKeys.getApiKeySecret(record.id);
@@ -60,7 +60,8 @@ export function registerApiKeyCommand(
       });
     }
 
-    await ctx.reply(
+    await renderCustomerActionText(
+      ctx,
       [
         "Your Responses API key",
         `base_url: ${deps.config.publicResponsesBaseUrl}`,
@@ -72,7 +73,7 @@ export function registerApiKeyCommand(
       ]
         .filter(Boolean)
         .join("\n"),
-      { reply_markup: buildCustomerActionKeyboard(record.status === "active") },
+      record.status === "active",
     );
   });
 
@@ -298,7 +299,11 @@ async function changeCustomerApiKeyStatus(
     });
     return true;
   } catch (error) {
-    await replyWithProxyError(ctx, error);
+    await renderAdminScreen(ctx, {
+      text: getProxyErrorMessage(error),
+      loop: "keys",
+      primaryKeyboard: buildAdminKeyActionsKeyboard(record),
+    });
     return false;
   }
 }
@@ -346,7 +351,11 @@ async function activateCustomerApiKey(
     });
     return true;
   } catch (error) {
-    await replyWithProxyError(ctx, error);
+    await renderAdminScreen(ctx, {
+      text: getProxyErrorMessage(error),
+      loop: "keys",
+      primaryKeyboard: buildAdminKeyActionsKeyboard(record),
+    });
     return false;
   }
 }
@@ -498,7 +507,10 @@ async function rotateCustomerApiKey(
 ): Promise<boolean> {
   const workspace = workspaces.getDefaultWorkspace(input.telegramUserId);
   if (!workspace) {
-    await ctx.reply("No customer workspace has been assigned to this Telegram user yet.");
+    await renderAdminScreen(ctx, {
+      text: "No customer workspace has been assigned to this Telegram user yet.",
+      loop: "keys",
+    });
     return false;
   }
 
@@ -594,7 +606,11 @@ async function rotateCustomerApiKey(
         reason: "proxy_sync_failed",
       },
     });
-    await replyWithProxyError(ctx, error);
+    await renderAdminScreen(ctx, {
+      text: getProxyErrorMessage(error),
+      loop: "keys",
+      primaryKeyboard: currentKey ? buildAdminKeyActionsKeyboard(currentKey) : undefined,
+    });
     return false;
   }
 

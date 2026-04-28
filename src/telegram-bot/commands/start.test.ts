@@ -180,7 +180,8 @@ test("/start shows New button when the user has no active token", async () => {
 
     await harness.handler("start")(ctx as any);
 
-    const keyboard = JSON.parse(JSON.stringify(ctx.replies[0]?.options?.reply_markup));
+    const firstResponse = ctx.editedReplies[0] ?? ctx.replies[0];
+    const keyboard = JSON.parse(JSON.stringify(firstResponse?.options?.reply_markup));
     assert.equal(keyboard.inline_keyboard?.[0]?.[0]?.text, "🔐 View key");
     assert.equal(keyboard.inline_keyboard?.[0]?.[0]?.callback_data, "v1:customer:key");
     assert.equal(keyboard.inline_keyboard?.[1]?.[1]?.text, "🟢 New");
@@ -206,7 +207,8 @@ test("/start shows Renew button when the user already has an active token", asyn
 
     await harness.handler("start")(ctx as any);
 
-    const keyboard = JSON.parse(JSON.stringify(ctx.replies[0]?.options?.reply_markup));
+    const firstResponse = ctx.editedReplies[0] ?? ctx.replies[0];
+    const keyboard = JSON.parse(JSON.stringify(firstResponse?.options?.reply_markup));
     assert.equal(keyboard.inline_keyboard?.[0]?.[0]?.text, "🔐 View key");
     assert.equal(keyboard.inline_keyboard?.[0]?.[0]?.callback_data, "v1:customer:key");
     assert.equal(keyboard.inline_keyboard?.[1]?.[1]?.text, "🔵 Renew");

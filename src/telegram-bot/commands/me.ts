@@ -2,7 +2,7 @@ import type { Bot } from "grammy";
 import type { AuditLogRepository } from "../../audit-log.js";
 import type { CustomerKeyRepository } from "../../customer-keys.js";
 import type { BotIdentityRepository } from "../bot-identity-repository.js";
-import { buildCustomerActionKeyboard } from "../customer-actions.js";
+import { renderCustomerActionText } from "../customer-actions.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
 
 export function registerMeCommand(
@@ -38,7 +38,8 @@ export function registerMeCommand(
       });
     }
 
-    await ctx.reply(
+    await renderCustomerActionText(
+      ctx,
       [
         "Your account",
         `telegram_user_id: ${userId ?? "unknown"}`,
@@ -55,7 +56,7 @@ export function registerMeCommand(
       ]
         .filter(Boolean)
         .join("\n"),
-      { reply_markup: buildCustomerActionKeyboard(keyRecord?.status === "active") },
+      keyRecord?.status === "active",
     );
   });
 }
