@@ -1,5 +1,5 @@
 import { InlineKeyboard, type Bot } from "grammy";
-import { buildApplyClientKeyboard, replyAdminActionLoop } from "../admin-actions.js";
+import { buildApplyClientKeyboard, renderAdminScreen } from "../admin-actions.js";
 import { replyWithProxyError, sendClients, type BotDependencies } from "../actions.js";
 import { answerCallbackQuerySafely } from "../callbacks.js";
 import { maskApiKey } from "../format.js";
@@ -44,8 +44,6 @@ export function registerApplyCommand(
           `changed: ${String(result?.changed ?? false)}`,
         ].join("\n"),
       );
-      await sendClients(ctx, deps);
-      await replyAdminActionLoop(ctx, "apply");
     } catch (error) {
       await replyWithProxyError(ctx, error);
     }
@@ -81,8 +79,10 @@ export function registerApplyCommand(
       }
       const model = session.models[modelIndex];
       if (!model) {
-        await ctx.reply("Model selection expired. Please start /apply again.");
-        await replyAdminActionLoop(ctx, "apply");
+        await renderAdminScreen(ctx, {
+          text: "Model selection expired. Please start /apply again.",
+          loop: "apply",
+        });
         return;
       }
       if (chatId && userId) {
@@ -106,8 +106,10 @@ export function registerApplyCommand(
         providerName,
         models: [],
       });
-      await ctx.reply("Send the model name to apply for this provider.");
-      await replyAdminActionLoop(ctx, "apply");
+      await renderAdminScreen(ctx, {
+        text: "Send the model name to apply for this provider.",
+        loop: "apply",
+      });
     },
   };
 
@@ -177,8 +179,11 @@ async function showProviderPicker(
         `v1:apply:provider:${client}:${provider.id}`,
       ).row();
     }
-    await ctx.reply(`Choose provider for ${client}.`, { reply_markup: keyboard });
-    await replyAdminActionLoop(ctx, "apply");
+    await renderAdminScreen(ctx, {
+      text: `Choose provider for ${client}.`,
+      loop: "apply",
+      primaryKeyboard: keyboard,
+    });
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }
@@ -212,14 +217,14 @@ async function showModelPicker(
       keyboard.text(model.slice(0, 32), `v1:apply:model:${input.client}:${input.providerId}:${index}`).row();
     }
     keyboard.text("Type model manually", `v1:apply:model-text:${input.client}:${input.providerId}`);
-    await ctx.reply(
-      [
+    await renderAdminScreen(ctx, {
+      text: [
         `Provider: ${providerName ?? input.providerId}`,
         `Choose model for ${input.client}, or type one manually.`,
       ].join("\n"),
-      { reply_markup: keyboard },
-    );
-    await replyAdminActionLoop(ctx, "apply");
+      loop: "apply",
+      primaryKeyboard: keyboard,
+    });
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }
@@ -244,8 +249,8 @@ async function applySelection(
       client: input.client,
       model: input.model,
     });
-    await ctx.reply(
-      [
+    await renderAdminScreen(ctx, {
+      text: [
         `Applied config for ${input.client}`,
         `provider: ${input.providerName ?? input.providerId}`,
         `model: ${input.model}`,
@@ -253,24 +258,28 @@ async function applySelection(
         `routeApiKey: ${maskApiKey(result?.status?.routeApiKey ?? null)}`,
         `changed: ${String(result?.changed ?? false)}`,
       ].join("\n"),
-    );
-    await sendClients(ctx, deps);
-    await replyAdminActionLoop(ctx, "apply");
+      loop: "apply",
+    });
   } catch (error) {
     if (error instanceof ProxyClientError && error.body?.error?.code === "MODEL_REQUIRED") {
-      await ctx.reply("Model is required. Please choose a model or type one manually.");
-      await replyAdminActionLoop(ctx, "apply");
+      await renderAdminScreen(ctx, {
+        text: "Model is required. Please choose a model or type one manually.",
+        loop: "apply",
+      });
       return;
     }
     if (error instanceof ProxyClientError && error.body?.error?.code === "CLIENT_API_KEY_NOT_FOUND") {
-      await ctx.reply("Selected client API key is no longer valid. Refreshing client status.");
-      await sendClients(ctx, deps);
-      await replyAdminActionLoop(ctx, "apply");
+      await renderAdminScreen(ctx, {
+        text: "Selected client API key is no longer valid. Refreshing client status.",
+        loop: "apply",
+      });
       return;
     }
     if (error instanceof ProxyClientError && error.body?.error?.code === "QUICK_APPLY_HOST_PATH_UNAVAILABLE") {
-      await ctx.reply("Quick Apply cannot patch the host config path from this runtime.");
-      await replyAdminActionLoop(ctx, "apply");
+      await renderAdminScreen(ctx, {
+        text: "Quick Apply cannot patch the host config path from this runtime.",
+        loop: "apply",
+      });
       return;
     }
     await replyWithProxyError(ctx, error);

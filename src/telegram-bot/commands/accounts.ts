@@ -1,21 +1,38 @@
 import { InlineKeyboard, type Bot } from "grammy";
+import { renderAdminScreen } from "../admin-actions.js";
 import { isAdmin } from "../auth.js";
 import { answerCallbackQuerySafely } from "../callbacks.js";
 import { formatOauthStatus } from "../format.js";
-import { replyAdminActionLoop } from "../admin-actions.js";
 import { replyWithProxyError, type BotDependencies } from "../actions.js";
 import type { TelegramBotStateStore } from "../sessions.js";
 
-function buildAccountKeyboard(token: string, admin: boolean): InlineKeyboard {
-  const keyboard = new InlineKeyboard()
-    .text("Refresh", `v1:acct:refresh:${token}`)
-    .text("Disable", `v1:acct:disable:${token}`)
-    .row()
-    .text("Enable", `v1:acct:enable:${token}`);
-  if (admin) {
-    keyboard.text("Delete", `v1:acct:delete-confirm:${token}`);
+type OauthStatusPayload = Awaited<ReturnType<BotDependencies["proxyClient"]["getOauthStatus"]>>;
+
+function buildAccountsKeyboard(
+  payload: OauthStatusPayload,
+  stateStore: TelegramBotStateStore,
+  admin: boolean,
+): InlineKeyboard | undefined {
+  const keyboard = new InlineKeyboard();
+  for (const account of payload?.accounts ?? []) {
+    const accountActionToken = stateStore.issueCallbackToken({
+      kind: "account_action",
+      action: "refresh",
+      accountId: account.id,
+    });
+    const label = (account.email || account.accountId || account.id).slice(0, 18);
+    keyboard.text(`↻ ${label}`, `v1:acct:refresh:${accountActionToken}`);
+    if (account.disabled) {
+      keyboard.text("🟢 Enable", `v1:acct:enable:${accountActionToken}`);
+    } else {
+      keyboard.text("🟡 Disable", `v1:acct:disable:${accountActionToken}`);
+    }
+    if (admin) {
+      keyboard.text("🔴 Delete", `v1:acct:delete-confirm:${accountActionToken}`);
+    }
+    keyboard.row();
   }
-  return keyboard;
+  return (payload?.accounts?.length ?? 0) > 0 ? keyboard : undefined;
 }
 
 export function registerAccountsCommand(
@@ -24,13 +41,12 @@ export function registerAccountsCommand(
   stateStore: TelegramBotStateStore,
 ): void {
   bot.command("accounts", async (ctx) => {
-    await sendAccounts(ctx, deps, stateStore);
+    await renderAccountsScreen(ctx, deps, stateStore);
   });
 
   bot.callbackQuery("v1:acct:list", async (ctx) => {
     await answerCallbackQuerySafely(ctx, { text: "Loaded" });
-    await sendAccounts(ctx, deps, stateStore);
-    await replyAdminActionLoop(ctx, "accounts");
+    await renderAccountsScreen(ctx, deps, stateStore);
   });
 
   bot.callbackQuery(/^v1:acct:(refresh|disable|enable):([A-Za-z0-9_-]+)$/, async (ctx) => {
@@ -51,9 +67,7 @@ export function registerAccountsCommand(
         await deps.proxyClient.enableAccount(accountId);
       }
       await answerCallbackQuerySafely(ctx, { text: `${action} ok` });
-      const oauthStatus = await deps.proxyClient.getOauthStatus();
-      await ctx.reply(formatOauthStatus(oauthStatus));
-      await replyAdminActionLoop(ctx, "accounts");
+      await renderAccountsScreen(ctx, deps, stateStore);
     } catch (error) {
       await answerCallbackQuerySafely(ctx);
       await replyWithProxyError(ctx, error);
@@ -78,8 +92,10 @@ export function registerAccountsCommand(
       accountId,
     });
     await answerCallbackQuerySafely(ctx);
-    await ctx.reply("Confirm account deletion?", {
-      reply_markup: new InlineKeyboard()
+    await renderAdminScreen(ctx, {
+      text: "Confirm account deletion?",
+      loop: "accounts",
+      primaryKeyboard: new InlineKeyboard()
         .text("Delete account", `v1:acct:delete:${deleteToken}`)
         .text("Cancel", "v1:acct:delete-cancel"),
     });
@@ -87,7 +103,7 @@ export function registerAccountsCommand(
 
   bot.callbackQuery("v1:acct:delete-cancel", async (ctx) => {
     await answerCallbackQuerySafely(ctx, { text: "Cancelled" });
-    await replyAdminActionLoop(ctx, "accounts");
+    await renderAccountsScreen(ctx, deps, stateStore);
   });
 
   bot.callbackQuery(/^v1:acct:delete:([A-Za-z0-9_-]+)$/, async (ctx) => {
@@ -106,9 +122,7 @@ export function registerAccountsCommand(
       stateStore.clearCallbackToken(token);
       await deps.proxyClient.deleteAccount(accountId);
       await answerCallbackQuerySafely(ctx, { text: "delete ok" });
-      const oauthStatus = await deps.proxyClient.getOauthStatus();
-      await ctx.reply(formatOauthStatus(oauthStatus));
-      await replyAdminActionLoop(ctx, "accounts");
+      await renderAccountsScreen(ctx, deps, stateStore);
     } catch (error) {
       await answerCallbackQuerySafely(ctx);
       await replyWithProxyError(ctx, error);
@@ -116,27 +130,18 @@ export function registerAccountsCommand(
   });
 }
 
-async function sendAccounts(
+async function renderAccountsScreen(
   ctx: Parameters<Bot["command"]>[1] extends infer _T ? any : never,
   deps: BotDependencies,
   stateStore: TelegramBotStateStore,
 ): Promise<void> {
   try {
     const payload = await deps.proxyClient.getOauthStatus();
-    await ctx.reply(formatOauthStatus(payload));
-    for (const account of payload?.accounts ?? []) {
-      const accountActionToken = stateStore.issueCallbackToken({
-        kind: "account_action",
-        action: "refresh",
-        accountId: account.id,
-      });
-      await ctx.reply(
-        `Manage account ${account.email || account.accountId || account.id}`,
-        {
-          reply_markup: buildAccountKeyboard(accountActionToken, isAdmin(ctx, deps.config)),
-        },
-      );
-    }
+    await renderAdminScreen(ctx, {
+      text: formatOauthStatus(payload),
+      loop: "accounts",
+      primaryKeyboard: buildAccountsKeyboard(payload, stateStore, isAdmin(ctx, deps.config)),
+    });
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }

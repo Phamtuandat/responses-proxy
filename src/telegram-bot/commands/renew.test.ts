@@ -127,6 +127,8 @@ function createContext(input: {
   const replies: string[] = [];
   const sentMessages: Array<{ chatId: number; text: string }> = [];
   const editedTexts: string[] = [];
+  const replyMarkups: unknown[] = [];
+  const editedMarkups: unknown[] = [];
   return ({
     from: { id: input.fromId, is_bot: false, first_name: "User" },
     chat:
@@ -162,18 +164,23 @@ function createContext(input: {
     replies,
     sentMessages,
     editedTexts,
-    reply(text: string) {
+    replyMarkups,
+    editedMarkups,
+    reply(text: string, options?: any) {
       replies.push(text);
+      replyMarkups.push(options?.reply_markup);
       return Promise.resolve({} as any);
     },
     answerCallbackQuery() {
       return Promise.resolve(true as any);
     },
-    editMessageReplyMarkup() {
+    editMessageReplyMarkup(options?: any) {
+      editedMarkups.push(options?.reply_markup);
       return Promise.resolve({} as any);
     },
-    editMessageText(text: string) {
+    editMessageText(text: string, options?: any) {
       editedTexts.push(text);
+      editedMarkups.push(options?.reply_markup);
       return Promise.resolve({} as any);
     },
     api: {
@@ -194,6 +201,8 @@ function createContext(input: {
     replies: string[];
     sentMessages: Array<{ chatId: number; text: string }>;
     editedTexts: string[];
+    replyMarkups: unknown[];
+    editedMarkups: unknown[];
   };
 }
 
@@ -601,6 +610,7 @@ test("admin can approve a renewal request from callback button", async () => {
     assert.equal(billing.getRenewalRequest(request.request.id)?.status, "approved");
     assert.equal(ctx.editedTexts[0]?.includes("Renewal request approved."), true);
     assert.equal(ctx.editedTexts[0]?.includes("status: approved"), true);
+    assert.equal(ctx.editedMarkups[0], undefined);
   });
 });
 
@@ -820,9 +830,72 @@ test("admin can reject a renewal request with a canned reason", async () => {
     assert.equal(billing.getRenewalRequest(request.request.id)?.status, "closed");
     assert.equal(billing.getRenewalRequest(request.request.id)?.resolution, "rejected_unpaid");
     assert.equal(ctx.editedTexts[0]?.includes("resolution: rejected_unpaid"), true);
+    assert.equal(ctx.editedMarkups[0], undefined);
     assert.equal(ctx.sentMessages[0]?.chatId, 42);
     assert.equal(ctx.sentMessages[0]?.text.includes("Your renewal request was not approved."), true);
     assert.equal(ctx.sentMessages[0]?.text.includes("reason: rejected_unpaid"), true);
+  });
+});
+
+test("admin can switch between reject reasons and main renewal actions", async () => {
+  await withRepos(async ({ identities, workspaces, customerKeys, billing, auditLog, sessions, deps }) => {
+    identities.upsertUser({
+      telegramUserId: "42",
+      defaultRole: "customer",
+      defaultStatus: "active",
+    });
+    const workspace = workspaces.ensureDefaultWorkspace({
+      ownerTelegramUserId: "42",
+      defaultClientRoute: "customers",
+      status: "active",
+    });
+    const request = billing.createRenewalRequest({
+      workspaceId: workspace.id,
+      telegramUserId: "42",
+      requestedPlanId: "basic",
+      requestedDays: 15,
+      now: new Date("2026-04-28T00:00:00.000Z"),
+    });
+    const rejectToken = sessions.issueCallbackToken({
+      kind: "renewal_request_action",
+      action: "show_reject_reasons",
+      requestId: request.request.id,
+    });
+
+    const harness = createBotHarness();
+    registerRenewCommand(harness.bot as any, deps, sessions, identities, workspaces, customerKeys, billing, auditLog);
+    const rejectFound = harness.callbackHandler(`v1:renew:reject-reasons:${rejectToken}`);
+    const rejectCtx = createContext({
+      fromId: 1,
+      chatId: 1,
+      chatType: "private",
+      match: "",
+      callbackData: `v1:renew:reject-reasons:${rejectToken}`,
+    });
+    (rejectCtx as any).match = rejectFound.match;
+    await rejectFound.handler(rejectCtx as any);
+    assert.equal(rejectCtx.editedTexts[0]?.includes("Choose a rejection reason."), true);
+
+    const backToken = sessions.issueCallbackToken({
+      kind: "renewal_request_action",
+      action: "show_main_actions",
+      requestId: request.request.id,
+    });
+    const backFound = harness.callbackHandler(`v1:renew:back:${backToken}`);
+    const backCtx = createContext({
+      fromId: 1,
+      chatId: 1,
+      chatType: "private",
+      match: "",
+      callbackData: `v1:renew:back:${backToken}`,
+    });
+    (backCtx as any).match = backFound.match;
+    await backFound.handler(backCtx as any);
+    assert.equal(
+      backCtx.editedTexts[0]?.includes("Renewal request.") || backCtx.editedTexts[0]?.includes("New access request."),
+      true,
+    );
+    assert.equal(backCtx.editedTexts[0]?.includes(`request_id: ${request.request.id}`), true);
   });
 });
 
@@ -876,6 +949,7 @@ test("admin can approve a renewal request with custom days input", async () => {
     });
     (callbackCtx as any).match = found.match;
     await found.handler(callbackCtx as any);
+    assert.equal(callbackCtx.editedTexts[0]?.includes("Awaiting custom approval days."), true);
 
     const inputCtx = createContext({
       fromId: 1,
@@ -887,7 +961,7 @@ test("admin can approve a renewal request with custom days input", async () => {
     await harness.runText(inputCtx as any);
 
     assert.equal(billing.getRenewalRequest(request.request.id)?.status, "approved");
-    assert.equal(inputCtx.editedTexts[0]?.includes("days: 45"), true);
+    assert.equal(inputCtx.editedTexts.at(-1)?.includes("days: 45"), true);
   });
 });
 
@@ -928,6 +1002,7 @@ test("admin can reject a renewal request with custom reason input", async () => 
     });
     (callbackCtx as any).match = found.match;
     await found.handler(callbackCtx as any);
+    assert.equal(callbackCtx.editedTexts[0]?.includes("Awaiting custom rejection reason."), true);
 
     const inputCtx = createContext({
       fromId: 1,
@@ -940,10 +1015,47 @@ test("admin can reject a renewal request with custom reason input", async () => 
 
     assert.equal(billing.getRenewalRequest(request.request.id)?.status, "closed");
     assert.equal(billing.getRenewalRequest(request.request.id)?.resolution, "customer asked to pay later");
-    assert.equal(inputCtx.editedTexts[0]?.includes("resolution: customer asked to pay later"), true);
+    assert.equal(inputCtx.editedTexts.at(-1)?.includes("resolution: customer asked to pay later"), true);
     assert.equal(inputCtx.sentMessages[0]?.chatId, 42);
     assert.equal(inputCtx.sentMessages[0]?.text.includes("Your renewal request was not approved."), true);
     assert.equal(inputCtx.sentMessages[0]?.text.includes("reason: customer asked to pay later"), true);
+  });
+});
+
+test("admin /renew list renders open requests in one admin screen", async () => {
+  await withRepos(async ({ identities, workspaces, customerKeys, billing, auditLog, sessions, deps }) => {
+    identities.upsertUser({
+      telegramUserId: "42",
+      defaultRole: "customer",
+      defaultStatus: "active",
+    });
+    const workspace = workspaces.ensureDefaultWorkspace({
+      ownerTelegramUserId: "42",
+      defaultClientRoute: "customers",
+      status: "active",
+    });
+    const request = billing.createRenewalRequest({
+      workspaceId: workspace.id,
+      telegramUserId: "42",
+      requestedPlanId: "basic",
+      requestedDays: 15,
+      now: new Date("2026-04-28T00:00:00.000Z"),
+    });
+
+    const harness = createBotHarness();
+    registerRenewCommand(harness.bot as any, deps, sessions, identities, workspaces, customerKeys, billing, auditLog);
+    const ctx = createContext({
+      fromId: 1,
+      chatId: 1,
+      chatType: "private",
+      match: "list",
+    });
+
+    await harness.handler("renew")(ctx as any);
+
+    assert.equal(ctx.replies[0]?.includes("Open renewal requests:"), true);
+    assert.equal(ctx.replies[0]?.includes(request.request.id), true);
+    assert.ok(ctx.replyMarkups[0]);
   });
 });
 
@@ -1001,10 +1113,10 @@ test("admin can view customer details from callback button", async () => {
 
     await found.handler(ctx as any);
 
-    assert.equal(ctx.replies[0]?.includes("Customer renewal review"), true);
-    assert.equal(ctx.replies[0]?.includes("customer: Atger | @atger | id=42"), true);
-    assert.equal(ctx.replies[0]?.includes(`api_key: ${created.apiKey}`), true);
-    assert.equal(ctx.replies[0]?.includes("request_status: open"), true);
+    assert.equal(ctx.editedTexts[0]?.includes("Customer renewal review"), true);
+    assert.equal(ctx.editedTexts[0]?.includes("customer: Atger | @atger | id=42"), true);
+    assert.equal(ctx.editedTexts[0]?.includes(`api_key: ${created.apiKey}`), true);
+    assert.equal(ctx.editedTexts[0]?.includes("request_status: open"), true);
     assert.equal(auditLog.listEvents({ event: "api_key.revealed", limit: 1 })[0]?.metadata.apiKey, "[redacted]");
   });
 });

@@ -1427,7 +1427,7 @@ async function handleResponsesRequest(
     maxOutputTokensPolicy: maxOutputTokensRule,
     sanitizeReasoningSummary: selectedProvider.capabilities.sanitizeReasoningSummary,
   });
-  const normalized = normalizedResult.request;
+  const normalized = sanitizeNormalizedRequestForProvider(normalizedResult.request, selectedProvider);
   const activeProviderId = selectedProvider.id;
   const isStream = normalized.stream === true;
   const traceContext: Record<string, unknown> = {
@@ -2603,7 +2603,26 @@ function parseUrlSearchParams(rawUrl?: string): URLSearchParams | undefined {
   }
 }
 
+function resolveChatGptCodexResponsesUrl(baseUrl: string): string {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  return `${normalizedBaseUrl}/responses`;
+}
+
+function sanitizeNormalizedRequestForProvider(
+  request: Record<string, unknown>,
+  provider: RuntimeProviderPreset,
+): Record<string, unknown> {
+  if (provider.capabilities.accountPlatform !== "openai_codex") {
+    return request;
+  }
+  const sanitized = { ...request };
+  delete sanitized.prompt_cache_key;
+  delete sanitized.prompt_cache_retention;
+  return sanitized;
+}
+
 function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
+  const expectedResponsesUrl = resolveChatGptCodexResponsesUrl(config.CHATGPT_CODEX_BASE_URL);
   const existing = providerRepository.listProviders().find(
     (provider) =>
       provider.id === CHATGPT_OAUTH_PROVIDER_ID ||
@@ -2615,7 +2634,8 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
       existing.capabilities.accountPlatform === "openai_codex" &&
       existing.capabilities.accountPoolRequired &&
       existing.capabilities.usageCheckEnabled === true &&
-      existing.capabilities.usageCheckUrl === OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL
+      existing.capabilities.usageCheckUrl === OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL &&
+      existing.responsesUrl === expectedResponsesUrl
     ) {
       return existing;
     }
@@ -2625,6 +2645,7 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
           ? "OpenAI / Codex Account Pool"
           : existing.name,
       baseUrl: existing.baseUrl,
+      responsesUrl: resolveChatGptCodexResponsesUrl(existing.baseUrl),
       authMode: "chatgpt_oauth",
       providerApiKeys: existing.providerApiKeys,
       capabilities: {
@@ -2645,6 +2666,7 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
     return providerRepository.updateProvider(legacyPerAccountProvider.id, {
       name: "OpenAI / Codex Account Pool",
       baseUrl: config.CHATGPT_CODEX_BASE_URL,
+      responsesUrl: expectedResponsesUrl,
       authMode: "chatgpt_oauth",
       providerApiKeys: [],
       capabilities: {
@@ -2662,6 +2684,7 @@ function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
     id: CHATGPT_OAUTH_PROVIDER_ID,
     name: "OpenAI / Codex Account Pool",
     baseUrl: config.CHATGPT_CODEX_BASE_URL,
+    responsesUrl: expectedResponsesUrl,
     authMode: "chatgpt_oauth",
     providerApiKeys: [],
     capabilities: {

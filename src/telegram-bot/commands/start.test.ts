@@ -79,15 +79,33 @@ function createBotHarness() {
 
 function createContext(input: { fromId: number; chatId: number }) {
   const replies: Array<{ text: string; options?: any }> = [];
+  const editedReplies: Array<{ text: string; options?: any }> = [];
   const answeredCallbacks: Array<{ text?: string; show_alert?: boolean }> = [];
   return ({
     from: { id: input.fromId, is_bot: false, first_name: "User" },
     chat: { id: input.chatId, type: "private", first_name: "User" },
+    callbackQuery: {
+      id: "callback-1",
+      from: { id: input.fromId, is_bot: false, first_name: "User" },
+      data: "callback",
+      chat_instance: "chat",
+      message: {
+        message_id: 99,
+        date: 0,
+        chat: { id: input.chatId, type: "private", first_name: "User" },
+        text: "Admin panel",
+      },
+    },
     match: "",
     replies,
+    editedReplies,
     answeredCallbacks,
     reply(text: string, options?: any) {
       replies.push({ text, options });
+      return Promise.resolve({} as any);
+    },
+    editMessageText(text: string, options?: any) {
+      editedReplies.push({ text, options });
       return Promise.resolve({} as any);
     },
     answerCallbackQuery(payload?: { text?: string; show_alert?: boolean }) {
@@ -97,6 +115,7 @@ function createContext(input: { fromId: number; chatId: number }) {
   } as unknown) as Context & {
     match: string;
     replies: Array<{ text: string; options?: any }>;
+    editedReplies: Array<{ text: string; options?: any }>;
     answeredCallbacks: Array<{ text?: string; show_alert?: boolean }>;
   };
 }
@@ -224,9 +243,8 @@ test("admin start panel buttons run real actions", async () => {
     await found.handler(ctx as any);
 
     assert.equal(ctx.answeredCallbacks[0]?.text, "Loaded");
-    assert.equal(ctx.replies[0]?.text.includes("Proxy status"), true);
-    assert.equal(ctx.replies[1]?.text, "Proxy actions");
-    const loopKeyboard = JSON.parse(JSON.stringify(ctx.replies[1]?.options?.reply_markup));
+    assert.equal(ctx.editedReplies[0]?.text.includes("Proxy status"), true);
+    const loopKeyboard = JSON.parse(JSON.stringify(ctx.editedReplies[0]?.options?.reply_markup));
     assert.equal(loopKeyboard.inline_keyboard?.[0]?.[0]?.callback_data, "v1:admin:status");
     assert.equal(loopKeyboard.inline_keyboard?.[0]?.[1]?.callback_data, "v1:admin:providers");
     assert.equal(loopKeyboard.inline_keyboard?.[2]?.[1]?.callback_data, "v1:admin:menu");
@@ -253,9 +271,8 @@ test("admin start panel can show billing plans and renewal requests", async () =
     const plansCtx = createContext({ fromId: 1, chatId: 1 });
     (plansCtx as any).match = plans.match;
     await plans.handler(plansCtx as any);
-    assert.equal(plansCtx.replies[0]?.text.includes("Billing plans:"), true);
-    assert.equal(plansCtx.replies[1]?.text, "Billing actions");
-    const plansKeyboard = JSON.parse(JSON.stringify(plansCtx.replies[1]?.options?.reply_markup));
+    assert.equal(plansCtx.editedReplies[0]?.text.includes("Billing plans:"), true);
+    const plansKeyboard = JSON.parse(JSON.stringify(plansCtx.editedReplies[0]?.options?.reply_markup));
     assert.equal(plansKeyboard.inline_keyboard?.[0]?.[0]?.callback_data, "v1:admin:plans");
     assert.equal(plansKeyboard.inline_keyboard?.[0]?.[1]?.callback_data, "v1:admin:renewals");
 
@@ -263,9 +280,8 @@ test("admin start panel can show billing plans and renewal requests", async () =
     const renewalsCtx = createContext({ fromId: 1, chatId: 1 });
     (renewalsCtx as any).match = renewals.match;
     await renewals.handler(renewalsCtx as any);
-    assert.equal(renewalsCtx.replies[0]?.text.includes("Open renewal requests:"), true);
-    assert.equal(renewalsCtx.replies[0]?.text.includes("telegram_user_id=42"), true);
-    assert.equal(renewalsCtx.replies[1]?.text, "Billing actions");
+    assert.equal(renewalsCtx.editedReplies[0]?.text.includes("Open renewal requests:"), true);
+    assert.equal(renewalsCtx.editedReplies[0]?.text.includes("telegram_user_id=42"), true);
   });
 });
 
@@ -289,14 +305,16 @@ test("admin start panel shows recent API keys with manage buttons", async () => 
     (ctx as any).match = found.match;
     await found.handler(ctx as any);
 
-    assert.equal(ctx.replies[0]?.text.includes("Customer API keys"), true);
-    assert.equal(ctx.replies[0]?.text.includes(`user=42`), true);
-    assert.equal(ctx.replies[0]?.text.includes(created.record.apiKeyPreview), true);
-    const keyKeyboard = JSON.parse(JSON.stringify(ctx.replies[0]?.options?.reply_markup));
+    assert.equal(ctx.editedReplies[0]?.text.includes("Customer API keys"), true);
+    assert.equal(ctx.editedReplies[0]?.text.includes(`user=42`), true);
+    assert.equal(ctx.editedReplies[0]?.text.includes(created.record.apiKeyPreview), true);
+    const keyKeyboard = JSON.parse(JSON.stringify(ctx.editedReplies[0]?.options?.reply_markup));
     assert.equal(keyKeyboard.inline_keyboard?.[0]?.[0]?.copy_text?.text, created.record.id);
-    assert.equal(ctx.replies[1]?.text, "API key actions");
-    const loopKeyboard = JSON.parse(JSON.stringify(ctx.replies[1]?.options?.reply_markup));
-    assert.equal(loopKeyboard.inline_keyboard?.[0]?.[0]?.callback_data, "v1:admin:apikeys");
-    assert.equal(loopKeyboard.inline_keyboard?.[0]?.[1]?.callback_data, "v1:admin:plans");
+    const callbackButtons = keyKeyboard.inline_keyboard
+      ?.flatMap((row: any[]) => row)
+      .filter((button: any) => typeof button?.callback_data === "string")
+      .map((button: any) => button.callback_data);
+    assert.equal(callbackButtons.includes("v1:admin:apikeys"), true);
+    assert.equal(callbackButtons.includes("v1:admin:plans"), true);
   });
 });

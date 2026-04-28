@@ -119,6 +119,7 @@ export type RuntimeProviderInput = {
   id?: unknown;
   name?: unknown;
   baseUrl?: unknown;
+  responsesUrl?: unknown;
   apiKey?: unknown;
   apiKeys?: unknown;
   providerApiKeys?: unknown;
@@ -155,6 +156,7 @@ type ValidatedProviderInput = {
   id?: string;
   name: string;
   baseUrl: string;
+  responsesUrl: string;
   authMode: RuntimeProviderAuthMode;
   chatgptAccountId?: string;
   providerApiKeys: string[];
@@ -792,7 +794,7 @@ export class RuntimeProviderRepository {
       id: validated.id ?? `custom-${randomUUID().slice(0, 8)}`,
       name: validated.name,
       baseUrl: validated.baseUrl,
-      responsesUrl: toResponsesUrl(validated.baseUrl),
+      responsesUrl: validated.responsesUrl,
       authMode: validated.authMode,
       chatgptAccountId: validated.chatgptAccountId,
       providerApiKeys: validated.providerApiKeys,
@@ -820,7 +822,7 @@ export class RuntimeProviderRepository {
       ...existing,
       name: validated.name,
       baseUrl: validated.baseUrl,
-      responsesUrl: toResponsesUrl(validated.baseUrl),
+      responsesUrl: validated.responsesUrl,
       authMode: validated.authMode,
       chatgptAccountId: validated.chatgptAccountId,
       providerApiKeys: validated.providerApiKeys,
@@ -889,6 +891,10 @@ export class RuntimeProviderRepository {
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const id = typeof body.id === "string" && body.id.trim() ? body.id.trim() : undefined;
     const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+    const responsesUrl =
+      typeof body.responsesUrl === "string" && body.responsesUrl.trim()
+        ? body.responsesUrl.trim()
+        : undefined;
     const providerApiKeys = normalizeApiKeysInput(
       body.providerApiKeys,
       body.apiKeys,
@@ -908,6 +914,7 @@ export class RuntimeProviderRepository {
     }
 
     let parsedBaseUrl: URL;
+    let parsedResponsesUrl: URL | undefined;
     try {
       parsedBaseUrl = new URL(baseUrl);
     } catch {
@@ -917,11 +924,25 @@ export class RuntimeProviderRepository {
         message: "baseUrl must be a valid URL",
       });
     }
+    if (responsesUrl) {
+      try {
+        parsedResponsesUrl = new URL(responsesUrl);
+      } catch {
+        throw new RuntimeProviderError(400, {
+          type: "validation_error",
+          code: "INVALID_RESPONSES_URL",
+          message: "responsesUrl must be a valid URL",
+        });
+      }
+    }
 
     return {
       name,
       id,
       baseUrl: parsedBaseUrl.toString().replace(/\/+$/, ""),
+      responsesUrl: (parsedResponsesUrl ?? new URL(toResponsesUrl(parsedBaseUrl.toString().replace(/\/+$/, ""))))
+        .toString()
+        .replace(/\/+$/, ""),
       authMode,
       chatgptAccountId,
       providerApiKeys,

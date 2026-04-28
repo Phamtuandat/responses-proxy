@@ -1,4 +1,9 @@
 import { InlineKeyboard, type Bot } from "grammy";
+import { replyOrEditMessage } from "./callbacks.js";
+
+type InlineKeyboardMarkupLike = {
+  inline_keyboard?: Array<Array<Record<string, unknown>>>;
+};
 
 export const ADMIN_CALLBACK_ACTIONS = [
   "status",
@@ -80,20 +85,49 @@ export function buildAdminStartKeyboard(): InlineKeyboard {
   return buildAdminActionKeyboard(ADMIN_ACTION_LOOPS.main.actions);
 }
 
+export function mergeInlineKeyboards(
+  ...keyboards: Array<InlineKeyboard | InlineKeyboardMarkupLike | undefined>
+): InlineKeyboardMarkupLike | undefined {
+  const rows = keyboards.flatMap((keyboard) => {
+    if (!keyboard) {
+      return [];
+    }
+    const raw = JSON.parse(JSON.stringify(keyboard)) as InlineKeyboardMarkupLike;
+    return Array.isArray(raw.inline_keyboard) ? raw.inline_keyboard : [];
+  });
+  return rows.length > 0 ? { inline_keyboard: rows } : undefined;
+}
+
 export async function replyAdminActionLoop(
   ctx: Parameters<Bot["command"]>[1] extends infer _T ? any : never,
   loop: AdminActionLoop = "main",
 ): Promise<void> {
   const definition = ADMIN_ACTION_LOOPS[loop];
-  await ctx.reply(definition.title, {
+  await replyOrEditMessage(ctx, definition.title, {
     reply_markup: buildAdminActionKeyboard(definition.actions),
   });
 }
 
-export function buildApplyClientKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
+export async function renderAdminScreen(
+  ctx: Parameters<Bot["command"]>[1] extends infer _T ? any : never,
+  input: {
+    text: string;
+    loop: AdminActionLoop;
+    primaryKeyboard?: InlineKeyboard | InlineKeyboardMarkupLike;
+  },
+): Promise<void> {
+  const loopKeyboard = buildAdminActionKeyboard(ADMIN_ACTION_LOOPS[input.loop].actions);
+  await replyOrEditMessage(ctx, input.text, {
+    reply_markup: mergeInlineKeyboards(input.primaryKeyboard, loopKeyboard) as never,
+  });
+}
+
+export function buildApplyClientKeyboard(includeMenu = true): InlineKeyboard {
+  const keyboard = new InlineKeyboard()
     .text("Hermes", "v1:apply:client:hermes")
-    .text("Codex", "v1:apply:client:codex")
-    .row()
-    .text(ADMIN_ACTION_BUTTONS.menu.label, ADMIN_ACTION_BUTTONS.menu.callbackData);
+    .text("Codex", "v1:apply:client:codex");
+  if (includeMenu) {
+    keyboard.row().text(ADMIN_ACTION_BUTTONS.menu.label, ADMIN_ACTION_BUTTONS.menu.callbackData);
+  }
+  return keyboard;
 }

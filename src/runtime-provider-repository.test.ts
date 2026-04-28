@@ -888,6 +888,60 @@ test("creating and updating a provider does not switch the default route when on
   }
 });
 
+test("createProvider and updateProvider allow explicit responsesUrl overrides", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [],
+    });
+
+    const created = repository.createProvider({
+      id: "chatgpt-pool",
+      name: "ChatGPT Pool",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      responsesUrl: "https://chatgpt.com/backend-api/codex/responses",
+      authMode: "chatgpt_oauth",
+      capabilities: {
+        usageCheckEnabled: false,
+        stripMaxOutputTokens: false,
+        requestParameterPolicy: {},
+        sanitizeReasoningSummary: false,
+        stripModelPrefixes: [],
+      },
+    });
+
+    assert.equal(created.responsesUrl, "https://chatgpt.com/backend-api/codex/responses");
+
+    const updated = repository.updateProvider(created.id, {
+      id: created.id,
+      name: created.name,
+      baseUrl: created.baseUrl,
+      responsesUrl: "https://chatgpt.com/backend-api/codex/responses?via=override",
+      authMode: "chatgpt_oauth",
+      capabilities: created.capabilities,
+    });
+
+    assert.equal(updated.responsesUrl, "https://chatgpt.com/backend-api/codex/responses?via=override");
+
+    const reloaded = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [],
+    });
+    assert.equal(
+      reloaded.getProviderOrThrow(created.id)?.responsesUrl,
+      "https://chatgpt.com/backend-api/codex/responses?via=override",
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("explicit empty client api keys stay empty instead of falling back to provider keys", async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
   const dbFile = path.join(tempDir, "app.sqlite");

@@ -2,7 +2,7 @@ import { InlineKeyboard, type Bot, type Context } from "grammy";
 import type { BillingRepository } from "../../billing.js";
 import type { CustomerApiKeyRecord, CustomerKeyRepository } from "../../customer-keys.js";
 import type { AuditLogRepository } from "../../audit-log.js";
-import { replyAdminActionLoop } from "../admin-actions.js";
+import { renderAdminScreen } from "../admin-actions.js";
 import { isAdmin } from "../auth.js";
 import { answerCallbackQuerySafely } from "../callbacks.js";
 import { buildCustomerActionKeyboard } from "../customer-actions.js";
@@ -80,7 +80,6 @@ export function registerApiKeyCommand(
     show: async (ctx, record) => {
       await answerCallbackQuerySafely(ctx, { text: "Key details loaded" });
       await showAdminApiKey(ctx, customerKeys, auditLog, record);
-      await replyAdminActionLoop(ctx, "keys");
     },
     suspend: async (ctx, record) => {
       const ok = await changeCustomerApiKeyStatus(ctx, deps, customerKeys, auditLog, record, "suspend");
@@ -146,7 +145,6 @@ export function registerApiKeyCommand(
       return;
     }
     await showAdminApiKey(ctx, customerKeys, auditLog, record);
-    await replyAdminActionLoop(ctx, "keys");
   });
 }
 
@@ -162,46 +160,34 @@ async function handleAdminApiKeyCommand(
   const args = rawArgs.split(/\s+/g).filter(Boolean);
   const [subcommand, target, clientRouteRaw] = args;
   if (!subcommand || subcommand === "help") {
-    await ctx.reply(formatAdminApiKeyUsage());
+    await renderAdminApiKeyInfo(ctx, formatAdminApiKeyUsage());
     return;
   }
 
   if (subcommand === "list") {
     if (!/^\d+$/.test(target ?? "")) {
-      await ctx.reply("Usage: /apikey list <telegramUserId>");
+      await renderAdminApiKeyInfo(ctx, "Usage: /apikey list <telegramUserId>");
       return;
     }
     const keys = customerKeys.listKeysByUser(target);
-    await ctx.reply(
-      [
-        `Customer API keys for ${target}`,
-        "Tap a key button to copy its id, paste it back into this chat, then send to manage.",
-        keys.length === 0 ? "none" : undefined,
-        ...keys.map(formatCustomerKeyLine),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      keys.length > 0 ? { reply_markup: buildAdminKeyListKeyboard(keys) } : undefined,
-    );
-    await replyAdminActionLoop(ctx, "keys");
+    await renderAdminKeyList(ctx, target, keys);
     return;
   }
 
   if (subcommand === "show") {
     const record = resolveAdminKeyTarget(customerKeys, target);
     if (!record) {
-      await ctx.reply("Usage: /apikey show <keyId|telegramUserId>");
+      await renderAdminApiKeyInfo(ctx, "Usage: /apikey show <keyId|telegramUserId>");
       return;
     }
     await showAdminApiKey(ctx, customerKeys, auditLog, record);
-    await replyAdminActionLoop(ctx, "keys");
     return;
   }
 
   if (subcommand === "suspend" || subcommand === "revoke") {
     const record = target ? customerKeys.getById(target) : undefined;
     if (!record) {
-      await ctx.reply(`Usage: /apikey ${subcommand} <keyId>`);
+      await renderAdminApiKeyInfo(ctx, `Usage: /apikey ${subcommand} <keyId>`);
       return;
     }
     await changeCustomerApiKeyStatus(ctx, deps, customerKeys, auditLog, record, subcommand);
@@ -211,7 +197,7 @@ async function handleAdminApiKeyCommand(
   if (subcommand === "activate") {
     const record = target ? customerKeys.getById(target) : undefined;
     if (!record) {
-      await ctx.reply("Usage: /apikey activate <keyId>");
+      await renderAdminApiKeyInfo(ctx, "Usage: /apikey activate <keyId>");
       return;
     }
     await activateCustomerApiKey(ctx, deps, customerKeys, auditLog, record);
@@ -220,7 +206,7 @@ async function handleAdminApiKeyCommand(
 
   if (subcommand === "rotate") {
     if (!/^\d+$/.test(target ?? "")) {
-      await ctx.reply("Usage: /apikey rotate <telegramUserId> [clientRoute]");
+      await renderAdminApiKeyInfo(ctx, "Usage: /apikey rotate <telegramUserId> [clientRoute]");
       return;
     }
     await rotateCustomerApiKey(ctx, deps, customerKeys, workspaces, billing, auditLog, {
@@ -230,7 +216,7 @@ async function handleAdminApiKeyCommand(
     return;
   }
 
-  await ctx.reply(formatAdminApiKeyUsage());
+  await renderAdminApiKeyInfo(ctx, formatAdminApiKeyUsage());
 }
 
 async function showAdminApiKey(
@@ -255,8 +241,8 @@ async function showAdminApiKey(
       },
     });
   }
-  await ctx.reply(
-    [
+  await renderAdminScreen(ctx, {
+    text: [
       "Customer API key",
       ...formatCustomerKeyDetails(record),
       apiKey ? `api_key: ${apiKey}` : undefined,
@@ -267,8 +253,9 @@ async function showAdminApiKey(
     ]
       .filter(Boolean)
       .join("\n"),
-    { reply_markup: buildAdminKeyActionsKeyboard(record) },
-  );
+    loop: "keys",
+    primaryKeyboard: buildAdminKeyActionsKeyboard(record),
+  });
 }
 
 async function changeCustomerApiKeyStatus(
@@ -299,16 +286,16 @@ async function changeCustomerApiKeyStatus(
         proxySynced: !!apiKey,
       },
     });
-    await ctx.reply(
-      [
+    await renderAdminScreen(ctx, {
+      text: [
         `Customer API key ${status}.`,
         `key_id: ${record.id}`,
         `key_status: ${updated?.status ?? status}`,
         apiKey ? "proxy_sync: removed_from_route" : "proxy_sync: skipped_legacy_secret_unavailable",
       ].join("\n"),
-      { reply_markup: updated ? buildAdminKeyActionsKeyboard(updated) : undefined },
-    );
-    await replyAdminActionLoop(ctx, "keys");
+      loop: "keys",
+      primaryKeyboard: updated ? buildAdminKeyActionsKeyboard(updated) : undefined,
+    });
     return true;
   } catch (error) {
     await replyWithProxyError(ctx, error);
@@ -325,7 +312,11 @@ async function activateCustomerApiKey(
 ): Promise<boolean> {
   const apiKey = customerKeys.getApiKeySecret(record.id);
   if (!apiKey) {
-    await ctx.reply("Cannot activate this legacy key because the full key is unavailable. Use /apikey rotate <telegramUserId>.");
+    await renderAdminScreen(ctx, {
+      text: "Cannot activate this legacy key because the full key is unavailable. Use /apikey rotate <telegramUserId>.",
+      loop: "keys",
+      primaryKeyboard: buildAdminKeyActionsKeyboard(record),
+    });
     return false;
   }
   try {
@@ -343,16 +334,16 @@ async function activateCustomerApiKey(
         reason: "admin_key_management",
       },
     });
-    await ctx.reply(
-      [
+    await renderAdminScreen(ctx, {
+      text: [
         "Customer API key activated.",
         `key_id: ${record.id}`,
         `key_status: ${updated?.status ?? "active"}`,
         "proxy_sync: added_to_route",
       ].join("\n"),
-      { reply_markup: updated ? buildAdminKeyActionsKeyboard(updated) : undefined },
-    );
-    await replyAdminActionLoop(ctx, "keys");
+      loop: "keys",
+      primaryKeyboard: updated ? buildAdminKeyActionsKeyboard(updated) : undefined,
+    });
     return true;
   } catch (error) {
     await replyWithProxyError(ctx, error);
@@ -376,11 +367,14 @@ async function issueCustomerApiKey(
 
   const [userId, clientRouteRaw, apiKeyRaw] = args.split(/\s+/g);
   if (!/^\d+$/.test(userId ?? "")) {
-    await ctx.reply("Usage: /apikey issue <telegramUserId> [clientRoute] [apiKey]");
+    await renderAdminApiKeyInfo(ctx, "Usage: /apikey issue <telegramUserId> [clientRoute] [apiKey]");
     return;
   }
   if (!apiKeyRaw && ctx.chat?.type !== "private") {
-    await ctx.reply("Run /apikey issue in a private admin chat when generating a new key, or provide an explicit apiKey.");
+    await renderAdminApiKeyInfo(
+      ctx,
+      "Run /apikey issue in a private admin chat when generating a new key, or provide an explicit apiKey.",
+    );
     return;
   }
 
@@ -456,8 +450,8 @@ async function issueCustomerApiKey(
     }
 
     const canShowApiKeyToAdmin = ctx.chat?.type === "private";
-    await ctx.reply(
-      [
+    await renderAdminScreen(ctx, {
+      text: [
         "Customer API key issued.",
         `telegram_user_id: ${userId}`,
         `workspace_id: ${workspace.id}`,
@@ -470,9 +464,9 @@ async function issueCustomerApiKey(
       ]
         .filter(Boolean)
         .join("\n"),
-      { reply_markup: buildAdminKeyActionsKeyboard(customerKeys.getById(created.record.id) ?? created.record) },
-    );
-    await replyAdminActionLoop(ctx, "keys");
+      loop: "keys",
+      primaryKeyboard: buildAdminKeyActionsKeyboard(customerKeys.getById(created.record.id) ?? created.record),
+    });
     if (canShowApiKeyToAdmin) {
       auditLog.record({
         event: "api_key.revealed",
@@ -620,8 +614,8 @@ async function rotateCustomerApiKey(
       },
     });
   }
-  await ctx.reply(
-    [
+  await renderAdminScreen(ctx, {
+    text: [
       "Customer API key rotated.",
       `telegram_user_id: ${input.telegramUserId}`,
       `workspace_id: ${workspace.id}`,
@@ -633,9 +627,9 @@ async function rotateCustomerApiKey(
     ]
       .filter(Boolean)
       .join("\n"),
-    { reply_markup: buildAdminKeyActionsKeyboard(customerKeys.getById(created.record.id) ?? created.record) },
-  );
-  await replyAdminActionLoop(ctx, "keys");
+    loop: "keys",
+    primaryKeyboard: buildAdminKeyActionsKeyboard(customerKeys.getById(created.record.id) ?? created.record),
+  });
   return true;
 }
 
@@ -734,6 +728,32 @@ function buildAdminKeyActionsKeyboard(record: CustomerApiKeyRecord): InlineKeybo
     keyboard.text("🔵 Rotate", `v1:apikey:rotate:${record.id}`);
   }
   return keyboard;
+}
+
+async function renderAdminKeyList(
+  ctx: Context,
+  telegramUserId: string,
+  keys: CustomerApiKeyRecord[],
+): Promise<void> {
+  await renderAdminScreen(ctx, {
+    text: [
+      `Customer API keys for ${telegramUserId}`,
+      "Tap a key button to copy its id, paste it back into this chat, then send to manage.",
+      keys.length === 0 ? "none" : undefined,
+      ...keys.map(formatCustomerKeyLine),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    loop: "keys",
+    primaryKeyboard: keys.length > 0 ? buildAdminKeyListKeyboard(keys) : undefined,
+  });
+}
+
+async function renderAdminApiKeyInfo(ctx: Context, text: string): Promise<void> {
+  await renderAdminScreen(ctx, {
+    text,
+    loop: "keys",
+  });
 }
 
 function formatKeyButtonLabel(record: CustomerApiKeyRecord): string {

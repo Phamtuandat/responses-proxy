@@ -5,11 +5,19 @@ import {
   ADMIN_CALLBACK_PATTERN,
   buildAdminStartKeyboard,
   buildApplyClientKeyboard,
-  replyAdminActionLoop,
+  renderAdminScreen,
   type AdminActionLoop,
   type AdminCallbackAction,
 } from "../admin-actions.js";
-import { sendClients, sendModels, sendOauthStatus, sendProviders, sendStatus, type BotDependencies } from "../actions.js";
+import {
+  loadClientsText,
+  loadModelsText,
+  loadOauthStatusText,
+  loadProvidersText,
+  loadStatusText,
+  replyWithProxyError,
+  type BotDependencies,
+} from "../actions.js";
 import { isAdmin } from "../auth.js";
 import type { BotIdentityRepository } from "../bot-identity-repository.js";
 import { answerCallbackQuerySafely } from "../callbacks.js";
@@ -71,66 +79,92 @@ export function registerStartCommand(
     status: {
       loop: "proxy",
       run: async (ctx) => {
-        await sendStatus(ctx, deps);
+        await renderAdminScreen(ctx, {
+          text: await loadStatusText(deps),
+          loop: "proxy",
+        });
       },
     },
     clients: {
       loop: "config",
       run: async (ctx) => {
-        await sendClients(ctx, deps);
+        await renderAdminScreen(ctx, {
+          text: await loadClientsText(deps),
+          loop: "config",
+        });
       },
     },
     providers: {
       loop: "proxy",
       run: async (ctx) => {
-        await sendProviders(ctx, deps);
+        await renderAdminScreen(ctx, {
+          text: await loadProvidersText(deps),
+          loop: "proxy",
+        });
       },
     },
     models: {
       loop: "proxy",
       run: async (ctx) => {
-        await sendModels(ctx, deps);
+        await renderAdminScreen(ctx, {
+          text: await loadModelsText(deps),
+          loop: "proxy",
+        });
       },
     },
     oauth: {
       loop: "proxy",
       run: async (ctx) => {
-        await sendOauthStatus(ctx, deps);
+        await renderAdminScreen(ctx, {
+          text: await loadOauthStatusText(deps),
+          loop: "proxy",
+        });
       },
     },
     plans: {
       loop: "billing",
       run: async (ctx) => {
-        await ctx.reply(formatBillingPlans(billing));
+        await renderAdminScreen(ctx, {
+          text: formatBillingPlans(billing),
+          loop: "billing",
+        });
       },
     },
     renewals: {
       loop: "billing",
       run: async (ctx) => {
-        await ctx.reply(formatOpenRenewalRequests(billing));
+        await renderAdminScreen(ctx, {
+          text: formatOpenRenewalRequests(billing),
+          loop: "billing",
+        });
       },
     },
     apikeys: {
       loop: "keys",
       run: async (ctx) => {
         const keys = customerKeys.listRecentKeys(10);
-        await ctx.reply(formatRecentCustomerKeys(keys), {
-          reply_markup: keys.length > 0 ? buildAdminKeyListKeyboard(keys) : undefined,
+        await renderAdminScreen(ctx, {
+          text: formatRecentCustomerKeys(keys),
+          loop: "keys",
+          primaryKeyboard: keys.length > 0 ? buildAdminKeyListKeyboard(keys) : undefined,
         });
       },
     },
     apply: {
       loop: "apply",
       run: async (ctx) => {
-        await ctx.reply("Choose a client to configure.", {
-          reply_markup: buildApplyClientKeyboard(),
+        await renderAdminScreen(ctx, {
+          text: "Choose a client to configure.",
+          loop: "apply",
+          primaryKeyboard: buildApplyClientKeyboard(false),
         });
       },
     },
     menu: {
       run: async (ctx) => {
-        await ctx.reply(formatAdminStartPanel(), {
-          reply_markup: buildAdminStartKeyboard(),
+        await renderAdminScreen(ctx, {
+          text: formatAdminStartPanel(),
+          loop: "main",
         });
       },
     },
@@ -144,9 +178,10 @@ export function registerStartCommand(
     const action = ctx.match[1] as AdminCallbackAction;
     const definition = adminActions[action];
     await answerCallbackQuerySafely(ctx, { text: "Loaded" });
-    await definition.run(ctx);
-    if (definition.loop) {
-      await replyAdminActionLoop(ctx, definition.loop);
+    try {
+      await definition.run(ctx);
+    } catch (error) {
+      await replyWithProxyError(ctx, error);
     }
   });
 }

@@ -25,23 +25,41 @@ export async function replyWithProxyError(ctx: Context, error: unknown): Promise
   await ctx.reply(error instanceof Error ? error.message : "Unknown bot error");
 }
 
+export async function loadStatusText(deps: BotDependencies): Promise<string> {
+  const [health, providers, promptCache, usageStats] = await Promise.all([
+    deps.proxyClient.getHealth(),
+    deps.proxyClient.getProviders(),
+    deps.proxyClient.getLatestPromptCache(),
+    deps.proxyClient.getUsageStats(),
+  ]);
+  const usageSummary = summarizeUsageStats(usageStats?.stats);
+  return formatHealthStatus({
+    ...health,
+    activeProviderId: providers?.activeProviderId,
+    latestPromptCache: promptCache?.latest ?? null,
+    usageSummary,
+  });
+}
+
+export async function loadProvidersText(deps: BotDependencies): Promise<string> {
+  return formatProviders(await deps.proxyClient.getProviders());
+}
+
+export async function loadClientsText(deps: BotDependencies): Promise<string> {
+  return formatClientConfigs(await deps.proxyClient.getClientConfigs());
+}
+
+export async function loadModelsText(deps: BotDependencies): Promise<string> {
+  return formatModels(await deps.proxyClient.getModels());
+}
+
+export async function loadOauthStatusText(deps: BotDependencies): Promise<string> {
+  return formatOauthStatus(await deps.proxyClient.getOauthStatus());
+}
+
 export async function sendStatus(ctx: Context, deps: BotDependencies): Promise<void> {
   try {
-    const [health, providers, promptCache, usageStats] = await Promise.all([
-      deps.proxyClient.getHealth(),
-      deps.proxyClient.getProviders(),
-      deps.proxyClient.getLatestPromptCache(),
-      deps.proxyClient.getUsageStats(),
-    ]);
-    const usageSummary = summarizeUsageStats(usageStats?.stats);
-    await ctx.reply(
-      formatHealthStatus({
-        ...health,
-        activeProviderId: providers?.activeProviderId,
-        latestPromptCache: promptCache?.latest ?? null,
-        usageSummary,
-      }),
-    );
+    await ctx.reply(await loadStatusText(deps));
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }
@@ -49,7 +67,7 @@ export async function sendStatus(ctx: Context, deps: BotDependencies): Promise<v
 
 export async function sendProviders(ctx: Context, deps: BotDependencies): Promise<void> {
   try {
-    await ctx.reply(formatProviders(await deps.proxyClient.getProviders()));
+    await ctx.reply(await loadProvidersText(deps));
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }
@@ -57,7 +75,7 @@ export async function sendProviders(ctx: Context, deps: BotDependencies): Promis
 
 export async function sendClients(ctx: Context, deps: BotDependencies): Promise<void> {
   try {
-    await ctx.reply(formatClientConfigs(await deps.proxyClient.getClientConfigs()));
+    await ctx.reply(await loadClientsText(deps));
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }
@@ -65,7 +83,7 @@ export async function sendClients(ctx: Context, deps: BotDependencies): Promise<
 
 export async function sendOauthStatus(ctx: Context, deps: BotDependencies): Promise<void> {
   try {
-    await ctx.reply(formatOauthStatus(await deps.proxyClient.getOauthStatus()));
+    await ctx.reply(await loadOauthStatusText(deps));
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }
