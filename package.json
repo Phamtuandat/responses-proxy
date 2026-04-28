@@ -31,7 +31,7 @@
     "tailnet:reset": "./scripts/tailnet-reset.sh"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.19.0"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",

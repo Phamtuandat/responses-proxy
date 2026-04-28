@@ -1,60 +1,150 @@
-import type { CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AppShell } from "./components/AppShell";
+import { EmptyState } from "./components/EmptyState";
+import { AccountsScreen } from "./screens/AccountsScreen";
+import { AuthScreen } from "./screens/AuthScreen";
+import { CacheScreen } from "./screens/CacheScreen";
+import { ClientsScreen } from "./screens/ClientsScreen";
+import { ConfigHelperScreen } from "./screens/ConfigHelperScreen";
+import { DashboardScreen } from "./screens/DashboardScreen";
+import { ProvidersScreen } from "./screens/ProvidersScreen";
+import { RtkScreen } from "./screens/RtkScreen";
+import { UsageScreen } from "./screens/UsageScreen";
 
-const styles = {
-  page: {
-    minHeight: "100vh",
-    margin: 0,
-    display: "grid",
-    placeItems: "center",
-    padding: "24px",
-    color: "rgba(29, 29, 31, 0.92)",
-    background:
-      "radial-gradient(circle at 24% 0%, rgba(255,255,255,0.92), transparent 34%), linear-gradient(180deg, #f5f5f7 0%, #eceef2 100%)",
-    fontFamily:
-      '"SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
-  },
-  card: {
-    width: "min(100%, 560px)",
-    padding: "32px",
-    borderRadius: "32px",
-    border: "1px solid rgba(20, 20, 24, 0.08)",
-    background: "rgba(255, 255, 255, 0.72)",
-    boxShadow: "0 24px 70px rgba(0, 0, 0, 0.1)",
-    backdropFilter: "blur(28px) saturate(130%)",
-  },
-  eyebrow: {
-    margin: "0 0 12px",
-    color: "rgba(29, 29, 31, 0.56)",
-    fontSize: "13px",
-    fontWeight: 650,
-  },
-  title: {
-    margin: 0,
-    fontSize: "clamp(34px, 6vw, 52px)",
-    lineHeight: 1,
-    letterSpacing: "-0.02em",
-  },
-  copy: {
-    margin: "16px 0 0",
-    color: "rgba(29, 29, 31, 0.62)",
-    fontSize: "16px",
-    lineHeight: 1.55,
-  },
-} satisfies Record<string, CSSProperties>;
+export type AppRoute =
+  | "dashboard"
+  | "providers"
+  | "clients"
+  | "oauth"
+  | "auth-management"
+  | "config-helper"
+  | "usage"
+  | "rtk"
+  | "cache";
+
+export type Theme = "light" | "dark";
+
+export type NavItem = {
+  route: AppRoute;
+  label: string;
+};
+
+const THEME_STORAGE_KEY = "responses-proxy-theme";
+const DEFAULT_ROUTE: AppRoute = "dashboard";
+
+const navItems: NavItem[] = [
+  { route: "dashboard", label: "Dashboard" },
+  { route: "providers", label: "Providers" },
+  { route: "clients", label: "Clients" },
+  { route: "oauth", label: "Accounts" },
+  { route: "auth-management", label: "Auth" },
+  { route: "config-helper", label: "Config" },
+  { route: "usage", label: "Usage" },
+  { route: "rtk", label: "RTK" },
+  { route: "cache", label: "Cache" },
+];
+
+const routeSet = new Set<AppRoute>(navItems.map((item) => item.route));
+
+function readRouteFromHash(): { route: AppRoute; isUnknown: boolean } {
+  const route = window.location.hash.replace(/^#\/?/, "").trim();
+
+  if (routeSet.has(route as AppRoute)) {
+    return { route: route as AppRoute, isUnknown: false };
+  }
+
+  return { route: DEFAULT_ROUTE, isUnknown: route.length > 0 };
+}
+
+function readInitialTheme(): Theme {
+  try {
+    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (storedTheme === "light" || storedTheme === "dark") {
+      return storedTheme;
+    }
+  } catch {
+    // Ignore storage access failures and keep the shell deterministic.
+  }
+
+  return "light";
+}
+
+function renderScreen(route: AppRoute, isUnknown: boolean) {
+  if (isUnknown) {
+    return (
+      <EmptyState
+        title="Route not found"
+        description="This React shell mirrors the legacy dashboard routes. Return to Dashboard to continue."
+        actionHref="#/dashboard"
+        actionLabel="Go to Dashboard"
+      />
+    );
+  }
+
+  switch (route) {
+    case "providers":
+      return <ProvidersScreen />;
+    case "clients":
+      return <ClientsScreen />;
+    case "oauth":
+      return <AccountsScreen />;
+    case "auth-management":
+      return <AuthScreen />;
+    case "config-helper":
+      return <ConfigHelperScreen />;
+    case "usage":
+      return <UsageScreen />;
+    case "rtk":
+      return <RtkScreen />;
+    case "cache":
+      return <CacheScreen />;
+    case "dashboard":
+    default:
+      return <DashboardScreen />;
+  }
+}
 
 export function App() {
+  const [routeState, setRouteState] = useState(readRouteFromHash);
+  const [theme, setTheme] = useState<Theme>(readInitialTheme);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Theme persistence is progressive enhancement.
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    if (!window.location.hash) {
+      window.history.replaceState(null, "", "#/dashboard");
+    }
+
+    const handleHashChange = () => setRouteState(readRouteFromHash());
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((currentTheme) => (currentTheme === "dark" ? "light" : "dark"));
+  }, []);
+
+  const screen = useMemo(
+    () => renderScreen(routeState.route, routeState.isUnknown),
+    [routeState],
+  );
+
   return (
-    <main style={styles.page}>
-      <section style={styles.card} aria-labelledby="react-shell-title">
-        <p style={styles.eyebrow}>Responses Proxy</p>
-        <h1 id="react-shell-title" style={styles.title}>
-          React shell ready
-        </h1>
-        <p style={styles.copy}>
-          Phase 1 is isolated from the production static dashboard. No API calls
-          or existing UI behavior are wired into this shell yet.
-        </p>
-      </section>
-    </main>
+    <AppShell
+      currentRoute={routeState.route}
+      navItems={navItems}
+      theme={theme}
+      onToggleTheme={toggleTheme}
+    >
+      {screen}
+    </AppShell>
   );
 }
