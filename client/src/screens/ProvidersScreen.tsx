@@ -1,16 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getProviders } from "../api/client";
-import type { ClientRouteSummary, ProviderSummary, ProvidersResponse } from "../api/types";
+import { createProvider, deleteProvider, getProviders, updateProvider } from "../api/client";
+import type {
+  ClientRouteSummary,
+  ProviderMutationInput,
+  ProviderSummary,
+  ProvidersResponse,
+} from "../api/types";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
+import { InlineAlert } from "../components/InlineAlert";
 import { LoadingState } from "../components/LoadingState";
 import { PageHeader } from "../components/PageHeader";
+import { ProviderForm, type ProviderFormData } from "../components/ProviderForm";
 import { RefreshButton } from "../components/RefreshButton";
 import { StatCard } from "../components/StatCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { useAsyncResource } from "../hooks/useAsyncResource";
 import { formatDateTime, formatNumber, formatUnknown, isRecord } from "../lib/format";
+
+type MutationFeedback = {
+  variant: "success" | "error";
+  message: string;
+};
 
 function getProviderKeyCount(provider: ProviderSummary): number {
   if (typeof provider.providerApiKeysCount === "number") {
@@ -113,9 +126,54 @@ function summarizeRouteRtkPolicy(route: ClientRouteSummary): string {
   return summarizeRtkPolicy(route.rtkPolicy);
 }
 
+function buildProviderPayload(
+  provider: ProviderSummary | null,
+  values: {
+    name: string;
+    baseUrl: string;
+    authMode: "api_key" | "chatgpt_oauth";
+    chatgptAccountId?: string;
+    providerApiKeys?: string[];
+    replaceKeys: boolean;
+  },
+): ProviderMutationInput {
+  return {
+    name: values.name,
+    baseUrl: values.baseUrl,
+    authMode: values.authMode,
+    chatgptAccountId: values.authMode === "chatgpt_oauth" ? values.chatgptAccountId ?? "" : "",
+    providerApiKeys: values.replaceKeys
+      ? values.providerApiKeys ?? []
+      : provider && Array.isArray(provider.providerApiKeys)
+        ? provider.providerApiKeys
+        : [],
+    capabilities: provider && isRecord(provider.capabilities) ? provider.capabilities : {},
+  };
+}
+
+function getInitialFormData(provider?: ProviderSummary | null): Partial<ProviderFormData> {
+  if (!provider) {
+    return {};
+  }
+
+  return {
+    name: provider.name,
+    baseUrl: provider.baseUrl,
+    authMode: provider.authMode === "chatgpt_oauth" ? "chatgpt_oauth" : "api_key",
+    chatgptAccountId: typeof provider.chatgptAccountId === "string" ? provider.chatgptAccountId : "",
+    providerApiKeysText: "",
+  };
+}
+
 export function ProvidersScreen() {
   const [query, setQuery] = useState("");
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<MutationFeedback | null>(null);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [deletingProviderId, setDeletingProviderId] = useState<string | null>(null);
+  const [mutationTarget, setMutationTarget] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const loadProviders = useCallback(() => getProviders(), []);
   const { state, retry } = useAsyncResource<ProvidersResponse>(loadProviders);
 
@@ -153,6 +211,77 @@ export function ProvidersScreen() {
     }
   }, [activeProviderId, filteredProviders, selectedProviderId]);
 
+  const selectedProvider =
+    filteredProviders.find((provider) => provider.id === selectedProviderId) ??
+    providers.find((provider) => provider.id === selectedProviderId) ??
+    null;
+  const editingProvider = providers.find((provider) => provider.id === editingProviderId) ?? null;
+  const deletingProvider = providers.find((provider) => provider.id === deletingProviderId) ?? null;
+
+  async function handleCreate(values: {
+    name: string;
+    baseUrl: string;
+    authMode: "api_key" | "chatgpt_oauth";
+    chatgptAccountId?: string;
+    providerApiKeys?: string[];
+    replaceKeys: boolean;
+  }) {
+    setMutationTarget("create");
+    try {
+      await createProvider(buildProviderPayload(null, values));
+      setFeedback({ variant: "success", message: `Created provider ${values.name}.` });
+      setIsCreateOpen(false);
+      retry();
+    } finally {
+      setMutationTarget(null);
+    }
+  }
+
+  async function handleEdit(values: {
+    name: string;
+    baseUrl: string;
+    authMode: "api_key" | "chatgpt_oauth";
+    chatgptAccountId?: string;
+    providerApiKeys?: string[];
+    replaceKeys: boolean;
+  }) {
+    if (!editingProvider) {
+      throw new Error("Provider no longer exists.");
+    }
+
+    setMutationTarget(editingProvider.id);
+    try {
+      await updateProvider(editingProvider.id, buildProviderPayload(editingProvider, values));
+      setFeedback({ variant: "success", message: `Saved changes for ${values.name}.` });
+      setEditingProviderId(null);
+      retry();
+    } finally {
+      setMutationTarget(null);
+    }
+  }
+
+  async function handleDeleteConfirm() {
+    if (!deletingProvider) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setFeedback(null);
+    try {
+      await deleteProvider(deletingProvider.id);
+      setFeedback({ variant: "success", message: `Deleted provider ${deletingProvider.name}.` });
+      setDeletingProviderId(null);
+      retry();
+    } catch (caughtError) {
+      setFeedback({
+        variant: "error",
+        message: caughtError instanceof Error ? caughtError.message : "Could not delete provider.",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   if (state.status === "loading" || state.status === "idle") {
     return <LoadingState title="Loading providers" description="Reading the provider inventory and client route bindings." />;
   }
@@ -165,19 +294,30 @@ export function ProvidersScreen() {
   const accountBackedCount = providers.filter(
     (provider) => provider.authMode === "chatgpt_oauth" || Boolean(provider.chatgptAccountId),
   ).length;
-  const selectedProvider =
-    filteredProviders.find((provider) => provider.id === selectedProviderId) ??
-    providers.find((provider) => provider.id === selectedProviderId) ??
-    null;
 
   return (
     <div className="screen-stack">
       <PageHeader
         eyebrow="Providers"
         title="Provider inventory"
-        description="Read-only React migration for provider inventory. CRUD and provider editing remain in the legacy dashboard until a later phase."
-        actions={<RefreshButton onClick={retry} />}
+        description="Controlled provider CRUD is available here now. The legacy dashboard remains as a fallback while production still serves the public UI."
+        actions={
+          <div className="page-header-actions page-header-actions-group">
+            <RefreshButton onClick={retry} />
+            <button className="button-link button-primary" onClick={() => setIsCreateOpen(true)} type="button">
+              Create Provider
+            </button>
+          </div>
+        }
       />
+
+      {feedback ? (
+        <InlineAlert
+          message={feedback.message}
+          title={feedback.variant === "success" ? "Provider updated" : "Provider action failed"}
+          variant={feedback.variant}
+        />
+      ) : null}
 
       <div className="stat-grid">
         <StatCard label="Total providers" value={formatNumber(providers.length)} />
@@ -230,6 +370,7 @@ export function ProvidersScreen() {
                       <th scope="col">Base URL</th>
                       <th className="align-right" scope="col">Keys</th>
                       <th scope="col">Status</th>
+                      <th scope="col">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -237,6 +378,8 @@ export function ProvidersScreen() {
                       const active = isProviderActive(provider, activeProviderId);
                       const available = isProviderAvailable(provider);
                       const selected = provider.id === selectedProviderId;
+                      const isEditingRow = mutationTarget === provider.id;
+
                       return (
                         <tr className={selected ? "provider-row provider-row-selected" : "provider-row"} key={provider.id}>
                           <td>
@@ -260,6 +403,20 @@ export function ProvidersScreen() {
                               <StatusBadge variant={available ? "accent" : "warning"}>
                                 {available ? "Available" : "Needs key"}
                               </StatusBadge>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="row-actions">
+                              <button className="button-link row-action-button" onClick={() => setEditingProviderId(provider.id)} type="button">
+                                {isEditingRow ? "Saving..." : "Edit"}
+                              </button>
+                              <button
+                                className="button-link button-danger row-action-button"
+                                onClick={() => setDeletingProviderId(provider.id)}
+                                type="button"
+                              >
+                                Delete
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -294,6 +451,15 @@ export function ProvidersScreen() {
                     </StatusBadge>
                     <StatusBadge variant="neutral">{formatUnknown(selectedProvider.authMode)}</StatusBadge>
                   </div>
+                </div>
+
+                <div className="row-actions">
+                  <button className="button-link" onClick={() => setEditingProviderId(selectedProvider.id)} type="button">
+                    Edit provider
+                  </button>
+                  <button className="button-link button-danger" onClick={() => setDeletingProviderId(selectedProvider.id)} type="button">
+                    Delete provider
+                  </button>
                 </div>
 
                 <dl className="detail-list">
@@ -380,6 +546,42 @@ export function ProvidersScreen() {
           </div>
         )}
       </SurfaceCard>
+
+      {isCreateOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <div aria-modal="true" className="modal-card" role="dialog">
+            <ProviderForm mode="create" onCancel={() => setIsCreateOpen(false)} onSubmit={handleCreate} />
+          </div>
+        </div>
+      ) : null}
+
+      {editingProvider ? (
+        <div className="modal-backdrop" role="presentation">
+          <div aria-modal="true" className="modal-card" role="dialog">
+            <ProviderForm
+              initialData={getInitialFormData(editingProvider)}
+              mode="edit"
+              onCancel={() => setEditingProviderId(null)}
+              onSubmit={handleEdit}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {deletingProvider ? (
+        <ConfirmDialog
+          confirmLabel="Delete provider"
+          description={`Delete ${deletingProvider.name}? This removes the runtime provider from the backend. This action cannot be undone from this screen.`}
+          isSubmitting={isDeleting}
+          onCancel={() => {
+            if (!isDeleting) {
+              setDeletingProviderId(null);
+            }
+          }}
+          onConfirm={handleDeleteConfirm}
+          title={`Delete ${deletingProvider.name}`}
+        />
+      ) : null}
     </div>
   );
 }

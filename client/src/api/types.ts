@@ -41,6 +41,41 @@ export type ProvidersResponse = {
   [key: string]: unknown;
 };
 
+export type ProviderMutationInput = {
+  name: string;
+  baseUrl: string;
+  authMode: string;
+  chatgptAccountId?: string;
+  providerApiKeys?: string[];
+  capabilities?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export type ProviderMutationResponse = {
+  ok?: boolean;
+  activeProviderId?: string | null;
+  provider?: ProviderSummary;
+  error?: {
+    type?: string;
+    code?: string;
+    message?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+};
+
+export type ProviderDeleteResponse = {
+  ok?: boolean;
+  activeProviderId?: string | null;
+  error?: {
+    type?: string;
+    code?: string;
+    message?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+};
+
 export type UsageStatsBucket = {
   requests?: number;
   hits?: number;
