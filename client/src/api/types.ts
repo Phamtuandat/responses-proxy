@@ -32,6 +32,46 @@ export type ClientRouteSummary = {
   [key: string]: unknown;
 };
 
+export type ClientTokenWindowType = "daily" | "weekly" | "monthly" | "fixed";
+
+export type ClientTokenLimitConfig = {
+  clientRoute: string;
+  enabled: boolean;
+  tokenLimit: number;
+  windowType: ClientTokenWindowType;
+  windowSizeSeconds?: number;
+  hardBlock: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
+export type ClientTokenUsageSnapshot = {
+  clientRoute: string;
+  windowStart?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
+export type ClientTokenLimitStatus = {
+  kind?: string;
+  state?: string;
+  message?: string;
+  limitReached?: boolean;
+  [key: string]: unknown;
+};
+
+export type ClientTokenLimitSummary = {
+  clientRoute: string;
+  config?: ClientTokenLimitConfig | null;
+  usage?: ClientTokenUsageSnapshot;
+  status?: ClientTokenLimitStatus;
+  [key: string]: unknown;
+};
+
 export type ProvidersResponse = {
   ok?: boolean;
   activeProviderId?: string | null;
@@ -73,6 +113,36 @@ export type ProviderDeleteResponse = {
     message?: string;
     [key: string]: unknown;
   };
+  [key: string]: unknown;
+};
+
+export type ClientMutationInput = {
+  client: string;
+  providerId?: string;
+  model?: string;
+  apiKeys?: string[];
+  tokenLimit?: unknown;
+};
+
+export type ClientMutationResponse = {
+  ok?: boolean;
+  client?: string;
+  clientRoutes?: ClientRouteSummary[];
+  providerOptions?: ProviderSummary[];
+  [key: string]: unknown;
+};
+
+export type ClientTokenLimitsResponse = {
+  ok?: boolean;
+  timestamp?: string;
+  clients?: ClientTokenLimitSummary[];
+  [key: string]: unknown;
+};
+
+export type ClientTokenLimitResponse = {
+  ok?: boolean;
+  timestamp?: string;
+  client?: ClientTokenLimitSummary;
   [key: string]: unknown;
 };
 

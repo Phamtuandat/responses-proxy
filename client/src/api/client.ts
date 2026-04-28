@@ -1,6 +1,10 @@
 import type {
   ChatGptOAuthStatusResponse,
+  ClientMutationInput,
+  ClientMutationResponse,
   ClientConfigsStatusResponse,
+  ClientTokenLimitResponse,
+  ClientTokenLimitsResponse,
   HealthResponse,
   ProviderDeleteResponse,
   ProviderMutationInput,
@@ -61,6 +65,36 @@ export function updateProvider(providerId: string, input: ProviderMutationInput)
 
 export function deleteProvider(providerId: string) {
   return apiSend<ProviderDeleteResponse>(`/api/providers/${encodeURIComponent(providerId)}`, "DELETE");
+}
+
+export function createClient(input: ClientMutationInput) {
+  return apiSend<ClientMutationResponse>("/api/clients", "POST", input);
+}
+
+export function updateClient(clientKey: string, input: ClientMutationInput) {
+  return apiSend<ClientMutationResponse>(`/api/clients/${encodeURIComponent(clientKey)}`, "PUT", input);
+}
+
+export function deleteClient(clientKey: string) {
+  return apiSend<ClientMutationResponse>(`/api/clients/${encodeURIComponent(clientKey)}`, "DELETE");
+}
+
+export function getClientTokenLimits() {
+  return apiGet<ClientTokenLimitsResponse>("/api/client-token-limits");
+}
+
+export function updateClientTokenLimit(clientKey: string, input: {
+  enabled: boolean;
+  tokenLimit: number;
+  windowType: "daily" | "weekly" | "monthly" | "fixed";
+  windowSizeSeconds?: number;
+  hardBlock: boolean;
+}) {
+  return apiSend<ClientTokenLimitResponse>(
+    `/api/client-token-limits/${encodeURIComponent(clientKey)}`,
+    "PUT",
+    input,
+  );
 }
 
 export function getUsageStats() {
