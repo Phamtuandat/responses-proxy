@@ -15,6 +15,9 @@ export type ProviderSummary = {
   providerApiKeysCount?: number;
   authMode?: string;
   chatgptAccountId?: string | null;
+  capabilities?: Record<string, unknown>;
+  createdAt?: string | null;
+  updatedAt?: string | null;
   current?: boolean;
   [key: string]: unknown;
 };

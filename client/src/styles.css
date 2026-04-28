@@ -276,6 +276,12 @@ a:focus-visible {
   gap: 20px;
 }
 
+.provider-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 20px;
+}
+
 .page-header {
   display: flex;
   align-items: flex-start;
@@ -496,6 +502,137 @@ a:focus-visible {
   padding: 28px;
 }
 
+.provider-search {
+  display: grid;
+  gap: 10px;
+}
+
+.field-label {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.search-input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  background: var(--surface-strong);
+  color: var(--text-primary);
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.provider-table td {
+  vertical-align: top;
+}
+
+.provider-row {
+  transition: background-color 140ms ease;
+}
+
+.provider-row-selected {
+  background: var(--accent-soft);
+}
+
+.provider-row-button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.provider-row-name {
+  font-weight: 600;
+}
+
+.provider-row-meta {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.provider-url-cell {
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.provider-status-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-detail {
+  display: grid;
+  gap: 18px;
+}
+
+.provider-detail-sections {
+  display: grid;
+  gap: 16px;
+}
+
+.provider-detail-section {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface-muted);
+}
+
+.provider-detail-section h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+
+.metadata-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metadata-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  white-space: nowrap;
+}
+
+.provider-meta-list {
+  display: grid;
+  gap: 12px;
+}
+
+.provider-meta-list div {
+  display: grid;
+  gap: 4px;
+}
+
+.provider-meta-list dt {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.provider-meta-list dd {
+  margin: 0;
+}
+
 .button-link,
 .refresh-button,
 .theme-toggle {
@@ -610,6 +747,10 @@ a:focus-visible {
 
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .provider-layout {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -12,22 +12,36 @@ import { formatDateTime, formatNumber, formatPercent, formatUnknown, isRecord } 
 
 type DashboardData = {
   health: HealthResponse;
-  providers: ProvidersResponse;
-  usage: UsageStatsResponse;
-  cache: PromptCacheLatestResponse;
+  providers: ProvidersResponse | null;
+  usage: UsageStatsResponse | null;
+  cache: PromptCacheLatestResponse | null;
+  telemetryWarning?: string;
 };
 
 export function DashboardScreen() {
   const loadDashboard = useCallback(
-    () =>
-      Promise.all([getHealth(), getProviders(), getUsageStats(), getPromptCacheLatest()]).then(
-        ([health, providers, usage, cache]) => ({
-          health,
-          providers,
-          usage,
-          cache,
-        }),
-      ),
+    async () => {
+      const health = await getHealth();
+      const telemetryResults = await Promise.allSettled([
+        getProviders(),
+        getUsageStats(),
+        getPromptCacheLatest(),
+      ]);
+
+      const [providersResult, usageResult, cacheResult] = telemetryResults;
+      const failedTelemetry = telemetryResults.filter((result) => result.status === "rejected").length;
+
+      return {
+        health,
+        providers: providersResult.status === "fulfilled" ? providersResult.value : null,
+        usage: usageResult.status === "fulfilled" ? usageResult.value : null,
+        cache: cacheResult.status === "fulfilled" ? cacheResult.value : null,
+        telemetryWarning:
+          failedTelemetry > 0
+            ? `${failedTelemetry} optional telemetry source${failedTelemetry === 1 ? "" : "s"} unavailable`
+            : undefined,
+      };
+    },
     [],
   );
   const { state, retry } = useAsyncResource<DashboardData>(loadDashboard);
@@ -46,13 +60,25 @@ export function DashboardScreen() {
     );
   }
 
-  const { health, providers, usage, cache } = state.data;
-  const stats = isRecord(usage.stats) ? usage.stats : {};
+  const { health, providers, usage, cache, telemetryWarning } = state.data;
+  const stats = usage && isRecord(usage.stats) ? usage.stats : {};
   const today = isRecord(stats.today) ? stats.today : {};
   const month = isRecord(stats.month) ? stats.month : {};
-  const latest = cache.latest;
-  const clientRoutes = Array.isArray(providers.clientRoutes) ? providers.clientRoutes : [];
-  const providerList = Array.isArray(providers.providers) ? providers.providers : [];
+  const latest = cache?.latest ?? null;
+  const clientRoutes = providers && Array.isArray(providers.clientRoutes) ? providers.clientRoutes : [];
+  const providerList = providers && Array.isArray(providers.providers) ? providers.providers : [];
+  const cacheStatus = cache
+    ? latest
+      ? latest.cacheHit
+        ? "Hit observed"
+        : "Latest miss/unknown"
+      : "No telemetry yet"
+    : "Unavailable";
+  const cacheCaption = cache
+    ? latest?.timestamp
+      ? formatDateTime(latest.timestamp)
+      : "Waiting for cache telemetry"
+    : "Optional endpoint unavailable";
 
   return (
     <div className="screen-stack">
@@ -69,9 +95,12 @@ export function DashboardScreen() {
             <h2>{health.service ?? "responses-proxy"}</h2>
             <p>{health.upstream ?? "Upstream not reported"}</p>
           </div>
-          <StatusBadge variant={health.ok ? "success" : "warning"}>
-            {health.ok ? "Healthy" : "Check status"}
-          </StatusBadge>
+          <div className="card-inline-status">
+            <StatusBadge variant={health.ok ? "success" : "warning"}>
+              {health.ok ? "Healthy" : "Check status"}
+            </StatusBadge>
+            {telemetryWarning ? <StatusBadge variant="warning">{telemetryWarning}</StatusBadge> : null}
+          </div>
         </div>
       </SurfaceCard>
 
@@ -81,18 +110,18 @@ export function DashboardScreen() {
         <StatCard label="Client routes" value={formatNumber(clientRoutes.length)} />
         <StatCard
           label="Cache status"
-          value={latest ? (latest.cacheHit ? "Hit observed" : "Latest miss/unknown") : "No telemetry yet"}
-          caption={latest?.timestamp ? formatDateTime(latest.timestamp) : "Waiting for cache telemetry"}
+          value={cacheStatus}
+          caption={cacheCaption}
         />
         <StatCard
           label="Today requests"
-          value={formatNumber(today.requests)}
-          caption={`Hit rate ${formatPercent(today.hitRate)}`}
+          value={usage ? formatNumber(today.requests) : "Unavailable"}
+          caption={usage ? `Hit rate ${formatPercent(today.hitRate)}` : "Optional endpoint unavailable"}
         />
         <StatCard
           label="Month requests"
-          value={formatNumber(month.requests)}
-          caption={`Saved ${formatPercent(month.avgCacheSavedPercent)}`}
+          value={usage ? formatNumber(month.requests) : "Unavailable"}
+          caption={usage ? `Saved ${formatPercent(month.avgCacheSavedPercent)}` : "Optional endpoint unavailable"}
         />
       </div>
 
@@ -108,19 +137,19 @@ export function DashboardScreen() {
           </div>
           <div>
             <dt>Latest cache provider</dt>
-            <dd>{formatUnknown(latest?.providerId)}</dd>
+            <dd>{cache ? formatUnknown(latest?.providerId) : "Unavailable"}</dd>
           </div>
           <div>
             <dt>Latest request ID</dt>
-            <dd>{formatUnknown(latest?.requestId)}</dd>
+            <dd>{cache ? formatUnknown(latest?.requestId) : "Unavailable"}</dd>
           </div>
           <div>
             <dt>Latest cached tokens</dt>
-            <dd>{formatNumber(latest?.cachedTokens)}</dd>
+            <dd>{cache ? formatNumber(latest?.cachedTokens) : "Unavailable"}</dd>
           </div>
           <div>
             <dt>Latest saved percent</dt>
-            <dd>{formatPercent(latest?.cacheSavedPercent)}</dd>
+            <dd>{cache ? formatPercent(latest?.cacheSavedPercent) : "Unavailable"}</dd>
           </div>
         </dl>
       </SurfaceCard>

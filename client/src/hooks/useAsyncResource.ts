@@ -5,7 +5,7 @@ export type AsyncState<T> =
   | { status: "success"; data: T; error?: undefined }
   | { status: "error"; data?: undefined; error: Error };
 
-export function useAsyncResource<T>(loader: () => Promise<T>, deps: readonly unknown[] = []) {
+export function useAsyncResource<T>(loader: () => Promise<T>) {
   const mountedRef = useRef(true);
   const [reloadToken, setReloadToken] = useState(0);
   const [state, setState] = useState<AsyncState<T>>({ status: "loading" });
@@ -32,7 +32,7 @@ export function useAsyncResource<T>(loader: () => Promise<T>, deps: readonly unk
     return () => {
       mountedRef.current = false;
     };
-  }, [loader, reloadToken, ...deps]);
+  }, [loader, reloadToken]);
 
   return {
     state,
