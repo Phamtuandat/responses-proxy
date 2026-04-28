@@ -9,6 +9,16 @@ import { maskApiKey } from "../format.js";
 import { grantCustomerAccess } from "../grants.js";
 import { replyWithProxyError, type BotDependencies } from "../actions.js";
 
+function formatGrantUsage(billing: BillingRepository): string {
+  const planIds = billing.listPlans().map((plan) => plan.id);
+  return [
+    "Usage: /grant <telegramUserId> <planId> <days>",
+    planIds.length > 0 ? `Available planIds: ${planIds.join(", ")}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function registerGrantCommand(
   bot: Bot,
   deps: BotDependencies,
@@ -28,7 +38,17 @@ export function registerGrantCommand(
     const [telegramUserId, planId, daysRaw] = args;
     const days = Number(daysRaw);
     if (!/^\d+$/.test(telegramUserId ?? "") || !planId || !Number.isInteger(days) || days <= 0) {
-      await ctx.reply("Usage: /grant <telegramUserId> <planId> <days>");
+      await ctx.reply(formatGrantUsage(billing));
+      return;
+    }
+
+    if (!billing.getPlan(planId)) {
+      await ctx.reply(
+        [
+          `Unknown planId: ${planId}`,
+          formatGrantUsage(billing),
+        ].join("\n"),
+      );
       return;
     }
 
@@ -47,7 +67,8 @@ export function registerGrantCommand(
         actor: { type: "admin", id: ctx.from?.id?.toString() },
       });
 
-      if (result.apiKey) {
+      const canShowApiKeyToAdmin = !!result.apiKey && ctx.chat?.type === "private";
+      if (result.apiKey && canShowApiKeyToAdmin) {
         auditLog.record({
           event: "api_key.revealed",
           actor: { type: "admin", id: ctx.from?.id?.toString() },
@@ -57,7 +78,7 @@ export function registerGrantCommand(
             telegramUserId,
             workspaceId: result.workspaceId,
             keyPreview: result.keyPreview,
-            audience: ctx.chat?.type === "private" ? "admin_private_chat" : "admin_chat",
+            audience: "admin_private_chat",
             apiKey: result.apiKey,
           },
         });
@@ -73,7 +94,10 @@ export function registerGrantCommand(
           `workspace_id: ${result.workspaceId}`,
           `subscription_ends_at: ${result.subscriptionEndsAt}`,
           `key_preview: ${result.apiKey ? maskApiKey(result.apiKey) : result.keyPreview}`,
-          result.apiKey ? `api_key: ${result.apiKey}` : undefined,
+          canShowApiKeyToAdmin ? `api_key: ${result.apiKey}` : undefined,
+          result.apiKey && !canShowApiKeyToAdmin
+            ? "api_key_delivery: full key is only shown in a private admin chat."
+            : undefined,
         ]
           .filter(Boolean)
           .join("\n"),

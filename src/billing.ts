@@ -218,6 +218,7 @@ export class BillingRepository {
       new Date(currentSubscription.currentPeriodEnd).getTime() > now.getTime()
         ? new Date(currentSubscription.currentPeriodEnd)
         : now;
+    const periodStartIso = periodStart.toISOString();
     const periodEnd = new Date(periodStart.getTime() + input.days * 24 * 60 * 60 * 1000);
 
     const subscriptionId = currentSubscription?.id ?? randomUUID();
@@ -247,7 +248,7 @@ export class BillingRepository {
         input.workspaceId,
         plan.id,
         plan.id === "trial" ? "trialing" : "active",
-        nowIso,
+        periodStartIso,
         periodEnd.toISOString(),
         currentSubscription?.createdAt ?? nowIso,
         nowIso,
@@ -280,7 +281,7 @@ export class BillingRepository {
         plan.monthlyTokenLimit,
         JSON.stringify(plan.allowedModels),
         plan.maxApiKeys,
-        nowIso,
+        periodStartIso,
         periodEnd.toISOString(),
         nowIso,
         nowIso,
@@ -288,7 +289,7 @@ export class BillingRepository {
 
     return {
       subscription: this.getLatestSubscriptionForWorkspace(input.workspaceId) as SubscriptionRecord,
-      entitlement: this.getActiveEntitlementForWorkspace(input.workspaceId, now) as EntitlementRecord,
+      entitlement: this.getLatestEntitlementForWorkspace(input.workspaceId) as EntitlementRecord,
     };
   }
 

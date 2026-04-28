@@ -36,7 +36,7 @@ export function createAllowlistMiddleware(config: TelegramBotConfig): Middleware
 }
 
 export function createCustomerCommandMiddleware(config: TelegramBotConfig): MiddlewareFn<Context> {
-  const customerCommands = new Set(["start", "help", "me", "apikey", "usage", "quota", "renew"]);
+  const customerCommands = new Set(["start", "help", "me", "apikey", "usage", "quota", "renew", "tailscale"]);
   return async (ctx, next) => {
     if (isAdmin(ctx, config)) {
       await next();

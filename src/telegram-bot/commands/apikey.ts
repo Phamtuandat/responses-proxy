@@ -1,22 +1,25 @@
 import type { Bot, Context } from "grammy";
+import type { BillingRepository } from "../../billing.js";
 import type { CustomerKeyRepository } from "../../customer-keys.js";
 import type { AuditLogRepository } from "../../audit-log.js";
 import { isAdmin } from "../auth.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
 import { maskApiKey } from "../format.js";
 import { replyWithProxyError, type BotDependencies } from "../actions.js";
+import { assertWorkspaceApiKeyCapacity } from "../grants.js";
 
 export function registerApiKeyCommand(
   bot: Bot,
   deps: BotDependencies,
   customerKeys: CustomerKeyRepository,
   workspaces: CustomerWorkspaceRepository,
+  billing: BillingRepository,
   auditLog: AuditLogRepository,
 ): void {
   bot.command("apikey", async (ctx) => {
     const args = ctx.match?.toString().trim() || "";
     if (args.startsWith("issue ")) {
-      await issueCustomerApiKey(ctx, deps, customerKeys, workspaces, auditLog, args.slice("issue ".length).trim());
+      await issueCustomerApiKey(ctx, deps, customerKeys, workspaces, billing, auditLog, args.slice("issue ".length).trim());
       return;
     }
 
@@ -49,6 +52,7 @@ async function issueCustomerApiKey(
   deps: BotDependencies,
   customerKeys: CustomerKeyRepository,
   workspaces: CustomerWorkspaceRepository,
+  billing: BillingRepository,
   auditLog: AuditLogRepository,
   args: string,
 ): Promise<void> {
@@ -70,6 +74,11 @@ async function issueCustomerApiKey(
       ownerTelegramUserId: userId,
       defaultClientRoute: clientRoute,
       status: "active",
+    });
+    assertWorkspaceApiKeyCapacity({
+      workspaceId: workspace.id,
+      billing,
+      customerKeys,
     });
     const created = customerKeys.createKey({
       workspaceId: workspace.id,
@@ -98,30 +107,37 @@ async function issueCustomerApiKey(
       apiKeys: nextKeys,
     });
 
+    const canShowApiKeyToAdmin = ctx.chat?.type === "private";
     await ctx.reply(
       [
         "Customer API key issued.",
         `telegram_user_id: ${userId}`,
         `workspace_id: ${workspace.id}`,
         `client_route: ${created.record.clientRoute}`,
-        `api_key: ${created.apiKey}`,
         `key_preview: ${maskApiKey(created.apiKey)}`,
-        "This full key is shown once. Ask the customer to open this bot and run /apikey for status later.",
-      ].join("\n"),
+        canShowApiKeyToAdmin ? `api_key: ${created.apiKey}` : undefined,
+        canShowApiKeyToAdmin
+          ? "This full key is shown once. Ask the customer to open this bot and run /apikey for status later."
+          : "api_key_delivery: full key is only shown in a private admin chat.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
-    auditLog.record({
-      event: "api_key.revealed",
-      actor: { type: "admin", id: ctx.from?.id?.toString() },
-      subjectType: "customer_api_key",
-      subjectId: created.record.id,
-      metadata: {
-        telegramUserId: userId,
-        workspaceId: workspace.id,
-        keyPreview: created.record.apiKeyPreview,
-        audience: ctx.chat?.type === "private" ? "admin_private_chat" : "admin_chat",
-        apiKey: created.apiKey,
-      },
-    });
+    if (canShowApiKeyToAdmin) {
+      auditLog.record({
+        event: "api_key.revealed",
+        actor: { type: "admin", id: ctx.from?.id?.toString() },
+        subjectType: "customer_api_key",
+        subjectId: created.record.id,
+        metadata: {
+          telegramUserId: userId,
+          workspaceId: workspace.id,
+          keyPreview: created.record.apiKeyPreview,
+          audience: "admin_private_chat",
+          apiKey: created.apiKey,
+        },
+      });
+    }
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }

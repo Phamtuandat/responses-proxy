@@ -8,6 +8,7 @@ import { AuditLogRepository } from "./audit-log.js";
 import { BillingRepository } from "./billing.js";
 import { CustomerKeyRepository } from "./customer-keys.js";
 import { registerApiKeyCommand } from "./telegram-bot/commands/apikey.js";
+import { registerGrantCommand } from "./telegram-bot/commands/grant.js";
 import { registerRenewUserCommand } from "./telegram-bot/commands/renew-user.js";
 import type { BotDependencies } from "./telegram-bot/actions.js";
 import { BotIdentityRepository } from "./telegram-bot/bot-identity-repository.js";
@@ -191,9 +192,20 @@ test("grantCustomerAccess writes audit events for lifecycle mutations", async ()
 });
 
 test("apikey issue writes redacted reveal audit metadata", async () => {
-  await withRepos(async ({ workspaces, customerKeys, auditLog, deps }) => {
+  await withRepos(async ({ workspaces, customerKeys, billing, auditLog, deps }) => {
+    const workspace = workspaces.ensureDefaultWorkspace({
+      ownerTelegramUserId: "42",
+      defaultClientRoute: "customers",
+      status: "active",
+    });
+    billing.grantSubscription({
+      workspaceId: workspace.id,
+      planId: "basic",
+      days: 30,
+    });
+
     const harness = createBotHarness();
-    registerApiKeyCommand(harness.bot as any, deps, customerKeys, workspaces, auditLog);
+    registerApiKeyCommand(harness.bot as any, deps, customerKeys, workspaces, billing, auditLog);
 
     const ctx = createContext({
       command: "apikey",
@@ -208,6 +220,96 @@ test("apikey issue writes redacted reveal audit metadata", async () => {
     const event = auditLog.listEvents({ event: "api_key.revealed", limit: 1 })[0];
     assert.ok(event);
     assert.equal(event.metadata.apiKey, "[redacted]");
+  });
+});
+
+test("grant in admin group does not print the full key or reveal it in audit", async () => {
+  await withRepos(async ({ identities, workspaces, customerKeys, billing, auditLog, deps }) => {
+    const harness = createBotHarness();
+    registerGrantCommand(harness.bot as any, deps, identities, workspaces, customerKeys, billing, auditLog);
+
+    const ctx = createContext({
+      command: "grant",
+      fromId: 1,
+      chatId: -1001,
+      chatType: "group",
+      match: "42 basic 30",
+    });
+
+    await harness.handler("grant")(ctx);
+
+    assert.equal(ctx.replies[0]?.includes("api_key:"), false);
+    assert.equal(ctx.replies[0]?.includes("api_key_delivery: full key is only shown in a private admin chat."), true);
+    assert.equal(auditLog.listEvents({ event: "api_key.revealed", limit: 1 }).length, 0);
+  });
+});
+
+test("apikey issue in admin group does not print the full key or reveal it in audit", async () => {
+  await withRepos(async ({ workspaces, customerKeys, billing, auditLog, deps }) => {
+    const workspace = workspaces.ensureDefaultWorkspace({
+      ownerTelegramUserId: "42",
+      defaultClientRoute: "customers",
+      status: "active",
+    });
+    billing.grantSubscription({
+      workspaceId: workspace.id,
+      planId: "basic",
+      days: 30,
+    });
+
+    const harness = createBotHarness();
+    registerApiKeyCommand(harness.bot as any, deps, customerKeys, workspaces, billing, auditLog);
+
+    const ctx = createContext({
+      command: "apikey",
+      fromId: 1,
+      chatId: -1001,
+      chatType: "group",
+      match: "issue 42 customers",
+    });
+
+    await harness.handler("apikey")(ctx);
+
+    assert.equal(ctx.replies[0]?.includes("api_key:"), false);
+    assert.equal(ctx.replies[0]?.includes("api_key_delivery: full key is only shown in a private admin chat."), true);
+    assert.equal(auditLog.listEvents({ event: "api_key.revealed", limit: 1 }).length, 0);
+  });
+});
+
+test("apikey issue respects the workspace maxApiKeys limit", async () => {
+  await withRepos(async ({ identities, workspaces, customerKeys, billing, auditLog, deps }) => {
+    await grantCustomerAccess({
+      telegramUserId: "42",
+      planId: "basic",
+      days: 30,
+      defaultClientRoute: "customers",
+      identities,
+      workspaces,
+      customerKeys,
+      billing,
+      proxyClient: deps.proxyClient,
+      auditLog,
+      actor: { type: "admin", id: "1" },
+    });
+
+    const harness = createBotHarness();
+    registerApiKeyCommand(harness.bot as any, deps, customerKeys, workspaces, billing, auditLog);
+
+    const ctx = createContext({
+      command: "apikey",
+      fromId: 1,
+      chatId: 1,
+      chatType: "private",
+      match: "issue 42 customers",
+    });
+
+    await harness.handler("apikey")(ctx);
+
+    assert.equal(
+      ctx.replies[0],
+      "API key limit reached for this workspace (1/1). Revoke or rotate an existing key first.",
+    );
+    assert.equal(customerKeys.listKeysByWorkspace(workspaces.getDefaultWorkspace("42")!.id).length, 1);
   });
 });
 

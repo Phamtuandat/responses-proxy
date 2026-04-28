@@ -19,6 +19,18 @@ export type TelegramBotSession =
       providerId: string;
       providerName?: string;
       models: string[];
+    }
+  | {
+      kind: "awaiting_renewal_custom_days";
+      requestId: string;
+      sourceChatId: string;
+      sourceMessageId: number;
+    }
+  | {
+      kind: "awaiting_renewal_reject_reason";
+      requestId: string;
+      sourceChatId: string;
+      sourceMessageId: number;
     };
 
 type SessionRow = {
@@ -38,6 +50,28 @@ export type TelegramBotCallbackPayload =
       kind: "account_action";
       action: "refresh" | "disable" | "enable" | "delete";
       accountId: string;
+    }
+  | {
+      kind: "renewal_plan";
+      planId: string;
+      days: number;
+    }
+  | {
+      kind: "renewal_request_action";
+      action:
+        | "approve"
+        | "approve_rotate"
+        | "approve_override"
+        | "close"
+        | "view_customer"
+        | "show_reject_reasons"
+        | "reject_reason"
+        | "show_main_actions"
+        | "prompt_custom_days"
+        | "prompt_custom_reason";
+      requestId: string;
+      overrideDays?: number;
+      resolution?: string;
     };
 
 export interface TelegramBotStateStore {
@@ -169,20 +203,64 @@ function parseSessionJson(raw: string): TelegramBotSession | undefined {
 function parseCallbackPayloadJson(raw: string): TelegramBotCallbackPayload | undefined {
   try {
     const parsed = JSON.parse(raw) as TelegramBotCallbackPayload;
-    if (!parsed || typeof parsed !== "object" || parsed.kind !== "account_action") {
+    if (!parsed || typeof parsed !== "object" || typeof parsed.kind !== "string") {
       return undefined;
     }
-    if (
-      parsed.action !== "refresh" &&
-      parsed.action !== "disable" &&
-      parsed.action !== "enable" &&
-      parsed.action !== "delete"
-    ) {
-      return undefined;
+    if (parsed.kind === "account_action") {
+      if (
+        parsed.action !== "refresh" &&
+        parsed.action !== "disable" &&
+        parsed.action !== "enable" &&
+        parsed.action !== "delete"
+      ) {
+        return undefined;
+      }
+      return typeof parsed.accountId === "string" && parsed.accountId
+        ? parsed
+        : undefined;
     }
-    return typeof parsed.accountId === "string" && parsed.accountId
-      ? parsed
-      : undefined;
+    if (parsed.kind === "renewal_plan") {
+      return typeof parsed.planId === "string" &&
+        parsed.planId &&
+        typeof parsed.days === "number" &&
+        Number.isInteger(parsed.days) &&
+        parsed.days > 0
+        ? parsed
+        : undefined;
+    }
+    if (parsed.kind === "renewal_request_action") {
+      if (
+        parsed.action !== "approve" &&
+        parsed.action !== "approve_rotate" &&
+        parsed.action !== "approve_override" &&
+        parsed.action !== "close" &&
+        parsed.action !== "view_customer" &&
+        parsed.action !== "show_reject_reasons" &&
+        parsed.action !== "reject_reason" &&
+        parsed.action !== "show_main_actions" &&
+        parsed.action !== "prompt_custom_days" &&
+        parsed.action !== "prompt_custom_reason"
+      ) {
+        return undefined;
+      }
+      if (typeof parsed.requestId !== "string" || !parsed.requestId) {
+        return undefined;
+      }
+      if (parsed.action === "approve_override") {
+        return typeof parsed.overrideDays === "number" &&
+          Number.isInteger(parsed.overrideDays) &&
+          parsed.overrideDays > 0
+          ? parsed
+          : undefined;
+      }
+      if (parsed.action === "reject_reason") {
+        return typeof parsed.resolution === "string" && parsed.resolution
+          ? parsed
+          : undefined;
+      }
+      return parsed;
+    }
+    return undefined;
   } catch {
     return undefined;
   }

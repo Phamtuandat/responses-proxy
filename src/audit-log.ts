@@ -16,7 +16,9 @@ export type AuditEventName =
   | "api_key.activated"
   | "subscription.granted"
   | "subscription.renewed"
-  | "renewal.requested";
+  | "renewal.requested"
+  | "renewal.approved"
+  | "renewal.closed";
 
 export type AuditActorType = "system" | "admin" | "customer" | "bot";
 
@@ -195,6 +197,8 @@ function normalizeEventName(value: string): AuditEventName {
       "subscription.granted",
       "subscription.renewed",
       "renewal.requested",
+      "renewal.approved",
+      "renewal.closed",
     ] as AuditEventName[]
   ).includes(value as AuditEventName)
     ? (value as AuditEventName)

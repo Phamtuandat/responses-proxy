@@ -21,6 +21,32 @@ export type CustomerAccessProvisionResult = {
   subscriptionEndsAt: string;
 };
 
+export function assertWorkspaceApiKeyCapacity(args: {
+  workspaceId: string;
+  billing: BillingRepository;
+  customerKeys: CustomerKeyRepository;
+  ignoredKeyIds?: string[];
+}): void {
+  const entitlement = args.billing.getActiveEntitlementForWorkspace(args.workspaceId);
+  if (!entitlement) {
+    throw new Error("No active entitlement was found for this customer workspace.");
+  }
+
+  const ignored = new Set(args.ignoredKeyIds ?? []);
+  const occupiedKeys = args.customerKeys.listKeysByWorkspace(args.workspaceId).filter((record) => {
+    if (ignored.has(record.id)) {
+      return false;
+    }
+    return record.status === "active" || record.status === "suspended";
+  });
+
+  if (occupiedKeys.length >= entitlement.maxApiKeys) {
+    throw new Error(
+      `API key limit reached for this workspace (${occupiedKeys.length}/${entitlement.maxApiKeys}). Revoke or rotate an existing key first.`,
+    );
+  }
+}
+
 export async function grantCustomerAccess(args: {
   telegramUserId: string;
   planId: string;
@@ -142,6 +168,17 @@ async function provisionCustomerAccess(args: {
 
   if (args.replaceKey) {
     const latestKey = args.customerKeys.getLatestKeyForUser(args.telegramUserId);
+    const ignoredKeyIds = keyRecord
+      ? [keyRecord.id]
+      : latestKey && latestKey.status !== "revoked"
+        ? [latestKey.id]
+        : [];
+    assertWorkspaceApiKeyCapacity({
+      workspaceId: workspace.id,
+      billing: args.billing,
+      customerKeys: args.customerKeys,
+      ignoredKeyIds,
+    });
     if (keyRecord) {
       args.customerKeys.setStatus(keyRecord.id, "revoked");
       args.auditLog?.record({
@@ -229,6 +266,11 @@ async function provisionCustomerAccess(args: {
           });
         }
       } else {
+        assertWorkspaceApiKeyCapacity({
+          workspaceId: workspace.id,
+          billing: args.billing,
+          customerKeys: args.customerKeys,
+        });
         const created = args.customerKeys.createKey({
           workspaceId: workspace.id,
           telegramUserId: args.telegramUserId,

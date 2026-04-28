@@ -42,6 +42,35 @@ test("BillingRepository grants subscription and active entitlement", () => {
   });
 });
 
+test("BillingRepository keeps renewed entitlement pending until the current period ends", () => {
+  withRepository((repo) => {
+    const first = repo.grantSubscription({
+      workspaceId: "workspace-renew",
+      planId: "basic",
+      days: 30,
+      now: new Date("2026-04-01T00:00:00.000Z"),
+    });
+
+    const renewed = repo.grantSubscription({
+      workspaceId: "workspace-renew",
+      planId: "basic",
+      days: 30,
+      now: new Date("2026-04-15T00:00:00.000Z"),
+    });
+
+    assert.equal(renewed.subscription.currentPeriodStart, "2026-05-01T00:00:00.000Z");
+    assert.equal(renewed.entitlement.validFrom, "2026-05-01T00:00:00.000Z");
+    assert.equal(
+      repo.getActiveEntitlementForWorkspace("workspace-renew", new Date("2026-04-20T00:00:00.000Z"))?.id,
+      first.entitlement.id,
+    );
+    assert.equal(
+      repo.getActiveEntitlementForWorkspace("workspace-renew", new Date("2026-05-02T00:00:00.000Z"))?.id,
+      renewed.entitlement.id,
+    );
+  });
+});
+
 test("BillingRepository expires outdated entitlements and subscriptions", () => {
   withRepository((repo) => {
     repo.grantSubscription({

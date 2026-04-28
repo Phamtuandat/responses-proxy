@@ -20,12 +20,14 @@ let activeBot: TelegramBot | undefined;
 
 async function registerCommandMetadata(bot: TelegramBot): Promise<void> {
   await bot.api.setMyCommands([
+    { command: "plans", description: "List billing plan ids and limits" },
     { command: "grant", description: "Activate paid access for a customer" },
     { command: "renewuser", description: "Renew access or rotate a customer key" },
-    { command: "renew", description: "Customer renew request and admin review" },
+    { command: "renew", description: "Choose plan and send a renewal request" },
     { command: "apikey", description: "Show or issue customer API keys" },
     { command: "usage", description: "Show customer usage for the current period" },
     { command: "quota", description: "Show customer quota and expiration" },
+    { command: "tailscale", description: "Install Tailscale and ask admin for invite" },
     { command: "help", description: "Show ops help, /help customer, /help proxy" },
     { command: "status", description: "Check proxy health and active provider" },
     { command: "providers", description: "Show provider and client route mapping" },
