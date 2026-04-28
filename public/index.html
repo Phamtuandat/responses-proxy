@@ -29,8 +29,8 @@
               <a href="#/providers" data-route-link><span class="nav-dot"></span><span class="nav-label">Providers</span></a>
               <a href="#/clients" data-route-link><span class="nav-dot"></span><span class="nav-label">Clients</span></a>
               <a href="#/oauth" data-route-link><span class="nav-dot"></span><span class="nav-label">Accounts</span></a>
-              <a href="#/auth-management" data-route-link><span class="nav-dot"></span><span class="nav-label">Auth Management</span></a>
-              <a href="#/config-helper" data-route-link><span class="nav-dot"></span><span class="nav-label">Config Helper</span></a>
+              <a href="#/auth-management" data-route-link><span class="nav-dot"></span><span class="nav-label">Auth</span></a>
+              <a href="#/config-helper" data-route-link><span class="nav-dot"></span><span class="nav-label">Config</span></a>
               <a href="#/usage" data-route-link><span class="nav-dot"></span><span class="nav-label">Usage</span></a>
               <a href="#/rtk" data-route-link><span class="nav-dot"></span><span class="nav-label">RTK</span></a>
               <a href="#/cache" data-route-link><span class="nav-dot"></span><span class="nav-label">Cache</span></a>
@@ -43,7 +43,7 @@
             <div class="section">
               <div class="row">
                 <div>
-                  <h2>Overview</h2>
+                  <h2>Dashboard</h2>
                   <p>Compact runtime overview plus the minimum client integration docs.</p>
                 </div>
               </div>
@@ -148,7 +148,7 @@
 
           </section>
 
-          <section id="screen-clients" class="screen">
+          <section id="screen-clients" class="screen clients-screen">
             <div class="section">
               <div class="row">
                 <div>
@@ -164,7 +164,7 @@
                 </div>
               </div>
 
-              <section class="section section-nested provider-card">
+              <section class="section section-nested provider-card client-list-panel">
                 <div class="provider-card-header">
                   <div>
                     <h3>Clients</h3>
@@ -179,7 +179,7 @@
             </div>
           </section>
 
-          <section id="screen-client-edit" class="screen">
+          <section id="screen-client-edit" class="screen client-edit-screen">
             <div class="section">
               <div class="provider-editor-header">
                 <div class="provider-editor-heading">
@@ -187,11 +187,11 @@
                 </div>
                 <div class="provider-editor-header-actions">
                   <div id="clientCrudModeBadge" class="pill">Create mode</div>
-                  <a class="button-link button-link-muted" href="#/clients">Back to clients</a>
+                  <a class="button-link button-link-muted" href="#/clients">Back</a>
                 </div>
               </div>
 
-              <section class="section section-nested provider-card">
+              <section class="section section-nested provider-card client-edit-panel">
                 <div class="client-edit-summary" id="clientCrudSummary"></div>
                 <div class="form-grid">
                   <div class="field">

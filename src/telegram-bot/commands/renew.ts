@@ -7,6 +7,7 @@ import type { BotDependencies } from "../actions.js";
 import type { BotIdentityRepository } from "../bot-identity-repository.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
 import { readCustomerBillingOverview } from "../customer-billing.js";
+import { answerCallbackQuerySafely } from "../callbacks.js";
 import { renewCustomerAccess } from "../grants.js";
 import { replyWithProxyError } from "../actions.js";
 import { buildTelegramSessionScope, type TelegramBotStateStore } from "../sessions.js";
@@ -30,14 +31,19 @@ export function registerRenewCommand(
     await handleCustomerRenewCommand(ctx, deps, stateStore, identities, workspaces, customerKeys, billing, auditLog, rawArgs);
   });
 
+  bot.callbackQuery("v1:renew:open", async (ctx) => {
+    await answerCallbackQuerySafely(ctx, { text: "Choose a plan" });
+    await handleCustomerRenewCommand(ctx, deps, stateStore, identities, workspaces, customerKeys, billing, auditLog, "");
+  });
+
   bot.callbackQuery(/^v1:renew:plan:([A-Za-z0-9_-]+)$/, async (ctx) => {
     const token = ctx.match[1];
     const callbackState = stateStore.readCallbackToken(token);
     if (callbackState?.kind !== "renewal_plan") {
-      await ctx.answerCallbackQuery({ text: "Selection expired. Run /renew again.", show_alert: true });
+      await answerCallbackQuerySafely(ctx, { text: "Selection expired. Run /renew again.", show_alert: true });
       return;
     }
-    await ctx.answerCallbackQuery({ text: "Plan selected" });
+    await answerCallbackQuerySafely(ctx, { text: "Plan selected" });
     await handleCustomerRenewRequest(ctx, deps, stateStore, identities, workspaces, customerKeys, billing, auditLog, {
       planId: callbackState.planId,
       days: callbackState.days,
@@ -48,14 +54,14 @@ export function registerRenewCommand(
     /^v1:renew:(approve|approve-rotate|approve-30|approve-90|approve-custom|close|view-customer|reject-reasons|reject|reject-custom|back):([A-Za-z0-9_-]+)$/,
     async (ctx) => {
     if (!isAdmin(ctx, deps.config)) {
-      await ctx.answerCallbackQuery({ text: "Admin only.", show_alert: true });
+      await answerCallbackQuerySafely(ctx, { text: "Admin only.", show_alert: true });
       return;
     }
     const action = normalizeRenewalAction(ctx.match[1]);
     const token = ctx.match[2];
     const callbackState = stateStore.readCallbackToken(token);
     if (callbackState?.kind !== "renewal_request_action" || callbackState.action !== action) {
-      await ctx.answerCallbackQuery({ text: "Action expired. Refresh /renew list.", show_alert: true });
+      await answerCallbackQuerySafely(ctx, { text: "Action expired. Refresh /renew list.", show_alert: true });
       return;
     }
     if (action === "approve") {
@@ -75,7 +81,9 @@ export function registerRenewCommand(
       );
       if (approved) {
         await updateRenewalReviewMessage(ctx, approved.message);
-        await ctx.answerCallbackQuery({ text: "Renewal approved" });
+        await answerCallbackQuerySafely(ctx, { text: "Renewal approved" });
+      } else {
+        await answerCallbackQuerySafely(ctx, { text: "Renewal approval failed. Check the bot message.", show_alert: true });
       }
       return;
     }
@@ -96,7 +104,9 @@ export function registerRenewCommand(
       );
       if (approved) {
         await updateRenewalReviewMessage(ctx, approved.message);
-        await ctx.answerCallbackQuery({ text: "Renewal approved and key rotated" });
+        await answerCallbackQuerySafely(ctx, { text: "Renewal approved and key rotated" });
+      } else {
+        await answerCallbackQuerySafely(ctx, { text: "Renewal approval failed. Check the bot message.", show_alert: true });
       }
       return;
     }
@@ -117,14 +127,16 @@ export function registerRenewCommand(
       );
       if (approved) {
         await updateRenewalReviewMessage(ctx, approved.message);
-        await ctx.answerCallbackQuery({ text: `Renewal approved for ${callbackState.overrideDays} days` });
+        await answerCallbackQuerySafely(ctx, { text: `Renewal approved for ${callbackState.overrideDays} days` });
+      } else {
+        await answerCallbackQuerySafely(ctx, { text: "Renewal approval failed. Check the bot message.", show_alert: true });
       }
       return;
     }
     if (action === "prompt_custom_days") {
       const prepared = prepareRenewalAdminInput(ctx);
       if (!prepared) {
-        await ctx.answerCallbackQuery({ text: "This action only works from a message button.", show_alert: true });
+        await answerCallbackQuerySafely(ctx, { text: "This action only works from a message button.", show_alert: true });
         return;
       }
       stateStore.set(buildTelegramSessionScope(prepared.chatId, prepared.userId), {
@@ -133,31 +145,39 @@ export function registerRenewCommand(
         sourceChatId: prepared.chatId,
         sourceMessageId: prepared.messageId,
       });
-      await ctx.answerCallbackQuery({ text: "Send the number of days in this chat" });
+      await answerCallbackQuerySafely(ctx, { text: "Send the number of days in this chat" });
       await ctx.reply(`Send the override days for request ${callbackState.requestId}. Example: 45`);
       return;
     }
     if (action === "view_customer") {
-      const shown = await showCustomerRenewalContext(ctx, identities, workspaces, customerKeys, billing, callbackState.requestId);
+      const shown = await showCustomerRenewalContext(
+        ctx,
+        identities,
+        workspaces,
+        customerKeys,
+        billing,
+        auditLog,
+        callbackState.requestId,
+      );
       if (shown) {
-        await ctx.answerCallbackQuery({ text: "Customer details loaded" });
+        await answerCallbackQuerySafely(ctx, { text: "Customer details loaded" });
       }
       return;
     }
     if (action === "show_reject_reasons") {
       const request = billing.getRenewalRequest(callbackState.requestId);
       if (!request) {
-        await ctx.answerCallbackQuery({ text: "Renewal request was not found.", show_alert: true });
+        await answerCallbackQuerySafely(ctx, { text: "Renewal request was not found.", show_alert: true });
         return;
       }
       await showRenewalRejectKeyboard(ctx, stateStore, request);
-      await ctx.answerCallbackQuery({ text: "Choose a rejection reason" });
+      await answerCallbackQuerySafely(ctx, { text: "Choose a rejection reason" });
       return;
     }
     if (action === "prompt_custom_reason") {
       const prepared = prepareRenewalAdminInput(ctx);
       if (!prepared) {
-        await ctx.answerCallbackQuery({ text: "This action only works from a message button.", show_alert: true });
+        await answerCallbackQuerySafely(ctx, { text: "This action only works from a message button.", show_alert: true });
         return;
       }
       stateStore.set(buildTelegramSessionScope(prepared.chatId, prepared.userId), {
@@ -166,18 +186,18 @@ export function registerRenewCommand(
         sourceChatId: prepared.chatId,
         sourceMessageId: prepared.messageId,
       });
-      await ctx.answerCallbackQuery({ text: "Send the rejection reason in this chat" });
+      await answerCallbackQuerySafely(ctx, { text: "Send the rejection reason in this chat" });
       await ctx.reply(`Send the rejection reason for request ${callbackState.requestId}.`);
       return;
     }
     if (action === "show_main_actions") {
       const request = billing.getRenewalRequest(callbackState.requestId);
       if (!request) {
-        await ctx.answerCallbackQuery({ text: "Renewal request was not found.", show_alert: true });
+        await answerCallbackQuerySafely(ctx, { text: "Renewal request was not found.", show_alert: true });
         return;
       }
       await showRenewalMainKeyboard(ctx, stateStore, request);
-      await ctx.answerCallbackQuery({ text: "Back to actions" });
+      await answerCallbackQuerySafely(ctx, { text: "Back to actions" });
       return;
     }
     const closed = await closeRenewalRequest(
@@ -187,10 +207,11 @@ export function registerRenewCommand(
       callbackState.requestId,
       callbackState.resolution ?? "closed_by_admin",
       true,
+      action === "reject_reason",
     );
     if (closed) {
       await updateRenewalReviewMessage(ctx, closed.message);
-      await ctx.answerCallbackQuery({ text: action === "reject_reason" ? "Renewal rejected" : "Renewal closed" });
+      await answerCallbackQuerySafely(ctx, { text: action === "reject_reason" ? "Renewal rejected" : "Renewal closed" });
     }
   });
 
@@ -246,7 +267,7 @@ export function registerRenewCommand(
         await ctx.reply("Please send a non-empty rejection reason.");
         return;
       }
-      const result = await closeRenewalRequest(ctx, billing, auditLog, session.requestId, resolution, true);
+      const result = await closeRenewalRequest(ctx, billing, auditLog, session.requestId, resolution, true, true);
       stateStore.clear(scope);
       if (result) {
         await updateRenewalReviewMessageByRef(ctx, session.sourceChatId, session.sourceMessageId, result.message);
@@ -371,7 +392,19 @@ async function handleCustomerRenewRequest(
   await ctx.reply(message.filter(Boolean).join("\n"));
 
   if (created.created) {
-    await notifyAdminsAboutRenewalRequest(ctx, deps, stateStore, identities, workspaces, customerKeys, billing, created.request);
+    const notification = await notifyAdminsAboutRenewalRequest(
+      ctx,
+      deps,
+      stateStore,
+      identities,
+      workspaces,
+      customerKeys,
+      billing,
+      created.request,
+    );
+    if (notification.sent === 0) {
+      await ctx.reply("Admin notification could not be delivered. Your request is saved, but please contact support.");
+    }
   }
 }
 
@@ -468,7 +501,7 @@ async function notifyAdminsAboutRenewalRequest(
   customerKeys: CustomerKeyRepository,
   billing: BillingRepository,
   request: RenewalRequestRecord,
-): Promise<void> {
+): Promise<{ sent: number; failed: number }> {
   const recipients = new Set([
     ...deps.config.ownerUserIds,
     ...deps.config.adminUserIds,
@@ -486,15 +519,20 @@ async function notifyAdminsAboutRenewalRequest(
     billing,
   });
 
+  let sent = 0;
+  let failed = 0;
   for (const recipient of recipients) {
     try {
       await ctx.api.sendMessage(Number(recipient), text, {
         reply_markup: buildAdminRenewalKeyboard(stateStore, request),
       });
+      sent += 1;
     } catch {
+      failed += 1;
       // best effort admin notification
     }
   }
+  return { sent, failed };
 }
 
 function buildRenewPlanKeyboard(stateStore: TelegramBotStateStore, plans: ReturnType<BillingRepository["listPlans"]>): InlineKeyboard {
@@ -557,20 +595,20 @@ function buildAdminRenewalKeyboard(stateStore: TelegramBotStateStore, request: R
     requestId: request.id,
   });
   return new InlineKeyboard()
-    .text("Approve", `v1:renew:approve:${approveToken}`)
-    .text("Approve + rotate key", `v1:renew:approve-rotate:${approveRotateToken}`)
+    .text("🟢 Approve", `v1:renew:approve:${approveToken}`)
+    .text("🔵 Approve + rotate key", `v1:renew:approve-rotate:${approveRotateToken}`)
     .row()
-    .text("Approve 30d", `v1:renew:approve-30:${approve30Token}`)
-    .text("Approve 90d", `v1:renew:approve-90:${approve90Token}`)
+    .text("🟢 Approve 30d", `v1:renew:approve-30:${approve30Token}`)
+    .text("🟢 Approve 90d", `v1:renew:approve-90:${approve90Token}`)
     .row()
-    .text("Approve custom days", `v1:renew:approve-custom:${approveCustomToken}`)
+    .text("🟡 Approve custom days", `v1:renew:approve-custom:${approveCustomToken}`)
     .row()
-    .text("View customer", `v1:renew:view-customer:${viewCustomerToken}`)
-    .url("Open customer chat", `tg://user?id=${request.telegramUserId}`)
+    .text("⚪ View customer", `v1:renew:view-customer:${viewCustomerToken}`)
+    .url("⚪ Open customer chat", `tg://user?id=${request.telegramUserId}`)
     .row()
-    .text("Reject with reason", `v1:renew:reject-reasons:${rejectToken}`)
+    .text("🔴 Reject with reason", `v1:renew:reject-reasons:${rejectToken}`)
     .row()
-    .text("Close", `v1:renew:close:${closeToken}`);
+    .text("⚫ Close", `v1:renew:close:${closeToken}`);
 }
 
 function buildRejectReasonKeyboard(stateStore: TelegramBotStateStore, request: RenewalRequestRecord): InlineKeyboard {
@@ -603,13 +641,13 @@ function buildRejectReasonKeyboard(stateStore: TelegramBotStateStore, request: R
     requestId: request.id,
   });
   return new InlineKeyboard()
-    .text("Unpaid", `v1:renew:reject:${unpaidToken}`)
-    .text("Duplicate", `v1:renew:reject:${duplicateToken}`)
+    .text("🔴 Unpaid", `v1:renew:reject:${unpaidToken}`)
+    .text("🟠 Duplicate", `v1:renew:reject:${duplicateToken}`)
     .row()
-    .text("Invalid plan", `v1:renew:reject:${invalidPlanToken}`)
-    .text("Custom reason", `v1:renew:reject-custom:${customReasonToken}`)
+    .text("🟠 Invalid plan", `v1:renew:reject:${invalidPlanToken}`)
+    .text("🟡 Custom reason", `v1:renew:reject-custom:${customReasonToken}`)
     .row()
-    .text("Back", `v1:renew:back:${backToken}`);
+    .text("⚪ Back", `v1:renew:back:${backToken}`);
 }
 
 function defaultDaysForPlan(interval: "month" | "year" | "one_time"): number {
@@ -675,7 +713,7 @@ function formatAdminRenewalRequestText(args: {
   });
   const plan = args.request.requestedPlanId ? args.billing.getPlan(args.request.requestedPlanId) : undefined;
   return [
-    "New renewal request.",
+    overview.apiKey ? "Renewal request." : "New access request.",
     `customer: ${formatTelegramUserLabel(user, args.request.telegramUserId)}`,
     `request_id: ${args.request.id}`,
     `workspace_id: ${args.request.workspaceId}`,
@@ -711,6 +749,7 @@ async function showCustomerRenewalContext(
   workspaces: CustomerWorkspaceRepository,
   customerKeys: CustomerKeyRepository,
   billing: BillingRepository,
+  auditLog: AuditLogRepository,
   requestId: string,
 ): Promise<boolean> {
   const request = billing.getRenewalRequest(requestId);
@@ -725,6 +764,24 @@ async function showCustomerRenewalContext(
     customerKeys,
     billing,
   });
+  const currentApiKey = overview.apiKey;
+  const canShowApiKeyToAdmin = ctx.chat?.type === "private" && !!currentApiKey;
+  const apiKey = currentApiKey && canShowApiKeyToAdmin ? customerKeys.getApiKeySecret(currentApiKey.id) : undefined;
+  if (apiKey && currentApiKey) {
+    auditLog.record({
+      event: "api_key.revealed",
+      actor: { type: "admin", id: ctx.from?.id?.toString() },
+      subjectType: "customer_api_key",
+      subjectId: currentApiKey.id,
+      metadata: {
+        telegramUserId: request.telegramUserId,
+        workspaceId: request.workspaceId,
+        keyPreview: currentApiKey.apiKeyPreview,
+        audience: "admin_customer_review",
+        apiKey,
+      },
+    });
+  }
   await ctx.reply(
     [
       "Customer renewal review",
@@ -735,6 +792,8 @@ async function showCustomerRenewalContext(
       overview.workspace ? `client_route: ${overview.workspace.defaultClientRoute}` : undefined,
       overview.apiKey ? `key_status: ${overview.apiKey.status}` : undefined,
       overview.apiKey ? `key_preview: ${overview.apiKey.apiKeyPreview}` : undefined,
+      apiKey ? `api_key: ${apiKey}` : undefined,
+      overview.apiKey && canShowApiKeyToAdmin && !apiKey ? "full_key: unavailable_for_legacy_key" : undefined,
       overview.entitlement ? `current_expiry: ${overview.entitlement.validUntil}` : "current_expiry: none",
       `entitlement_status: ${overview.entitlementStatus}`,
       overview.entitlement ? `token_limit: ${overview.entitlement.monthlyTokenLimit}` : undefined,
@@ -810,7 +869,8 @@ async function approveRenewalRequest(
         approvedDays: days,
       },
     });
-    if (result.apiKey && ctx.chat?.type === "private") {
+    const canShowApiKeyToAdmin = !!result.apiKey && ctx.chat?.type === "private";
+    if (canShowApiKeyToAdmin) {
       auditLog.record({
         event: "api_key.revealed",
         actor: { type: "admin", id: ctx.from?.id?.toString() },
@@ -825,6 +885,28 @@ async function approveRenewalRequest(
         },
       });
     }
+    const customerNotified = await notifyCustomerAboutApprovedRenewal(ctx, {
+      telegramUserId: request.telegramUserId,
+      planId,
+      clientRoute: result.clientRoute,
+      subscriptionEndsAt: result.subscriptionEndsAt,
+      apiKey: result.apiKey,
+    });
+    if (result.apiKey && customerNotified) {
+      auditLog.record({
+        event: "api_key.revealed",
+        actor: { type: "bot", id: "renewal-approval" },
+        subjectType: "customer_api_key",
+        subjectId: result.keyId,
+        metadata: {
+          telegramUserId: request.telegramUserId,
+          workspaceId: result.workspaceId,
+          keyPreview: result.keyPreview,
+          audience: "customer_private_chat",
+          apiKey: result.apiKey,
+        },
+      });
+    }
 
     const message = [
       "Renewal request approved.",
@@ -834,14 +916,47 @@ async function approveRenewalRequest(
       `days: ${days}`,
       `mode: ${result.mode}`,
       `subscription_ends_at: ${result.subscriptionEndsAt}`,
+      canShowApiKeyToAdmin ? `api_key: ${result.apiKey}` : undefined,
       "status: approved",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
     if (!silentReply) {
       await ctx.reply(message);
     }
     return { message };
   } catch (error) {
     await replyWithProxyError(ctx, error);
+    return false;
+  }
+}
+
+async function notifyCustomerAboutApprovedRenewal(
+  ctx: Context,
+  input: {
+    telegramUserId: string;
+    planId: string;
+    clientRoute: string;
+    subscriptionEndsAt: string;
+    apiKey?: string;
+  },
+): Promise<boolean> {
+  try {
+    await ctx.api.sendMessage(
+      Number(input.telegramUserId),
+      [
+        "Your Responses access has been approved.",
+        `plan_id: ${input.planId}`,
+        `client_route: ${input.clientRoute}`,
+        `subscription_ends_at: ${input.subscriptionEndsAt}`,
+        input.apiKey
+          ? `api_key: ${input.apiKey}`
+          : "Run /apikey in this private chat to view your current key status.",
+      ].join("\n"),
+    );
+    return true;
+  } catch {
+    await ctx.reply("Customer notification could not be delivered yet. They may need to /start the bot first.");
     return false;
   }
 }
@@ -853,6 +968,7 @@ async function closeRenewalRequest(
   requestId: string,
   resolution = "closed_by_admin",
   silentReply = false,
+  notifyCustomer = false,
 ): Promise<{ message: string } | false> {
   const request = billing.getRenewalRequest(requestId);
   if (!request) {
@@ -885,6 +1001,21 @@ async function closeRenewalRequest(
     `status: ${closed?.status ?? "closed"}`,
     `resolution: ${closed?.resolution ?? resolution}`,
   ].join("\n");
+  if (notifyCustomer) {
+    try {
+      await ctx.api.sendMessage(
+        Number(request.telegramUserId),
+        [
+          "Your renewal request was not approved.",
+          `request_id: ${closed?.id ?? requestId}`,
+          `reason: ${closed?.resolution ?? resolution}`,
+          "Contact support if you believe this needs another review.",
+        ].join("\n"),
+      );
+    } catch {
+      await ctx.reply("Customer notification could not be delivered. They may need to /start the bot first.");
+    }
+  }
   if (!silentReply) {
     await ctx.reply(message);
   }

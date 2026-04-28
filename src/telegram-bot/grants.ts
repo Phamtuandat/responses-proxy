@@ -26,9 +26,11 @@ export function assertWorkspaceApiKeyCapacity(args: {
   billing: BillingRepository;
   customerKeys: CustomerKeyRepository;
   ignoredKeyIds?: string[];
+  maxApiKeysIfNoEntitlement?: number;
 }): void {
   const entitlement = args.billing.getActiveEntitlementForWorkspace(args.workspaceId);
-  if (!entitlement) {
+  const maxApiKeys = entitlement?.maxApiKeys ?? args.maxApiKeysIfNoEntitlement;
+  if (!maxApiKeys) {
     throw new Error("No active entitlement was found for this customer workspace.");
   }
 
@@ -40,9 +42,9 @@ export function assertWorkspaceApiKeyCapacity(args: {
     return record.status === "active" || record.status === "suspended";
   });
 
-  if (occupiedKeys.length >= entitlement.maxApiKeys) {
+  if (occupiedKeys.length >= maxApiKeys) {
     throw new Error(
-      `API key limit reached for this workspace (${occupiedKeys.length}/${entitlement.maxApiKeys}). Revoke or rotate an existing key first.`,
+      `API key limit reached for this workspace (${occupiedKeys.length}/${maxApiKeys}). Revoke or rotate an existing key first.`,
     );
   }
 }
@@ -143,30 +145,18 @@ async function provisionCustomerAccess(args: {
     args.workspaces.setStatus(workspace.id, "active");
   }
 
-  const { subscription } = args.billing.grantSubscription({
-    workspaceId: workspace.id,
-    planId: args.planId,
-    days: args.days,
-  });
-  args.auditLog?.record({
-    event: args.action === "grant" ? "subscription.granted" : "subscription.renewed",
-    actor: args.actor,
-    subjectType: "workspace",
-    subjectId: workspace.id,
-    metadata: {
-      workspaceId: workspace.id,
-      telegramUserId: args.telegramUserId,
-      planId: args.planId,
-      days: args.days,
-      subscriptionEndsAt: subscription.currentPeriodEnd,
-    },
-  });
+  const plan = args.billing.getPlan(args.planId);
+  if (!plan) {
+    throw new Error(`Plan not found: ${args.planId}`);
+  }
 
   let mode: CustomerAccessProvisionMode;
   let keyRecord = args.customerKeys.getActiveKeyForUser(args.telegramUserId);
   let apiKey: string | undefined;
+  let createdKeyId: string | undefined;
+  let keyToRevokeAfterSync: typeof keyRecord | undefined;
 
-  if (args.replaceKey) {
+  if (args.replaceKey || (keyRecord && !args.customerKeys.getApiKeySecret(keyRecord.id))) {
     const latestKey = args.customerKeys.getLatestKeyForUser(args.telegramUserId);
     const ignoredKeyIds = keyRecord
       ? [keyRecord.id]
@@ -178,44 +168,19 @@ async function provisionCustomerAccess(args: {
       billing: args.billing,
       customerKeys: args.customerKeys,
       ignoredKeyIds,
+      maxApiKeysIfNoEntitlement: plan.maxApiKeys,
     });
-    if (keyRecord) {
-      args.customerKeys.setStatus(keyRecord.id, "revoked");
-      args.auditLog?.record({
-        event: "api_key.revoked",
-        actor: args.actor,
-        subjectType: "customer_api_key",
-        subjectId: keyRecord.id,
-        metadata: {
-          telegramUserId: args.telegramUserId,
-          workspaceId: workspace.id,
-          keyPreview: keyRecord.apiKeyPreview,
-          reason: "rotation",
-        },
-      });
-    } else if (latestKey && latestKey.status !== "revoked") {
-      args.customerKeys.setStatus(latestKey.id, "revoked");
-      args.auditLog?.record({
-        event: "api_key.revoked",
-        actor: args.actor,
-        subjectType: "customer_api_key",
-        subjectId: latestKey.id,
-        metadata: {
-          telegramUserId: args.telegramUserId,
-          workspaceId: workspace.id,
-          keyPreview: latestKey.apiKeyPreview,
-          reason: "rotation",
-        },
-      });
-    }
+    keyToRevokeAfterSync = keyRecord ?? (latestKey && latestKey.status !== "revoked" ? latestKey : undefined);
 
     const created = args.customerKeys.createKey({
       workspaceId: workspace.id,
       telegramUserId: args.telegramUserId,
       clientRoute: workspace.defaultClientRoute,
+      status: "suspended",
     });
     keyRecord = created.record;
     apiKey = created.apiKey;
+    createdKeyId = created.record.id;
     mode = latestKey ? "existing_key_replaced" : "new_key_created";
     args.auditLog?.record({
       event: "api_key.created",
@@ -247,11 +212,16 @@ async function provisionCustomerAccess(args: {
   } else {
     if (keyRecord) {
       mode = "existing_key_already_active";
+      apiKey = args.customerKeys.getApiKeySecret(keyRecord.id);
     } else {
       const latestKey = args.customerKeys.getLatestKeyForUser(args.telegramUserId);
-      if (latestKey && latestKey.status !== "revoked") {
+      const latestKeySecret = latestKey ? args.customerKeys.getApiKeySecret(latestKey.id) : undefined;
+      if (latestKey && latestKey.status !== "revoked" && latestKeySecret) {
         keyRecord = args.customerKeys.setStatus(latestKey.id, "active");
         mode = "existing_key_reactivated";
+        if (keyRecord) {
+          apiKey = latestKeySecret;
+        }
         if (keyRecord) {
           args.auditLog?.record({
             event: "api_key.activated",
@@ -265,19 +235,68 @@ async function provisionCustomerAccess(args: {
             },
           });
         }
+      } else if (latestKey && latestKey.status !== "revoked") {
+        assertWorkspaceApiKeyCapacity({
+          workspaceId: workspace.id,
+          billing: args.billing,
+          customerKeys: args.customerKeys,
+          ignoredKeyIds: [latestKey.id],
+          maxApiKeysIfNoEntitlement: plan.maxApiKeys,
+        });
+        keyToRevokeAfterSync = latestKey;
+        const created = args.customerKeys.createKey({
+          workspaceId: workspace.id,
+          telegramUserId: args.telegramUserId,
+          clientRoute: workspace.defaultClientRoute,
+          status: "suspended",
+        });
+        keyRecord = created.record;
+        apiKey = created.apiKey;
+        createdKeyId = created.record.id;
+        mode = "existing_key_replaced";
+        args.auditLog?.record({
+          event: "api_key.created",
+          actor: args.actor,
+          subjectType: "customer_api_key",
+          subjectId: keyRecord.id,
+          metadata: {
+            telegramUserId: args.telegramUserId,
+            workspaceId: workspace.id,
+            clientRoute: keyRecord.clientRoute,
+            keyPreview: keyRecord.apiKeyPreview,
+            reason: "legacy_key_secret_unavailable",
+          },
+        });
+        args.auditLog?.record({
+          event: "api_key.rotated",
+          actor: args.actor,
+          subjectType: "customer_api_key",
+          subjectId: keyRecord.id,
+          metadata: {
+            telegramUserId: args.telegramUserId,
+            workspaceId: workspace.id,
+            oldKeyId: latestKey.id,
+            newKeyId: keyRecord.id,
+            newKeyPreview: keyRecord.apiKeyPreview,
+            reason: "legacy_key_secret_unavailable",
+          },
+        });
       } else {
         assertWorkspaceApiKeyCapacity({
           workspaceId: workspace.id,
           billing: args.billing,
           customerKeys: args.customerKeys,
+          maxApiKeysIfNoEntitlement: plan.maxApiKeys,
         });
         const created = args.customerKeys.createKey({
           workspaceId: workspace.id,
           telegramUserId: args.telegramUserId,
           clientRoute: workspace.defaultClientRoute,
+          status: "suspended",
         });
         keyRecord = created.record;
         apiKey = created.apiKey;
+        createdKeyId = created.record.id;
         mode = "new_key_created";
         args.auditLog?.record({
           event: "api_key.created",
@@ -299,15 +318,76 @@ async function provisionCustomerAccess(args: {
     throw new Error("Customer key could not be created or reactivated");
   }
 
-  const clientConfigs = await args.proxyClient.getClientConfigs();
-  const currentKeys = readClientRouteKeys(clientConfigs, workspace.defaultClientRoute);
-  const nextKeys = apiKey ? [...new Set([...currentKeys, apiKey])] : currentKeys;
-  if (apiKey) {
-    await args.proxyClient.setClientRouteApiKeys({
-      client: workspace.defaultClientRoute,
-      apiKeys: nextKeys,
-    });
+  if (apiKey && createdKeyId) {
+    try {
+      await syncNewRouteApiKey(args.proxyClient, workspace.defaultClientRoute, apiKey);
+      const activated = args.customerKeys.setStatus(createdKeyId, "active");
+      if (activated) {
+        keyRecord = activated;
+        args.auditLog?.record({
+          event: "api_key.activated",
+          actor: args.actor,
+          subjectType: "customer_api_key",
+          subjectId: activated.id,
+          metadata: {
+            telegramUserId: args.telegramUserId,
+            workspaceId: workspace.id,
+            keyPreview: activated.apiKeyPreview,
+            reason: "proxy_sync_succeeded",
+          },
+        });
+      }
+      if (keyToRevokeAfterSync) {
+        args.customerKeys.setStatus(keyToRevokeAfterSync.id, "revoked");
+        args.auditLog?.record({
+          event: "api_key.revoked",
+          actor: args.actor,
+          subjectType: "customer_api_key",
+          subjectId: keyToRevokeAfterSync.id,
+          metadata: {
+            telegramUserId: args.telegramUserId,
+            workspaceId: workspace.id,
+            keyPreview: keyToRevokeAfterSync.apiKeyPreview,
+            reason: "rotation",
+          },
+        });
+      }
+    } catch (error) {
+      args.customerKeys.setStatus(createdKeyId, "revoked");
+      args.auditLog?.record({
+        event: "api_key.revoked",
+        actor: { type: "system", id: "proxy-sync-rollback" },
+        subjectType: "customer_api_key",
+        subjectId: createdKeyId,
+        metadata: {
+          telegramUserId: args.telegramUserId,
+          workspaceId: workspace.id,
+          keyPreview: keyRecord.apiKeyPreview,
+          reason: "proxy_sync_failed",
+        },
+      });
+      throw error;
+    }
   }
+
+  const { subscription } = args.billing.grantSubscription({
+    workspaceId: workspace.id,
+    planId: args.planId,
+    days: args.days,
+  });
+  args.auditLog?.record({
+    event: args.action === "grant" ? "subscription.granted" : "subscription.renewed",
+    actor: args.actor,
+    subjectType: "workspace",
+    subjectId: workspace.id,
+    metadata: {
+      workspaceId: workspace.id,
+      telegramUserId: args.telegramUserId,
+      planId: args.planId,
+      days: args.days,
+      subscriptionEndsAt: subscription.currentPeriodEnd,
+    },
+  });
 
   return {
     mode,
@@ -333,4 +413,18 @@ function readClientRouteKeys(payload: any, clientRoute: string): string[] {
         (entry: unknown): entry is string => typeof entry === "string" && entry.trim().length > 0,
       )
     : [];
+}
+
+async function syncNewRouteApiKey(
+  proxyClient: ResponsesProxyClient,
+  clientRoute: string,
+  apiKey: string,
+): Promise<void> {
+  const clientConfigs = await proxyClient.getClientConfigs();
+  const currentKeys = readClientRouteKeys(clientConfigs, clientRoute);
+  const nextKeys = [...new Set([...currentKeys, apiKey])];
+  await proxyClient.setClientRouteApiKeys({
+    client: clientRoute,
+    apiKeys: nextKeys,
+  });
 }

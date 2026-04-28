@@ -1,5 +1,6 @@
 import { InlineKeyboard, type Bot } from "grammy";
 import { replyWithProxyError, sendOauthStatus, type BotDependencies } from "../actions.js";
+import { answerCallbackQuerySafely } from "../callbacks.js";
 import { buildTelegramSessionScope, type TelegramBotStateStore } from "../sessions.js";
 
 export function registerOauthCommand(
@@ -25,7 +26,7 @@ export function registerOauthCommand(
       if (chatId && userId) {
         sessions.set(buildTelegramSessionScope(chatId, userId), { kind: "awaiting_oauth_callback" });
       }
-      await ctx.answerCallbackQuery();
+      await answerCallbackQuerySafely(ctx);
       await ctx.reply(
         [
           "Open this URL and complete sign-in:",
@@ -38,7 +39,7 @@ export function registerOauthCommand(
         ].join("\n"),
       );
     } catch (error) {
-      await ctx.answerCallbackQuery();
+      await answerCallbackQuerySafely(ctx);
       await replyWithProxyError(ctx, error);
     }
   });

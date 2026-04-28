@@ -6,6 +6,7 @@ import { CustomerWorkspaceRepository } from "./customer-workspace-repository.js"
 import { CustomerKeyRepository } from "../customer-keys.js";
 import { BillingRepository } from "../billing.js";
 import { AuditLogRepository } from "../audit-log.js";
+import { registerCustomerActionCallbacks } from "./customer-actions.js";
 import { registerAccountsCommand } from "./commands/accounts.js";
 import { registerApiKeyCommand } from "./commands/apikey.js";
 import { registerApplyCommand } from "./commands/apply.js";
@@ -27,6 +28,7 @@ import { registerTestCommand } from "./commands/test.js";
 import { registerUsageCommand } from "./commands/usage.js";
 import { createRateLimitMiddleware, SqliteRateLimiter } from "./rate-limit.js";
 import { SqliteSessionStore } from "./sessions.js";
+import { createCustomerMessageCleanupMiddleware } from "./message-cleanup.js";
 
 export function createTelegramBot(deps: BotDependencies): Bot {
   const bot = new Bot(deps.config.telegramBotToken);
@@ -73,10 +75,12 @@ export function createTelegramBot(deps: BotDependencies): Bot {
   });
   bot.use(createCustomerCommandMiddleware(deps.config));
   bot.use(createRateLimitMiddleware(rateLimiter));
+  bot.use(createCustomerMessageCleanupMiddleware(deps.config));
 
-  registerStartCommand(bot, deps, identities, workspaces);
+  registerStartCommand(bot, deps, identities, workspaces, customerKeys, billing);
+  registerCustomerActionCallbacks(bot, workspaces, customerKeys, billing, auditLog);
   registerHelpCommand(bot, deps);
-  registerMeCommand(bot, identities, workspaces);
+  registerMeCommand(bot, identities, workspaces, customerKeys, auditLog);
   registerPlansCommand(bot, deps, billing);
   registerApiKeyCommand(bot, deps, customerKeys, workspaces, billing, auditLog);
   registerTailscaleCommand(bot, deps);

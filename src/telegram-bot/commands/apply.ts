@@ -1,10 +1,13 @@
 import { InlineKeyboard, type Bot } from "grammy";
+import { buildApplyClientKeyboard, replyAdminActionLoop } from "../admin-actions.js";
 import { replyWithProxyError, sendClients, type BotDependencies } from "../actions.js";
+import { answerCallbackQuerySafely } from "../callbacks.js";
 import { maskApiKey } from "../format.js";
 import { ProxyClientError } from "../proxy-client.js";
 import { buildTelegramSessionScope, type TelegramBotStateStore } from "../sessions.js";
 
 type QuickApplyClient = "hermes" | "codex";
+type ApplyCallbackAction = "client" | "start" | "provider" | "model" | "model-text";
 
 export function registerApplyCommand(
   bot: Bot,
@@ -15,9 +18,7 @@ export function registerApplyCommand(
     const args = ctx.match?.toString().trim() || "";
     if (!args) {
       await ctx.reply("Choose a client to configure.", {
-        reply_markup: new InlineKeyboard()
-          .text("Hermes", "v1:apply:client:hermes")
-          .text("Codex", "v1:apply:client:codex"),
+        reply_markup: buildApplyClientKeyboard(),
       });
       return;
     }
@@ -44,74 +45,95 @@ export function registerApplyCommand(
         ].join("\n"),
       );
       await sendClients(ctx, deps);
+      await replyAdminActionLoop(ctx, "apply");
     } catch (error) {
       await replyWithProxyError(ctx, error);
     }
   });
 
+  const applyActions: Record<ApplyCallbackAction, (ctx: any) => Promise<void>> = {
+    client: async (ctx) => {
+      await showProviderPicker(ctx, deps, ctx.match[1] as QuickApplyClient);
+    },
+    start: async (ctx) => {
+      await showModelPicker(ctx, deps, sessions, {
+        client: ctx.match[1] as QuickApplyClient,
+        providerId: ctx.match[2],
+      });
+    },
+    provider: async (ctx) => {
+      await showModelPicker(ctx, deps, sessions, {
+        client: ctx.match[1] as QuickApplyClient,
+        providerId: ctx.match[2],
+      });
+    },
+    model: async (ctx) => {
+      const client = ctx.match[1] as QuickApplyClient;
+      const providerId = ctx.match[2];
+      const modelIndex = Number(ctx.match[3]);
+      const chatId = ctx.chat?.id?.toString();
+      const userId = ctx.from?.id?.toString();
+      const session =
+        chatId && userId ? sessions.get(buildTelegramSessionScope(chatId, userId)) : undefined;
+      if (session?.kind !== "awaiting_apply_model_input" || session.providerId !== providerId) {
+        await showModelPicker(ctx, deps, sessions, { client, providerId });
+        return;
+      }
+      const model = session.models[modelIndex];
+      if (!model) {
+        await ctx.reply("Model selection expired. Please start /apply again.");
+        await replyAdminActionLoop(ctx, "apply");
+        return;
+      }
+      if (chatId && userId) {
+        sessions.clear(buildTelegramSessionScope(chatId, userId));
+      }
+      await applySelection(ctx, deps, { client, providerId, providerName: session.providerName, model });
+    },
+    "model-text": async (ctx) => {
+      const chatId = ctx.chat?.id?.toString();
+      const userId = ctx.from?.id?.toString();
+      if (!chatId || !userId) {
+        return;
+      }
+      const client = ctx.match[1] as QuickApplyClient;
+      const providerId = ctx.match[2];
+      const providerName = await maybeReadProviderName(deps, providerId);
+      sessions.set(buildTelegramSessionScope(chatId, userId), {
+        kind: "awaiting_apply_model_input",
+        client,
+        providerId,
+        providerName,
+        models: [],
+      });
+      await ctx.reply("Send the model name to apply for this provider.");
+      await replyAdminActionLoop(ctx, "apply");
+    },
+  };
+
   bot.callbackQuery(/^v1:apply:client:(hermes|codex)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await showProviderPicker(ctx, deps, ctx.match[1] as QuickApplyClient);
+    await answerCallbackQuerySafely(ctx);
+    await applyActions.client(ctx);
   });
 
   bot.callbackQuery(/^v1:apply:start:(hermes|codex):(.+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await showModelPicker(ctx, deps, sessions, {
-      client: ctx.match[1] as QuickApplyClient,
-      providerId: ctx.match[2],
-    });
+    await answerCallbackQuerySafely(ctx);
+    await applyActions.start(ctx);
   });
 
   bot.callbackQuery(/^v1:apply:provider:(hermes|codex):(.+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await showModelPicker(ctx, deps, sessions, {
-      client: ctx.match[1] as QuickApplyClient,
-      providerId: ctx.match[2],
-    });
+    await answerCallbackQuerySafely(ctx);
+    await applyActions.provider(ctx);
   });
 
   bot.callbackQuery(/^v1:apply:model:(hermes|codex):([^:]+):(\d+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    const client = ctx.match[1] as QuickApplyClient;
-    const providerId = ctx.match[2];
-    const modelIndex = Number(ctx.match[3]);
-    const chatId = ctx.chat?.id?.toString();
-    const userId = ctx.from?.id?.toString();
-    const session =
-      chatId && userId ? sessions.get(buildTelegramSessionScope(chatId, userId)) : undefined;
-    if (session?.kind !== "awaiting_apply_model_input" || session.providerId !== providerId) {
-      await showModelPicker(ctx, deps, sessions, { client, providerId });
-      return;
-    }
-    const model = session.models[modelIndex];
-    if (!model) {
-      await ctx.reply("Model selection expired. Please start /apply again.");
-      return;
-    }
-    if (chatId && userId) {
-      sessions.clear(buildTelegramSessionScope(chatId, userId));
-    }
-    await applySelection(ctx, deps, { client, providerId, providerName: session.providerName, model });
+    await answerCallbackQuerySafely(ctx);
+    await applyActions.model(ctx);
   });
 
   bot.callbackQuery(/^v1:apply:model-text:(hermes|codex):(.+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    const chatId = ctx.chat?.id?.toString();
-    const userId = ctx.from?.id?.toString();
-    if (!chatId || !userId) {
-      return;
-    }
-    const client = ctx.match[1] as QuickApplyClient;
-    const providerId = ctx.match[2];
-    const providerName = await maybeReadProviderName(deps, providerId);
-    sessions.set(buildTelegramSessionScope(chatId, userId), {
-      kind: "awaiting_apply_model_input",
-      client,
-      providerId,
-      providerName,
-      models: [],
-    });
-    await ctx.reply("Send the model name to apply for this provider.");
+    await answerCallbackQuerySafely(ctx);
+    await applyActions["model-text"](ctx);
   });
 
   bot.on("message:text", async (ctx, next) => {
@@ -156,6 +178,7 @@ async function showProviderPicker(
       ).row();
     }
     await ctx.reply(`Choose provider for ${client}.`, { reply_markup: keyboard });
+    await replyAdminActionLoop(ctx, "apply");
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }
@@ -196,6 +219,7 @@ async function showModelPicker(
       ].join("\n"),
       { reply_markup: keyboard },
     );
+    await replyAdminActionLoop(ctx, "apply");
   } catch (error) {
     await replyWithProxyError(ctx, error);
   }
@@ -231,18 +255,22 @@ async function applySelection(
       ].join("\n"),
     );
     await sendClients(ctx, deps);
+    await replyAdminActionLoop(ctx, "apply");
   } catch (error) {
     if (error instanceof ProxyClientError && error.body?.error?.code === "MODEL_REQUIRED") {
       await ctx.reply("Model is required. Please choose a model or type one manually.");
+      await replyAdminActionLoop(ctx, "apply");
       return;
     }
     if (error instanceof ProxyClientError && error.body?.error?.code === "CLIENT_API_KEY_NOT_FOUND") {
       await ctx.reply("Selected client API key is no longer valid. Refreshing client status.");
       await sendClients(ctx, deps);
+      await replyAdminActionLoop(ctx, "apply");
       return;
     }
     if (error instanceof ProxyClientError && error.body?.error?.code === "QUICK_APPLY_HOST_PATH_UNAVAILABLE") {
       await ctx.reply("Quick Apply cannot patch the host config path from this runtime.");
+      await replyAdminActionLoop(ctx, "apply");
       return;
     }
     await replyWithProxyError(ctx, error);

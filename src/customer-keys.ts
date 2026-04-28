@@ -15,6 +15,7 @@ export type CustomerApiKeyRecord = {
   clientRoute: string;
   apiKeyHash: string;
   apiKeyPreview: string;
+  apiKeySecret?: string;
   name?: string;
   status: CustomerApiKeyStatus;
   expiresAt?: string;
@@ -37,6 +38,7 @@ type CustomerApiKeyRow = {
   client_route: string;
   api_key_hash: string;
   api_key_preview: string;
+  api_key_secret: string | null;
   name: string | null;
   status: string;
   expires_at: string | null;
@@ -63,11 +65,13 @@ export class CustomerKeyRepository {
     clientRoute: string;
     apiKey?: string;
     name?: string;
+    status?: CustomerApiKeyStatus;
     expiresAt?: string;
     now?: Date;
   }): CreatedCustomerApiKey {
     const apiKey = input.apiKey?.trim() || generateCustomerApiKey();
     const now = (input.now ?? new Date()).toISOString();
+    const status = normalizeStatus(input.status ?? "active");
     const id = randomUUID();
     this.db
       .prepare(
@@ -79,13 +83,14 @@ export class CustomerKeyRepository {
           client_route,
           api_key_hash,
           api_key_preview,
+          api_key_secret,
           name,
           status,
           expires_at,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -95,7 +100,9 @@ export class CustomerKeyRepository {
         normalizeClientRoute(input.clientRoute),
         hashApiKey(apiKey),
         previewApiKey(apiKey),
+        apiKey,
         input.name ?? null,
+        status,
         input.expiresAt ?? null,
         now,
         now,
@@ -133,6 +140,17 @@ export class CustomerKeyRepository {
     return row ? mapCustomerApiKeyRow(row) : undefined;
   }
 
+  getApiKeySecret(id: string): string | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT api_key_secret
+         FROM customer_api_keys
+         WHERE id = ?`,
+      )
+      .get(id) as { api_key_secret: string | null } | undefined;
+    return row?.api_key_secret ?? undefined;
+  }
+
   getActiveKeyForUser(telegramUserId: string): CustomerApiKeyRecord | undefined {
     const row = this.db
       .prepare(
@@ -160,6 +178,18 @@ export class CustomerKeyRepository {
     return row ? mapCustomerApiKeyRow(row) : undefined;
   }
 
+  listKeysByUser(telegramUserId: string): CustomerApiKeyRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM customer_api_keys
+         WHERE telegram_user_id = ?
+         ORDER BY created_at DESC`,
+      )
+      .all(telegramUserId) as CustomerApiKeyRow[];
+    return rows.map(mapCustomerApiKeyRow);
+  }
+
   listKeysByWorkspace(workspaceId: string): CustomerApiKeyRecord[] {
     const rows = this.db
       .prepare(
@@ -169,6 +199,18 @@ export class CustomerKeyRepository {
          ORDER BY created_at DESC`,
       )
       .all(workspaceId) as CustomerApiKeyRow[];
+    return rows.map(mapCustomerApiKeyRow);
+  }
+
+  listRecentKeys(limit = 10): CustomerApiKeyRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM customer_api_keys
+         ORDER BY created_at DESC
+         LIMIT ?`,
+      )
+      .all(Math.max(1, Math.min(50, Math.floor(limit)))) as CustomerApiKeyRow[];
     return rows.map(mapCustomerApiKeyRow);
   }
 
@@ -234,6 +276,7 @@ function ensureCustomerKeySchema(db: Database): void {
       client_route TEXT NOT NULL,
       api_key_hash TEXT NOT NULL UNIQUE,
       api_key_preview TEXT NOT NULL,
+      api_key_secret TEXT,
       name TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       expires_at TEXT,
@@ -249,6 +292,10 @@ function ensureCustomerKeySchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_customer_api_keys_workspace
       ON customer_api_keys(workspace_id, status);
   `);
+  const columns = db.prepare("PRAGMA table_info(customer_api_keys)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "api_key_secret")) {
+    db.prepare("ALTER TABLE customer_api_keys ADD COLUMN api_key_secret TEXT").run();
+  }
 }
 
 function mapCustomerApiKeyRow(row: CustomerApiKeyRow): CustomerApiKeyRecord {
@@ -260,6 +307,7 @@ function mapCustomerApiKeyRow(row: CustomerApiKeyRow): CustomerApiKeyRecord {
     clientRoute: row.client_route,
     apiKeyHash: row.api_key_hash,
     apiKeyPreview: row.api_key_preview,
+    apiKeySecret: row.api_key_secret ?? undefined,
     name: row.name ?? undefined,
     status: normalizeStatus(row.status),
     expiresAt: row.expires_at ?? undefined,

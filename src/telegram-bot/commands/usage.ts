@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import type { BillingRepository } from "../../billing.js";
 import type { CustomerKeyRepository } from "../../customer-keys.js";
+import { buildCustomerActionKeyboard } from "../customer-actions.js";
 import { readCustomerBillingOverview } from "../customer-billing.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
 
@@ -52,6 +53,7 @@ export function registerUsageCommand(
       ]
         .filter(Boolean)
         .join("\n"),
+      { reply_markup: buildCustomerActionKeyboard(overview.apiKey?.status === "active") },
     );
   });
 }

@@ -1,6 +1,8 @@
 import { InlineKeyboard, type Bot } from "grammy";
 import { isAdmin } from "../auth.js";
+import { answerCallbackQuerySafely } from "../callbacks.js";
 import { formatOauthStatus } from "../format.js";
+import { replyAdminActionLoop } from "../admin-actions.js";
 import { replyWithProxyError, type BotDependencies } from "../actions.js";
 import type { TelegramBotStateStore } from "../sessions.js";
 
@@ -22,25 +24,13 @@ export function registerAccountsCommand(
   stateStore: TelegramBotStateStore,
 ): void {
   bot.command("accounts", async (ctx) => {
-    try {
-      const payload = await deps.proxyClient.getOauthStatus();
-      await ctx.reply(formatOauthStatus(payload));
-      for (const account of payload?.accounts ?? []) {
-        const accountActionToken = stateStore.issueCallbackToken({
-          kind: "account_action",
-          action: "refresh",
-          accountId: account.id,
-        });
-        await ctx.reply(
-          `Manage account ${account.email || account.accountId || account.id}`,
-          {
-            reply_markup: buildAccountKeyboard(accountActionToken, isAdmin(ctx, deps.config)),
-          },
-        );
-      }
-    } catch (error) {
-      await replyWithProxyError(ctx, error);
-    }
+    await sendAccounts(ctx, deps, stateStore);
+  });
+
+  bot.callbackQuery("v1:acct:list", async (ctx) => {
+    await answerCallbackQuerySafely(ctx, { text: "Loaded" });
+    await sendAccounts(ctx, deps, stateStore);
+    await replyAdminActionLoop(ctx, "accounts");
   });
 
   bot.callbackQuery(/^v1:acct:(refresh|disable|enable):([A-Za-z0-9_-]+)$/, async (ctx) => {
@@ -50,7 +40,7 @@ export function registerAccountsCommand(
       const callbackState = stateStore.readCallbackToken(token);
       const accountId = callbackState?.kind === "account_action" ? callbackState.accountId : undefined;
       if (!accountId) {
-        await ctx.answerCallbackQuery({ text: "Action expired. Refresh /accounts.", show_alert: true });
+        await answerCallbackQuerySafely(ctx, { text: "Action expired. Refresh /accounts.", show_alert: true });
         return;
       }
       if (action === "refresh") {
@@ -60,25 +50,26 @@ export function registerAccountsCommand(
       } else if (action === "enable") {
         await deps.proxyClient.enableAccount(accountId);
       }
-      await ctx.answerCallbackQuery({ text: `${action} ok` });
+      await answerCallbackQuerySafely(ctx, { text: `${action} ok` });
       const oauthStatus = await deps.proxyClient.getOauthStatus();
       await ctx.reply(formatOauthStatus(oauthStatus));
+      await replyAdminActionLoop(ctx, "accounts");
     } catch (error) {
-      await ctx.answerCallbackQuery();
+      await answerCallbackQuerySafely(ctx);
       await replyWithProxyError(ctx, error);
     }
   });
 
   bot.callbackQuery(/^v1:acct:delete-confirm:([A-Za-z0-9_-]+)$/, async (ctx) => {
     if (!isAdmin(ctx, deps.config)) {
-      await ctx.answerCallbackQuery({ text: "Admin only", show_alert: true });
+      await answerCallbackQuerySafely(ctx, { text: "Admin only", show_alert: true });
       return;
     }
     const token = ctx.match[1];
     const callbackState = stateStore.readCallbackToken(token);
     const accountId = callbackState?.kind === "account_action" ? callbackState.accountId : undefined;
     if (!accountId) {
-      await ctx.answerCallbackQuery({ text: "Action expired. Refresh /accounts.", show_alert: true });
+      await answerCallbackQuerySafely(ctx, { text: "Action expired. Refresh /accounts.", show_alert: true });
       return;
     }
     const deleteToken = stateStore.issueCallbackToken({
@@ -86,7 +77,7 @@ export function registerAccountsCommand(
       action: "delete",
       accountId,
     });
-    await ctx.answerCallbackQuery();
+    await answerCallbackQuerySafely(ctx);
     await ctx.reply("Confirm account deletion?", {
       reply_markup: new InlineKeyboard()
         .text("Delete account", `v1:acct:delete:${deleteToken}`)
@@ -95,12 +86,13 @@ export function registerAccountsCommand(
   });
 
   bot.callbackQuery("v1:acct:delete-cancel", async (ctx) => {
-    await ctx.answerCallbackQuery({ text: "Cancelled" });
+    await answerCallbackQuerySafely(ctx, { text: "Cancelled" });
+    await replyAdminActionLoop(ctx, "accounts");
   });
 
   bot.callbackQuery(/^v1:acct:delete:([A-Za-z0-9_-]+)$/, async (ctx) => {
     if (!isAdmin(ctx, deps.config)) {
-      await ctx.answerCallbackQuery({ text: "Admin only", show_alert: true });
+      await answerCallbackQuerySafely(ctx, { text: "Admin only", show_alert: true });
       return;
     }
     try {
@@ -108,17 +100,44 @@ export function registerAccountsCommand(
       const callbackState = stateStore.readCallbackToken(token);
       const accountId = callbackState?.kind === "account_action" ? callbackState.accountId : undefined;
       if (!accountId) {
-        await ctx.answerCallbackQuery({ text: "Action expired. Refresh /accounts.", show_alert: true });
+        await answerCallbackQuerySafely(ctx, { text: "Action expired. Refresh /accounts.", show_alert: true });
         return;
       }
       stateStore.clearCallbackToken(token);
       await deps.proxyClient.deleteAccount(accountId);
-      await ctx.answerCallbackQuery({ text: "delete ok" });
+      await answerCallbackQuerySafely(ctx, { text: "delete ok" });
       const oauthStatus = await deps.proxyClient.getOauthStatus();
       await ctx.reply(formatOauthStatus(oauthStatus));
+      await replyAdminActionLoop(ctx, "accounts");
     } catch (error) {
-      await ctx.answerCallbackQuery();
+      await answerCallbackQuerySafely(ctx);
       await replyWithProxyError(ctx, error);
     }
   });
+}
+
+async function sendAccounts(
+  ctx: Parameters<Bot["command"]>[1] extends infer _T ? any : never,
+  deps: BotDependencies,
+  stateStore: TelegramBotStateStore,
+): Promise<void> {
+  try {
+    const payload = await deps.proxyClient.getOauthStatus();
+    await ctx.reply(formatOauthStatus(payload));
+    for (const account of payload?.accounts ?? []) {
+      const accountActionToken = stateStore.issueCallbackToken({
+        kind: "account_action",
+        action: "refresh",
+        accountId: account.id,
+      });
+      await ctx.reply(
+        `Manage account ${account.email || account.accountId || account.id}`,
+        {
+          reply_markup: buildAccountKeyboard(accountActionToken, isAdmin(ctx, deps.config)),
+        },
+      );
+    }
+  } catch (error) {
+    await replyWithProxyError(ctx, error);
+  }
 }

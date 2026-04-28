@@ -1,5 +1,6 @@
 import { InlineKeyboard, type Bot } from "grammy";
 import { sendProviderDetails, sendProviders, type BotDependencies } from "../actions.js";
+import { answerCallbackQuerySafely } from "../callbacks.js";
 
 export function registerProvidersCommand(bot: Bot, deps: BotDependencies): void {
   bot.command("providers", async (ctx) => {
@@ -24,7 +25,7 @@ export function registerProvidersCommand(bot: Bot, deps: BotDependencies): void 
   });
 
   bot.callbackQuery(/^v1:provider:details:(.+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await answerCallbackQuerySafely(ctx);
     await sendProviderDetails(ctx, deps, ctx.match[1]);
   });
 }

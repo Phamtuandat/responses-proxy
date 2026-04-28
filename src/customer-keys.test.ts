@@ -16,7 +16,7 @@ function withRepository(fn: (repo: CustomerKeyRepository, dbFile: string) => voi
   }
 }
 
-test("CustomerKeyRepository creates keys without storing plaintext", () => {
+test("CustomerKeyRepository creates keys and stores revealable plaintext secrets", () => {
   withRepository((repo, dbFile) => {
     const created = repo.createKey({
       workspaceId: "workspace-1",
@@ -28,13 +28,15 @@ test("CustomerKeyRepository creates keys without storing plaintext", () => {
     assert.match(created.apiKey, /^sk-customer-/);
     assert.equal(created.record.clientRoute, "paid-customers");
     assert.equal(created.record.apiKeyHash, hashApiKey(created.apiKey));
+    assert.equal(created.record.apiKeySecret, created.apiKey);
+    assert.equal(repo.getApiKeySecret(created.record.id), created.apiKey);
     assert.equal(created.record.status, "active");
 
     const db = new BetterSqlite3(dbFile);
     const raw = JSON.stringify(db.prepare("SELECT * FROM customer_api_keys").all());
     db.close();
 
-    assert.equal(raw.includes(created.apiKey), false);
+    assert.equal(raw.includes(created.apiKey), true);
   });
 });
 
