@@ -246,6 +246,22 @@ export type ChatGptOAuthStatusResponse = {
   [key: string]: unknown;
 };
 
+export type ChatGptOAuthStartResponse = {
+  ok?: boolean;
+  state?: string;
+  authUrl?: string;
+  [key: string]: unknown;
+};
+
+export type ChatGptOAuthCallbackResponse = {
+  ok?: boolean;
+  account?: ChatGptOAuthAccount;
+  accounts?: ChatGptOAuthAccount[];
+  providers?: ProviderSummary[];
+  provider?: ProviderSummary;
+  [key: string]: unknown;
+};
+
 export type QuickApplyBackupEntry = {
   path?: string;
   fileName?: string;

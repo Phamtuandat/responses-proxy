@@ -1,5 +1,7 @@
 import type {
   ChatGptOAuthStatusResponse,
+  ChatGptOAuthStartResponse,
+  ChatGptOAuthCallbackResponse,
   ClientMutationInput,
   ClientMutationResponse,
   ClientConfigsStatusResponse,
@@ -26,7 +28,7 @@ export async function apiGet<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function apiSend<T>(path: string, method: "POST" | "PUT" | "DELETE", body?: unknown): Promise<T> {
+export async function apiSend<T>(path: string, method: "POST" | "PUT" | "PATCH" | "DELETE", body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
     headers: {
@@ -107,6 +109,46 @@ export function getPromptCacheLatest() {
 
 export function getChatGptOAuthStatus() {
   return apiGet<ChatGptOAuthStatusResponse>("/api/chatgpt-oauth/status");
+}
+
+export function startChatGptOAuth() {
+  return apiSend<ChatGptOAuthStartResponse>("/api/chatgpt-oauth/start", "POST");
+}
+
+export function submitChatGptOAuthCallback(input: { redirectUrl: string }) {
+  return apiSend<ChatGptOAuthCallbackResponse>("/api/chatgpt-oauth/callback", "POST", input);
+}
+
+export function updateChatGptOAuthSettings(input: { rotationMode: string }) {
+  return apiSend<ChatGptOAuthStatusResponse>("/api/chatgpt-oauth/settings", "PATCH", input);
+}
+
+export function refreshAccount(accountId: string) {
+  return apiSend<ChatGptOAuthStatusResponse>(
+    `/api/account-auth/accounts/${encodeURIComponent(accountId)}/refresh`,
+    "POST",
+  );
+}
+
+export function enableAccount(accountId: string) {
+  return apiSend<ChatGptOAuthStatusResponse>(
+    `/api/account-auth/accounts/${encodeURIComponent(accountId)}/enable`,
+    "POST",
+  );
+}
+
+export function disableAccount(accountId: string) {
+  return apiSend<ChatGptOAuthStatusResponse>(
+    `/api/account-auth/accounts/${encodeURIComponent(accountId)}/disable`,
+    "POST",
+  );
+}
+
+export function deleteAccount(accountId: string) {
+  return apiSend<ChatGptOAuthStatusResponse>(
+    `/api/account-auth/accounts/${encodeURIComponent(accountId)}`,
+    "DELETE",
+  );
 }
 
 export function getClientConfigsStatus() {

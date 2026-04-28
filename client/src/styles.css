@@ -288,6 +288,20 @@ a:focus-visible {
   gap: 20px;
 }
 
+.accounts-top-layout,
+.accounts-main-layout {
+  display: grid;
+  gap: 20px;
+}
+
+.accounts-top-layout {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.accounts-main-layout {
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+}
+
 .page-header {
   display: flex;
   align-items: flex-start;
@@ -750,6 +764,28 @@ a:focus-visible {
   gap: 14px;
 }
 
+.oauth-card {
+  display: grid;
+  gap: 16px;
+}
+
+.readonly-field {
+  display: grid;
+  gap: 10px;
+}
+
+.copy-action-group,
+.rotation-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.rotation-settings-row .search-input {
+  flex: 1 1 220px;
+}
+
 .form-textarea {
   min-height: 112px;
   padding-top: 12px;
@@ -913,6 +949,11 @@ a:focus-visible {
   }
 
   .client-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .accounts-top-layout,
+  .accounts-main-layout {
     grid-template-columns: 1fr;
   }
 }
