@@ -13,6 +13,18 @@ const ROUTES = {
 };
 
 const routeLinks = [...document.querySelectorAll("[data-route-link]")];
+const themeToggleEl = document.getElementById("themeToggle");
+const themeToggleLabelEl = document.getElementById("themeToggleLabel");
+const themeColorMetaEl = document.querySelector('meta[name="theme-color"]');
+const THEME_STORAGE_KEY = "responses-proxy-theme";
+const THEMES = {
+  light: "light",
+  dark: "dark",
+};
+const THEME_META_COLORS = {
+  [THEMES.light]: "#f5f5f7",
+  [THEMES.dark]: "#111114",
+};
 const screens = {
   [ROUTES.dashboard]: document.getElementById("screen-dashboard"),
   [ROUTES.clients]: document.getElementById("screen-clients"),
@@ -209,6 +221,7 @@ const providerErrorRuleTemplateEl = document.getElementById("providerErrorRuleTe
 const addProviderErrorRuleBtnEl = document.getElementById("addProviderErrorRuleBtn");
 const customProviderBtnEl = document.getElementById("customProviderBtn");
 const providerDeleteBtnEl = document.getElementById("providerDeleteBtn");
+const providerDeleteMenuEl = document.getElementById("providerDeleteMenu");
 
 let providerState = { activeProviderId: "", providers: [], providerOptions: [], clientRoutes: [] };
 let clientTokenLimitState = { timestamp: "", clients: [] };
@@ -243,6 +256,309 @@ function normalizeRoute() {
   const [name, query = ""] = route.split("?");
   const normalizedName = Object.values(ROUTES).includes(name) ? name : ROUTES.dashboard;
   return { name: normalizedName, query: new URLSearchParams(query) };
+}
+
+function getPreferredTheme() {
+  try {
+    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (savedTheme === THEMES.light || savedTheme === THEMES.dark) {
+      return savedTheme;
+    }
+  } catch {}
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? THEMES.dark : THEMES.light;
+}
+
+function applyTheme(theme) {
+  const nextTheme = theme === THEMES.dark ? THEMES.dark : THEMES.light;
+  document.documentElement.dataset.theme = nextTheme;
+  document.documentElement.style.colorScheme = nextTheme;
+  if (themeColorMetaEl) {
+    themeColorMetaEl.setAttribute("content", THEME_META_COLORS[nextTheme]);
+  }
+  if (themeToggleEl) {
+    const isDark = nextTheme === THEMES.dark;
+    themeToggleEl.setAttribute("aria-pressed", String(isDark));
+    themeToggleEl.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
+    themeToggleEl.setAttribute("title", isDark ? "Switch to light mode" : "Switch to dark mode");
+  }
+  if (themeToggleLabelEl) {
+    themeToggleLabelEl.textContent = nextTheme === THEMES.dark ? "Dark" : "Light";
+  }
+  return nextTheme;
+}
+
+function setTheme(theme) {
+  const nextTheme = applyTheme(theme);
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+  } catch {}
+}
+
+function toggleTheme() {
+  const currentTheme = document.documentElement.dataset.theme === THEMES.dark ? THEMES.dark : THEMES.light;
+  setTheme(currentTheme === THEMES.dark ? THEMES.light : THEMES.dark);
+}
+
+function closeOverflowMenu(menu, { restoreFocus = false } = {}) {
+  if (!(menu instanceof HTMLElement)) {
+    return;
+  }
+  const panel = menu.querySelector('.overflow-menu-panel');
+  const trigger = menu.querySelector('.overflow-trigger');
+  menu.classList.remove('is-open');
+  if (panel instanceof HTMLElement) {
+    panel.dataset.state = 'closing';
+    panel.style.pointerEvents = 'none';
+    if (menu.__overflowHideTimer) {
+      window.clearTimeout(menu.__overflowHideTimer);
+    }
+    menu.__overflowHideTimer = window.setTimeout(() => {
+      if (!menu.classList.contains('is-open')) {
+        panel.hidden = true;
+        panel.dataset.state = 'closed';
+      }
+    }, 160);
+  }
+  if (trigger instanceof HTMLElement) {
+    trigger.setAttribute('aria-expanded', 'false');
+    updateOverflowTriggerAppearance(trigger, false);
+    if (restoreFocus) {
+      trigger.focus();
+    }
+  }
+}
+
+function closeOverflowMenus(exceptMenu = null) {
+  for (const menu of document.querySelectorAll('.overflow-menu.is-open')) {
+    if (menu !== exceptMenu) {
+      closeOverflowMenu(menu);
+    }
+  }
+}
+
+function styleOverflowTrigger(trigger) {
+  Object.assign(trigger.style, {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '44px',
+    minWidth: '44px',
+    minHeight: '44px',
+    height: '44px',
+    padding: '0',
+    margin: '0',
+    borderRadius: '14px',
+    border: '1px solid var(--line)',
+    background: 'var(--surface-2)',
+    color: 'var(--muted)',
+    boxShadow: '0 6px 18px rgba(15, 23, 42, 0.05)',
+    cursor: 'pointer',
+    fontSize: '11px',
+    letterSpacing: '0.16em',
+    fontWeight: '700',
+  });
+}
+
+function updateOverflowTriggerAppearance(trigger, active) {
+  trigger.style.background = active ? 'var(--surface-hover)' : 'var(--surface-2)';
+  trigger.style.color = active ? 'var(--ink)' : 'var(--muted)';
+}
+
+function styleOverflowPanel(panel) {
+  Object.assign(panel.style, {
+    position: 'absolute',
+    top: 'calc(100% + 10px)',
+    right: '0',
+    left: 'auto',
+    minWidth: '176px',
+    padding: '8px',
+    borderRadius: '18px',
+    border: '1px solid var(--line)',
+    background: 'color-mix(in srgb, var(--surface-2) 92%, transparent 8%)',
+    boxShadow: 'var(--shadow-md)',
+    backdropFilter: 'blur(20px) saturate(125%)',
+    display: 'grid',
+    gap: '6px',
+    zIndex: '40',
+  });
+}
+
+function positionOverflowPanel(menu, panel) {
+  panel.style.left = 'auto';
+  panel.style.right = '0';
+  panel.style.maxWidth = 'min(240px, calc(100vw - 24px))';
+
+  const menuRect = menu.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  const viewportPadding = window.innerWidth <= 640 ? 20 : 12;
+  const overflowRight = panelRect.right - (window.innerWidth - viewportPadding);
+  const overflowLeft = viewportPadding - panelRect.left;
+
+  if (overflowLeft > 0) {
+    panel.style.left = '0';
+    panel.style.right = 'auto';
+  } else if (overflowRight > 0) {
+    panel.style.left = 'auto';
+    panel.style.right = '0';
+  }
+
+  if (menuRect.left + panelRect.width > window.innerWidth - viewportPadding) {
+    panel.style.left = 'auto';
+    panel.style.right = '0';
+  }
+
+  const adjustedRect = panel.getBoundingClientRect();
+  if (adjustedRect.left < viewportPadding) {
+    panel.style.left = `${Math.max(0, viewportPadding - menuRect.left)}px`;
+    panel.style.right = 'auto';
+  }
+  if (adjustedRect.right > window.innerWidth - viewportPadding) {
+    panel.style.right = `${Math.max(0, viewportPadding - (window.innerWidth - menuRect.right))}px`;
+    panel.style.left = 'auto';
+  }
+}
+
+function openOverflowMenu(menu) {
+  const panel = menu.querySelector('.overflow-menu-panel');
+  const trigger = menu.querySelector('.overflow-trigger');
+  if (!(panel instanceof HTMLElement) || !(trigger instanceof HTMLElement)) {
+    return;
+  }
+  if (menu.__overflowHideTimer) {
+    window.clearTimeout(menu.__overflowHideTimer);
+  }
+  panel.hidden = false;
+  panel.dataset.state = 'opening';
+  panel.style.pointerEvents = 'none';
+  trigger.setAttribute('aria-expanded', 'true');
+  updateOverflowTriggerAppearance(trigger, true);
+  requestAnimationFrame(() => {
+    positionOverflowPanel(menu, panel);
+    requestAnimationFrame(() => {
+      menu.classList.add('is-open');
+      panel.dataset.state = 'open';
+      panel.style.pointerEvents = 'auto';
+    });
+  });
+}
+
+function styleOverflowItem(button, variant = 'default') {
+  Object.assign(button.style, {
+    width: '100%',
+    minHeight: '44px',
+    justifyContent: 'flex-start',
+    textAlign: 'left',
+    borderRadius: '12px',
+    padding: '10px 14px',
+    boxShadow: 'none',
+    border: '1px solid var(--line)',
+  });
+  if (variant === 'danger') {
+    Object.assign(button.style, {
+      background: 'rgba(120, 34, 48, 0.42)',
+      borderColor: 'rgba(255, 123, 114, 0.18)',
+      color: '#ffd0cc',
+    });
+  } else {
+    Object.assign(button.style, {
+      background: 'var(--surface-2)',
+      color: 'var(--ink)',
+    });
+  }
+}
+
+function setupOverflowMenu(menu) {
+  const trigger = menu.querySelector('.overflow-trigger');
+  const panel = menu.querySelector('.overflow-menu-panel');
+  if (!(trigger instanceof HTMLElement) || !(panel instanceof HTMLElement)) {
+    return menu;
+  }
+  styleOverflowTrigger(trigger);
+  styleOverflowPanel(panel);
+  for (const item of panel.querySelectorAll('.overflow-menu-item')) {
+    styleOverflowItem(item, item.classList.contains('table-button-danger-soft') ? 'danger' : 'default');
+  }
+  panel.hidden = true;
+  panel.dataset.state = 'closed';
+  trigger.setAttribute('aria-expanded', 'false');
+  updateOverflowTriggerAppearance(trigger, false);
+  menu.addEventListener('click', (event) => {
+    event.stopPropagation();
+  });
+  menu.addEventListener('focusout', () => {
+    window.setTimeout(() => {
+      if (!menu.contains(document.activeElement)) {
+        closeOverflowMenu(menu);
+      }
+    }, 0);
+  });
+  menu.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeOverflowMenu(menu, { restoreFocus: true });
+    }
+  });
+  trigger.addEventListener('mouseenter', () => updateOverflowTriggerAppearance(trigger, true));
+  trigger.addEventListener('mouseleave', () => {
+    updateOverflowTriggerAppearance(trigger, menu.classList.contains('is-open'));
+  });
+  trigger.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (!menu.classList.contains('is-open')) {
+        openOverflowMenu(menu);
+      }
+      window.setTimeout(() => {
+        panel.querySelector('.overflow-menu-item:not(:disabled)')?.focus();
+      }, 170);
+    }
+  });
+  trigger.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const willOpen = !menu.classList.contains('is-open');
+    closeOverflowMenus(willOpen ? menu : null);
+    if (willOpen) {
+      openOverflowMenu(menu);
+    } else {
+      closeOverflowMenu(menu);
+    }
+  });
+  return menu;
+}
+
+function createOverflowMenu(ariaLabel, items) {
+  const menu = document.createElement('div');
+  menu.className = 'overflow-menu';
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'overflow-trigger';
+  trigger.setAttribute('aria-label', ariaLabel);
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.setAttribute('title', 'More actions');
+  trigger.innerHTML = '<span aria-hidden="true">•••</span>';
+
+  const panel = document.createElement('div');
+  panel.className = 'overflow-menu-panel';
+  panel.hidden = true;
+
+  for (const item of items) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `overflow-menu-item ${item.className || 'button-link-muted'}`.trim();
+    button.textContent = item.label;
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeOverflowMenus();
+      item.onClick(event);
+    });
+    panel.appendChild(button);
+  }
+
+  menu.append(trigger, panel);
+  return setupOverflowMenu(menu);
 }
 
 function setRoute(routeState) {
@@ -557,6 +873,12 @@ function setProviderEditor(provider) {
   customProviderBtnEl.textContent = provider ? "Update provider" : "Save provider";
   providerDeleteBtnEl.hidden = !provider;
   providerDeleteBtnEl.disabled = !provider;
+  if (providerDeleteMenuEl) {
+    providerDeleteMenuEl.hidden = !provider;
+    if (!provider) {
+      closeOverflowMenus();
+    }
+  }
   providerEditorPillEl.className = provider ? "pill ok-pill" : "pill";
   providerEditorPillEl.textContent = provider ? "Edit mode" : "Create mode";
   providerEditorTitleEl.textContent = provider ? `Edit ${provider.name}` : "New Provider";
@@ -1089,7 +1411,7 @@ function renderProviderTable() {
     const editBtn = document.createElement("button");
     editBtn.type = "button";
     editBtn.textContent = "Edit";
-    editBtn.className = "table-button";
+    editBtn.className = "button-link-muted";
     editBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       goToProviderEditor(provider.id);
@@ -1230,19 +1552,26 @@ function renderChatGptOauthPanel() {
       `<div class="oauth-account-meta">Account: ${escapeHtml(account.accountId || account.id)}</div>` +
       `<div class="oauth-account-meta">Expires: ${escapeHtml(formatRelativeTimestamp(account.expiresAt))}</div>` +
       "</div>" +
-      '<div class="oauth-account-actions">' +
-      '<button type="button" class="table-button oauth-refresh-button">Refresh</button>' +
-      `<button type="button" class="table-button table-button-utility oauth-toggle-button">${escapeHtml(account.disabled ? "Enable" : "Disable")}</button>` +
-      '<button type="button" class="table-button button-danger-soft oauth-delete-button">Delete</button>' +
+      '<div class="oauth-account-actions section-actions">' +
+      '<button type="button" class="button-link-muted oauth-refresh-button">Refresh</button>' +
+      '<div class="oauth-account-overflow-anchor"></div>' +
       "</div>";
     row.querySelector(".oauth-refresh-button")?.addEventListener("click", () =>
       refreshChatGptOauthAccount(account.id),
     );
-    row.querySelector(".oauth-delete-button")?.addEventListener("click", () =>
-      deleteChatGptOauthAccount(account.id, account.email || account.accountId || account.id),
-    );
-    row.querySelector(".oauth-toggle-button")?.addEventListener("click", () =>
-      toggleChatGptOauthAccount(account.id, account.disabled),
+    row.querySelector(".oauth-account-overflow-anchor")?.appendChild(
+      createOverflowMenu(`More actions for ${account.email || account.accountId || account.id}`, [
+        {
+          label: account.disabled ? "Enable" : "Disable",
+          className: "button-link-muted",
+          onClick: () => toggleChatGptOauthAccount(account.id, account.disabled),
+        },
+        {
+          label: "Delete",
+          className: "table-button-danger-soft",
+          onClick: () => deleteChatGptOauthAccount(account.id, account.email || account.accountId || account.id),
+        },
+      ]),
     );
     chatgptOauthAccountsEl.appendChild(row);
   }
@@ -1265,7 +1594,7 @@ function renderProviderCrudList() {
       '<img src="/providers-illustration.svg" alt="No providers found" class="provider-empty-illustration" />' +
       `<h3>${normalizedSearch ? "No providers match this filter." : "No providers yet."}</h3>` +
       `<p>${normalizedSearch ? "Try a different name, id, or base URL." : "Create the first provider to start routing traffic through the proxy."}</p>` +
-      '<div class="row-wrap"><a class="button-link" href="#/provider-edit">Create provider</a></div>';
+      '<div class="row-wrap"><a class="button-link" href="#/provider-edit">New</a></div>';
     providerListEl.appendChild(empty);
     return;
   }
@@ -1289,9 +1618,9 @@ function renderProviderCrudList() {
       `<div class="provider-crud-title-row"><h3>${escapeHtml(provider.name)}</h3><span class="pill">${escapeHtml(provider.id)}</span></div>` +
       `<p class="mono">${escapeHtml(provider.baseUrl)}</p>` +
       "</div>" +
-      '<div class="provider-crud-actions">' +
-      '<button type="button" class="table-button provider-edit-button">Edit</button>' +
-      '<button type="button" class="table-button button-danger-soft provider-delete-button">Delete</button>' +
+      '<div class="provider-crud-actions section-actions">' +
+      '<button type="button" class="button-link-muted provider-edit-button">Edit</button>' +
+      '<div class="provider-card-overflow-anchor"></div>' +
       "</div>" +
       "</div>" +
       '<div class="provider-crud-badges">' +
@@ -1307,33 +1636,36 @@ function renderProviderCrudList() {
       "</div>";
 
     const editBtn = card.querySelector(".provider-edit-button");
-    const deleteBtn = card.querySelector(".provider-delete-button");
+    const overflowAnchor = card.querySelector(".provider-card-overflow-anchor");
+    overflowAnchor?.appendChild(
+      createOverflowMenu(`More actions for ${provider.name}`, [
+        {
+          label: "Delete",
+          className: "table-button-danger-soft",
+          onClick: async () => {
+            const confirmed = window.confirm(`Delete provider "${provider.name}"?`);
+            if (!confirmed) {
+              return;
+            }
+            setProviderMeta(`Deleting provider ${provider.id}...`);
+            try {
+              const response = await fetch(`/api/providers/${encodeURIComponent(provider.id)}`, {
+                method: "DELETE",
+              });
+              const data = await response.json();
+              if (!response.ok || data.error) {
+                throw new Error(data.error?.message || "Delete failed");
+              }
+              await refreshProviders();
+              setProviderMeta(`Deleted provider ${provider.id}.`, "ok");
+            } catch (error) {
+              setProviderMeta(error instanceof Error ? error.message : "Delete failed", "bad");
+            }
+          },
+        },
+      ]),
+    );
     editBtn?.addEventListener("click", () => goToProviderEditor(provider.id));
-    deleteBtn?.addEventListener("click", async () => {
-      const confirmed = window.confirm(`Delete provider "${provider.name}"?`);
-      if (!confirmed) {
-        return;
-      }
-      deleteBtn.disabled = true;
-      deleteBtn.textContent = "Deleting...";
-      setProviderMeta(`Deleting provider ${provider.id}...`);
-      try {
-        const response = await fetch(`/api/providers/${encodeURIComponent(provider.id)}`, {
-          method: "DELETE",
-        });
-        const data = await response.json();
-        if (!response.ok || data.error) {
-          throw new Error(data.error?.message || "Delete failed");
-        }
-        await refreshProviders();
-        setProviderMeta(`Deleted provider ${provider.id}`);
-      } catch (error) {
-        setProviderMeta(error instanceof Error ? error.message : "Could not delete provider");
-      } finally {
-        deleteBtn.disabled = false;
-        deleteBtn.textContent = "Delete";
-      }
-    });
     providerListEl.appendChild(card);
   }
 }
@@ -1831,7 +2163,7 @@ function renderClientCrud() {
         `<div class="client-route-quota">${buildClientRouteQuotaMeter(quota)}</div>` +
         "</div>";
       const actions = document.createElement("div");
-      actions.className = "client-route-actions";
+      actions.className = "client-route-actions section-actions";
       const editButton = document.createElement("button");
       editButton.type = "button";
       editButton.className = "button-link-muted";
@@ -1840,15 +2172,16 @@ function renderClientCrud() {
         event.stopPropagation();
         goToClientEditor(route.key);
       });
-      const deleteButton = document.createElement("button");
-      deleteButton.type = "button";
-      deleteButton.className = "table-button-danger-soft";
-      deleteButton.textContent = "Delete";
-      deleteButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        void deleteClientCrud(route.key);
-      });
-      actions.append(editButton, deleteButton);
+      const overflowMenu = createOverflowMenu(`More actions for ${route.key}`, [
+        {
+          label: "Delete",
+          className: "table-button-danger-soft",
+          onClick: () => {
+            void deleteClientCrud(route.key);
+          },
+        },
+      ]);
+      actions.append(editButton, overflowMenu);
       item.append(title, meta, actions);
       item.addEventListener("click", () => {
         goToClientEditor(route.key);
@@ -2665,7 +2998,7 @@ async function startChatGptOauthLogin() {
     }
   } finally {
     chatgptOauthStartBtnEl.disabled = !chatgptOauthState.enabled;
-    chatgptOauthStartBtnEl.textContent = "Start login";
+    chatgptOauthStartBtnEl.textContent = "Start";
   }
 }
 
@@ -3130,7 +3463,7 @@ async function refreshLiveUsage() {
     usageLiveRefreshInFlight = false;
     if (usageRefreshBtnEl) {
       usageRefreshBtnEl.disabled = false;
-      usageRefreshBtnEl.textContent = "Refresh now";
+      usageRefreshBtnEl.textContent = "Refresh";
     }
   }
   renderLiveUsage();
@@ -3613,6 +3946,39 @@ providerDeleteBtnEl.addEventListener("click", async () => {
 });
 
 window.addEventListener("hashchange", () => setRoute(normalizeRoute()));
+
+document.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element) || !event.target.closest('.overflow-menu')) {
+    closeOverflowMenus();
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    const openMenus = [...document.querySelectorAll('.overflow-menu.is-open')];
+    const lastOpenMenu = openMenus.at(-1);
+    if (lastOpenMenu) {
+      event.preventDefault();
+      closeOverflowMenu(lastOpenMenu, { restoreFocus: true });
+    }
+  }
+});
+
+window.addEventListener('resize', () => {
+  for (const menu of document.querySelectorAll('.overflow-menu.is-open')) {
+    const panel = menu.querySelector('.overflow-menu-panel');
+    if (panel instanceof HTMLElement) {
+      positionOverflowPanel(menu, panel);
+    }
+  }
+});
+
+document.querySelectorAll('.overflow-menu').forEach((menu) => {
+  setupOverflowMenu(menu);
+});
+
+themeToggleEl?.addEventListener("click", toggleTheme);
+applyTheme(getPreferredTheme());
 
 setProviderEditor();
 renderProviderEditorSummary();

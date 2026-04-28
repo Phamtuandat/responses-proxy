@@ -38,6 +38,22 @@
           </aside>
 
           <div class="content-area">
+            <div class="app-toolbar" aria-label="View controls">
+              <div class="app-toolbar-spacer"></div>
+              <button
+                id="themeToggle"
+                class="theme-toggle"
+                type="button"
+                aria-label="Switch to dark mode"
+                aria-pressed="false"
+                title="Toggle theme"
+              >
+                <span class="theme-toggle-track" aria-hidden="true">
+                  <span class="theme-toggle-thumb"></span>
+                </span>
+                <span id="themeToggleLabel" class="theme-toggle-label">Light</span>
+              </button>
+            </div>
             <div class="screens">
           <section id="screen-dashboard" class="screen">
             <div class="section">
@@ -103,9 +119,9 @@
                   </section>
                 </div>
                 <div class="docs-steps">
-                  <div class="docs-step"><span>1</span><p>Create or copy a client API key from the Clients tab.</p></div>
-                  <div class="docs-step"><span>2</span><p>Point the client to the base URL shown below and call <span class="mono">/v1/responses</span>.</p></div>
-                  <div class="docs-step"><span>3</span><p>Send the client key in the <span class="mono">Authorization</span> header and a normal Responses JSON body.</p></div>
+                  <div class="docs-step"><span>1</span><p>Create a client key in Clients.</p></div>
+                  <div class="docs-step"><span>2</span><p>Point the client to the base URL below and call <span class="mono">/v1/responses</span>.</p></div>
+                  <div class="docs-step"><span>3</span><p>Send the key in <span class="mono">Authorization</span> with a standard Responses body.</p></div>
                 </div>
                 <pre id="docsCurlSnippet" class="docs-pre">Loading example...</pre>
               </div>
@@ -114,7 +130,7 @@
                 <div class="row">
                   <div>
                     <h3>Client Setup</h3>
-                    <p>Use Clients to manage API keys and provider bindings, then use Config Helper to patch Hermes and Codex config.</p>
+                    <p>Manage client keys in Clients, then patch Hermes or Codex in Config Helper.</p>
                   </div>
                 </div>
               </div>
@@ -154,13 +170,13 @@
                 <div>
                   <h2>Clients</h2>
                 </div>
-                <a class="button-link" href="#/client-edit">New client</a>
+                <a class="button-link" href="#/client-edit">New</a>
               </div>
 
               <div class="providers-toolbar section-divider">
                 <div class="field providers-search">
                   <label for="clientSearchInput">Search clients</label>
-                  <input id="clientSearchInput" type="search" placeholder="Search by name, provider, model, or API key count" />
+                  <input id="clientSearchInput" type="search" placeholder="Name, provider, model, or key count" />
                 </div>
               </div>
 
@@ -196,7 +212,7 @@
                 <div class="form-grid">
                   <div class="field">
                     <label for="clientCrudName">Client name</label>
-                    <input id="clientCrudName" type="text" placeholder="hermes, codex, app-name" />
+                    <input id="clientCrudName" type="text" placeholder="hermes, codex, app" />
                   </div>
                   <div class="field">
                     <label for="clientCrudProviderSelect">Provider</label>
@@ -204,11 +220,11 @@
                   </div>
                   <div class="field">
                     <label for="clientCrudModel">Model override</label>
-                    <input id="clientCrudModel" type="text" placeholder="Optional model name" />
+                    <input id="clientCrudModel" type="text" placeholder="Optional model" />
                   </div>
                   <div class="field">
                     <label for="clientCrudApiKeys">Client API keys</label>
-                    <textarea id="clientCrudApiKeys" rows="6" placeholder="Required. One key per line"></textarea>
+                    <textarea id="clientCrudApiKeys" rows="6" placeholder="One key per line"></textarea>
                   </div>
                   <div class="field field-span-full">
                     <section class="client-limit-panel" id="clientLimitPanel">
@@ -245,11 +261,18 @@
                     </section>
                   </div>
                 </div>
-                <div class="row-wrap" style="margin-top:14px;">
+                <div class="row-wrap section-actions section-actions-footer" style="margin-top:14px;">
                   <button type="button" id="saveClientCrudBtn">Create client</button>
-                  <button type="button" class="button-link-muted" id="resetClientTokenUsageBtn">Reset usage</button>
-                  <button type="button" class="button-link-muted" id="clearClientCrudBtn">Clear</button>
-                  <button type="button" class="table-button-danger-soft" id="deleteClientCrudBtn">Delete</button>
+                  <div class="overflow-menu">
+                    <button type="button" class="overflow-trigger" aria-label="More client actions" aria-expanded="false" title="More actions">
+                      <span aria-hidden="true">•••</span>
+                    </button>
+                    <div class="overflow-menu-panel" hidden>
+                      <button type="button" class="overflow-menu-item button-link-muted" id="resetClientTokenUsageBtn">Reset usage</button>
+                      <button type="button" class="overflow-menu-item button-link-muted" id="clearClientCrudBtn">Clear</button>
+                      <button type="button" class="overflow-menu-item table-button-danger-soft" id="deleteClientCrudBtn">Delete</button>
+                    </div>
+                  </div>
                 </div>
                 <div id="clientCrudStatus" class="compact-status" hidden></div>
               </section>
@@ -261,7 +284,7 @@
               <div class="row">
                 <div>
                   <h2>Config Helper</h2>
-                  <p>Patch local Hermes and Codex config files after clients are ready.</p>
+                  <p>Patch Hermes or Codex locally after clients are ready.</p>
                 </div>
               </div>
 
@@ -376,10 +399,10 @@
                         <div class="provider-card-header">
                           <div>
                             <h3>Connection</h3>
-                            <p>Generate a one-time sign-in URL and finish the exchange with the redirected callback URL.</p>
+                            <p>Create a sign-in URL, then paste the returned callback URL.</p>
                           </div>
                           <div class="oauth-actions">
-                            <button type="button" id="chatgptOauthStartBtn">Start login</button>
+                            <button type="button" id="chatgptOauthStartBtn">Start</button>
                           </div>
                         </div>
                         <div class="field oauth-url-field">
@@ -390,7 +413,7 @@
                               <a class="button-link button-link-muted disabled-link compact-link" id="chatgptOauthOpenLink" href="#" target="_blank" rel="noopener">Open</a>
                             </div>
                           </div>
-                          <input id="chatgptOauthAuthUrl" type="text" readonly placeholder="Start login to generate a sign-in URL" />
+                          <input id="chatgptOauthAuthUrl" type="text" readonly placeholder="Start to generate a sign-in URL" />
                         </div>
                         <div class="field oauth-url-field">
                           <label for="chatgptOauthCallbackInput">Callback URL</label>
@@ -460,13 +483,13 @@
                 <div>
                   <h2>Providers</h2>
                 </div>
-                <a class="button-link" href="#/provider-edit">Create provider</a>
+                <a class="button-link" href="#/provider-edit">New</a>
               </div>
 
               <div class="providers-toolbar section-divider">
                 <div class="field providers-search">
                   <label for="providerSearchInput">Search providers</label>
-                  <input id="providerSearchInput" type="search" placeholder="Search by name, id, base URL, owner, or capability" />
+                  <input id="providerSearchInput" type="search" placeholder="Name, id, base URL, owner, or capability" />
                 </div>
               </div>
 
@@ -660,11 +683,11 @@
               <div class="provider-editor-header">
                 <div class="provider-editor-heading">
                   <h2 id="providerEditorTitle">New Provider</h2>
-                  <p id="providerEditorSubtitle">Create or update a single provider record. Provider inventory and destructive actions belong in the Providers page.</p>
+                  <p id="providerEditorSubtitle">Create or update one provider. Manage inventory and deletes in Providers.</p>
                 </div>
                 <div class="provider-editor-header-actions">
                   <div id="providerEditorPill" class="pill">Create mode</div>
-                  <a class="button-link button-link-muted" href="#/providers">Back to providers</a>
+                  <a class="button-link button-link-muted" href="#/providers">Back</a>
                 </div>
               </div>
 
@@ -697,8 +720,8 @@
                         </div>
                         <div class="field">
                           <label for="providerUsageCheckUrl">Usage check URL</label>
-                          <input id="providerUsageCheckUrl" type="text" placeholder="https://host/check-usage" />
-                          <p class="field-help">Optional endpoint for quota or status checks.</p>
+                          <input id="providerUsageCheckUrl" type="text" placeholder="https://host/usage" />
+                          <p class="field-help">Optional quota or status URL.</p>
                         </div>
                       </div>
                     </section>
@@ -945,9 +968,16 @@
                 <div class="provider-editor-footer-meta">
                   <span id="providerEditorMeta">Changes are applied only after save.</span>
                 </div>
-                <div class="provider-editor-footer-actions">
-                  <button id="providerDeleteBtn" type="button" class="button-danger" hidden>Delete provider</button>
+                <div class="provider-editor-footer-actions section-actions">
                   <button id="customProviderBtn" type="button">Save provider</button>
+                  <div class="overflow-menu" id="providerDeleteMenu">
+                    <button type="button" class="overflow-trigger" aria-label="More provider actions" aria-expanded="false" title="More actions">
+                      <span aria-hidden="true">•••</span>
+                    </button>
+                    <div class="overflow-menu-panel" hidden>
+                      <button id="providerDeleteBtn" type="button" class="overflow-menu-item table-button-danger-soft" hidden>Delete provider</button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -963,7 +993,7 @@
                   <p>Live upstream usage fetched from configured provider credentials.</p>
                 </div>
                 <div class="row-wrap">
-                  <button type="button" class="button-link-muted" id="usageRefreshBtn">Refresh now</button>
+                  <button type="button" class="button-link-muted" id="usageRefreshBtn">Refresh</button>
                   <div id="usageLiveStatus" class="pill">Idle</div>
                 </div>
               </div>
