@@ -536,10 +536,17 @@ export function ClientsScreen({ clientKey }: ClientsScreenProps) {
                     return (
                       <tr className="provider-row" key={route.key}>
                         <td className="table-cell-long">
-                          <a className="item-title-link" href={`#/clients/${encodeURIComponent(route.key)}`}>
+                          <button
+                            className="item-title-link"
+                            onClick={() => {
+                              setMutationError(null);
+                              setEditingClientKey(route.key);
+                            }}
+                            type="button"
+                          >
                             {route.key}
-                          </a>
-                          <span className="item-meta">Open full client detail</span>
+                          </button>
+                          <span className="item-meta">Click to edit</span>
                         </td>
                         <td className="table-cell-long">
                           <span className="long-value">{getProviderLabel(route)}</span>

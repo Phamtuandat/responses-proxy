@@ -846,19 +846,35 @@ textarea,
 }
 
 .list-table .data-table {
-  min-width: 760px;
+  min-width: 640px;
 }
 
 .item-title-link {
   display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  min-height: auto;
   max-width: 100%;
   color: var(--text-primary);
   font-weight: 650;
   text-decoration: none;
+  text-align: left;
+  cursor: pointer;
 }
 
 .item-title-link:hover {
   color: var(--accent);
+  transform: none;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.item-title-link:active {
+  transform: none;
 }
 
 .item-meta {
@@ -883,8 +899,8 @@ textarea,
 }
 
 .table-cell-long {
-  min-width: 220px;
-  max-width: 420px;
+  min-width: 180px;
+  max-width: 360px;
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -1074,6 +1090,25 @@ textarea,
   white-space: nowrap;
 }
 
+.list-table .data-table-wrap {
+  overflow-x: auto;
+}
+
+.list-table .row-actions {
+  min-width: 0;
+  white-space: normal;
+  justify-content: flex-start;
+}
+
+.list-table .row-action-button,
+.list-table .row-actions > .button-link {
+  flex: 0 1 auto;
+}
+
+.list-table .provider-status-stack {
+  white-space: normal;
+}
+
 .table-empty,
 .loading-state,
 .empty-state,
@@ -1147,8 +1182,8 @@ textarea,
   display: grid;
   place-items: center;
   padding: var(--space-6);
-  background: rgba(7, 9, 14, 0.38);
-  backdrop-filter: blur(10px);
+  background: rgba(7, 9, 14, 0.52);
+  backdrop-filter: blur(14px) saturate(120%);
   z-index: 40;
 }
 
@@ -1156,6 +1191,16 @@ textarea,
   width: min(100%, 760px);
   padding: var(--space-6);
   border-radius: 30px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 70%, transparent 30%);
+  background: color-mix(in srgb, var(--surface-strong) 96%, var(--bg) 4%);
+  backdrop-filter: blur(18px) saturate(120%);
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.28);
+}
+
+[data-theme="dark"] .modal-card {
+  background: color-mix(in srgb, var(--panel) 94%, black 6%);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42);
 }
 
 .modal-card-sm {

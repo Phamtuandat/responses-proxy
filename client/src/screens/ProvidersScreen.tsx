@@ -475,10 +475,14 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
                     return (
                       <tr className="provider-row" key={provider.id}>
                         <td className="table-cell-long">
-                          <a className="item-title-link" href={`#/providers/${encodeURIComponent(provider.id)}`}>
+                          <button
+                            className="item-title-link"
+                            onClick={() => setEditingProviderId(provider.id)}
+                            type="button"
+                          >
                             {provider.name}
-                          </a>
-                          <span className="item-meta">{active ? "Active provider" : "Open provider detail"}</span>
+                          </button>
+                          <span className="item-meta">{active ? "Active provider • Click to edit" : "Click to edit"}</span>
                         </td>
                         <td className="table-cell-long">
                           <span className="long-value">{formatUnknown(provider.id)}</span>

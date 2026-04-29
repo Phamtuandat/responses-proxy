@@ -441,9 +441,15 @@ export function AccountsScreen({ accountId }: AccountsScreenProps) {
                     const encodedId = encodeURIComponent(account.id ?? "");
                     return (
                       <>
-                        <a className="item-title-link" href={`#/oauth/${encodedId}`}>
+                        <button
+                          className="item-title-link"
+                          onClick={() => {
+                            window.location.hash = `#/oauth/${encodedId}`;
+                          }}
+                          type="button"
+                        >
                           {getAccountLabel(account)}
-                        </a>
+                        </button>
                         <span className="item-meta">Open full account detail</span>
                       </>
                     );
