@@ -2159,21 +2159,29 @@ function loadReactDashboardAssets() {
   };
 }
 
+const CACHE_CONTROL_NO_CACHE = "no-cache";
+const CACHE_CONTROL_IMMUTABLE = "public, max-age=31536000, immutable";
+
 function sendFileResponse(
   reply: {
+    header(name: string, value: string): unknown;
     type(contentType: string): { send(payload: Buffer | string): unknown };
   },
   asset: { body: Buffer | string; contentType: string },
+  cacheControl: string = CACHE_CONTROL_NO_CACHE,
 ) {
+  reply.header("Cache-Control", cacheControl);
   return reply.type(asset.contentType).send(asset.body);
 }
 
 function serveLegacyDashboard(
   reply: {
+    header(name: string, value: string): unknown;
     type(contentType: string): { send(payload: Buffer | string): unknown };
   },
   useLegacyPathPrefix: boolean = false,
 ) {
+  reply.header("Cache-Control", CACHE_CONTROL_NO_CACHE);
   return reply
     .type("text/html; charset=utf-8")
     .send(useLegacyPathPrefix ? legacyDashboard.legacyIndexHtml : legacyDashboard.indexHtml);
@@ -2181,12 +2189,14 @@ function serveLegacyDashboard(
 
 function serveReactDashboard(
   reply: {
+    header(name: string, value: string): unknown;
     type(contentType: string): { send(payload: Buffer | string): unknown };
   },
 ) {
   if (!reactDashboard) {
     throw new Error("React dashboard assets were not loaded");
   }
+  reply.header("Cache-Control", CACHE_CONTROL_NO_CACHE);
   return reply.type("text/html; charset=utf-8").send(reactDashboard.indexHtml);
 }
 
@@ -2194,6 +2204,7 @@ async function serveReactAsset(
   assetPath: string,
   reply: {
     code(statusCode: number): { send(payload: Record<string, unknown>): unknown };
+    header(name: string, value: string): unknown;
     type(contentType: string): { send(payload: Buffer | string): unknown };
   },
 ) {
@@ -2213,6 +2224,7 @@ async function serveReactAsset(
 
   try {
     const body = await readFile(fullPath);
+    reply.header("Cache-Control", CACHE_CONTROL_IMMUTABLE);
     return reply.type(resolveDashboardAssetContentType(fullPath)).send(body);
   } catch {
     return reply.code(404).send({
