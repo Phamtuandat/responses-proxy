@@ -768,15 +768,25 @@ textarea,
 .provider-layout,
 .client-layout,
 .accounts-main-layout {
-  grid-template-columns:
-    minmax(0, 1fr)
-    minmax(var(--detail-column-min), var(--detail-column-max));
-  align-items: start;
+  grid-template-columns: 1fr;
+  align-items: stretch;
 }
 
 .accounts-top-layout,
 .quick-apply-layout {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detail-page-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.detail-page-grid-wide {
+  display: grid;
+  gap: var(--space-5);
 }
 
 .provider-form,
@@ -831,6 +841,54 @@ textarea,
   overflow-wrap: anywhere;
 }
 
+.list-card {
+  min-width: 0;
+}
+
+.list-table .data-table {
+  min-width: 760px;
+}
+
+.item-title-link {
+  display: inline-flex;
+  max-width: 100%;
+  color: var(--text-primary);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.item-title-link:hover {
+  color: var(--accent);
+}
+
+.item-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.long-value {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.truncate-value {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-cell-long {
+  min-width: 220px;
+  max-width: 420px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .metadata-pills {
   display: flex;
   flex-wrap: wrap;
@@ -860,12 +918,6 @@ textarea,
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
   margin: 0;
-}
-
-.provider-layout .detail-list,
-.client-layout .detail-list,
-.accounts-main-layout .detail-list {
-  grid-template-columns: 1fr;
 }
 
 .detail-list div {
@@ -1197,16 +1249,8 @@ textarea,
 }
 
 @media (max-width: 1100px) {
-  .provider-layout,
-  .client-layout,
-  .accounts-main-layout {
+  .detail-page-grid {
     grid-template-columns: 1fr;
-  }
-
-  .provider-layout .detail-list,
-  .client-layout .detail-list,
-  .accounts-main-layout .detail-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1345,6 +1389,8 @@ textarea,
   }
 
   .screen-stack,
+  .detail-page-grid,
+  .detail-page-grid-wide,
   .provider-detail-sections,
   .detail-list,
   .client-form-grid,
@@ -1393,12 +1439,6 @@ textarea,
   .refresh-button,
   .theme-toggle {
     min-height: 44px;
-  }
-
-  .provider-layout .detail-list,
-  .client-layout .detail-list,
-  .accounts-main-layout .detail-list {
-    grid-template-columns: 1fr;
   }
 
   .data-table {

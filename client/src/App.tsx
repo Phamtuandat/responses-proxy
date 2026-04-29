@@ -14,6 +14,20 @@ import { UsageScreen } from "./screens/UsageScreen";
 export type AppRoute =
   | "dashboard"
   | "providers"
+  | "provider-detail"
+  | "clients"
+  | "client-detail"
+  | "oauth"
+  | "account-detail"
+  | "auth-management"
+  | "config-helper"
+  | "usage"
+  | "rtk"
+  | "cache";
+
+export type NavRoute =
+  | "dashboard"
+  | "providers"
   | "clients"
   | "oauth"
   | "auth-management"
@@ -25,12 +39,19 @@ export type AppRoute =
 export type Theme = "light" | "dark";
 
 export type NavItem = {
-  route: AppRoute;
+  route: NavRoute;
   label: string;
 };
 
+type RouteState = {
+  route: AppRoute;
+  baseRoute: NavRoute;
+  params: Record<string, string>;
+  isUnknown: boolean;
+};
+
 const THEME_STORAGE_KEY = "responses-proxy-theme";
-const DEFAULT_ROUTE: AppRoute = "dashboard";
+const DEFAULT_ROUTE: NavRoute = "dashboard";
 
 const navItems: NavItem[] = [
   { route: "dashboard", label: "Dashboard" },
@@ -44,16 +65,75 @@ const navItems: NavItem[] = [
   { route: "cache", label: "Cache" },
 ];
 
-const routeSet = new Set<AppRoute>(navItems.map((item) => item.route));
+const navRouteSet = new Set<NavRoute>(navItems.map((item) => item.route));
 
-function readRouteFromHash(): { route: AppRoute; isUnknown: boolean } {
-  const route = window.location.hash.replace(/^#\/?/, "").trim();
+function decodeRouteParam(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
-  if (routeSet.has(route as AppRoute)) {
-    return { route: route as AppRoute, isUnknown: false };
+function readRouteFromHash(): RouteState {
+  const raw = window.location.hash.replace(/^#\/?/, "").trim();
+  const segments = raw.split("/").filter(Boolean);
+  const baseRoute = segments[0];
+
+  if (!baseRoute) {
+    return {
+      route: DEFAULT_ROUTE,
+      baseRoute: DEFAULT_ROUTE,
+      params: {},
+      isUnknown: false,
+    };
   }
 
-  return { route: DEFAULT_ROUTE, isUnknown: route.length > 0 };
+  if (!navRouteSet.has(baseRoute as NavRoute)) {
+    return {
+      route: DEFAULT_ROUTE,
+      baseRoute: DEFAULT_ROUTE,
+      params: {},
+      isUnknown: true,
+    };
+  }
+
+  const resolvedBaseRoute = baseRoute as NavRoute;
+  const detailId = segments[1] ? decodeRouteParam(segments[1]) : "";
+
+  if (resolvedBaseRoute === "providers") {
+    return {
+      route: detailId ? "provider-detail" : "providers",
+      baseRoute: resolvedBaseRoute,
+      params: detailId ? { providerId: detailId } : {},
+      isUnknown: segments.length > 2,
+    };
+  }
+
+  if (resolvedBaseRoute === "clients") {
+    return {
+      route: detailId ? "client-detail" : "clients",
+      baseRoute: resolvedBaseRoute,
+      params: detailId ? { clientKey: detailId } : {},
+      isUnknown: segments.length > 2,
+    };
+  }
+
+  if (resolvedBaseRoute === "oauth") {
+    return {
+      route: detailId ? "account-detail" : "oauth",
+      baseRoute: resolvedBaseRoute,
+      params: detailId ? { accountId: detailId } : {},
+      isUnknown: segments.length > 2,
+    };
+  }
+
+  return {
+    route: resolvedBaseRoute,
+    baseRoute: resolvedBaseRoute,
+    params: {},
+    isUnknown: segments.length > 1,
+  };
 }
 
 function readInitialTheme(): Theme {
@@ -69,8 +149,8 @@ function readInitialTheme(): Theme {
   return "light";
 }
 
-function renderScreen(route: AppRoute, isUnknown: boolean) {
-  if (isUnknown) {
+function renderScreen(routeState: RouteState) {
+  if (routeState.isUnknown) {
     return (
       <EmptyState
         title="Route not found"
@@ -81,13 +161,19 @@ function renderScreen(route: AppRoute, isUnknown: boolean) {
     );
   }
 
-  switch (route) {
+  switch (routeState.route) {
     case "providers":
       return <ProvidersScreen />;
+    case "provider-detail":
+      return <ProvidersScreen providerId={routeState.params.providerId} />;
     case "clients":
       return <ClientsScreen />;
+    case "client-detail":
+      return <ClientsScreen clientKey={routeState.params.clientKey} />;
     case "oauth":
       return <AccountsScreen />;
+    case "account-detail":
+      return <AccountsScreen accountId={routeState.params.accountId} />;
     case "auth-management":
       return <AuthScreen />;
     case "config-helper":
@@ -105,7 +191,7 @@ function renderScreen(route: AppRoute, isUnknown: boolean) {
 }
 
 export function App() {
-  const [routeState, setRouteState] = useState(readRouteFromHash);
+  const [routeState, setRouteState] = useState<RouteState>(readRouteFromHash);
   const [theme, setTheme] = useState<Theme>(readInitialTheme);
 
   useEffect(() => {
@@ -132,14 +218,11 @@ export function App() {
     setTheme((currentTheme) => (currentTheme === "dark" ? "light" : "dark"));
   }, []);
 
-  const screen = useMemo(
-    () => renderScreen(routeState.route, routeState.isUnknown),
-    [routeState],
-  );
+  const screen = useMemo(() => renderScreen(routeState), [routeState]);
 
   return (
     <AppShell
-      currentRoute={routeState.route}
+      currentRoute={routeState.baseRoute}
       navItems={navItems}
       theme={theme}
       onToggleTheme={toggleTheme}

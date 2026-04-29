@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { createProvider, deleteProvider, getProviders, updateProvider } from "../api/client";
 import type {
   ClientRouteSummary,
@@ -165,9 +165,12 @@ function getInitialFormData(provider?: ProviderSummary | null): Partial<Provider
   };
 }
 
-export function ProvidersScreen() {
+type ProvidersScreenProps = {
+  providerId?: string;
+};
+
+export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
   const [query, setQuery] = useState("");
-  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<MutationFeedback | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
@@ -191,30 +194,7 @@ export function ProvidersScreen() {
     () => providers.filter((provider) => providerMatchesQuery(provider, query)),
     [providers, query],
   );
-
-  useEffect(() => {
-    if (!filteredProviders.length) {
-      if (selectedProviderId !== null) {
-        setSelectedProviderId(null);
-      }
-      return;
-    }
-
-    if (selectedProviderId && filteredProviders.some((provider) => provider.id === selectedProviderId)) {
-      return;
-    }
-
-    const nextSelection =
-      filteredProviders.find((provider) => isProviderActive(provider, activeProviderId)) ?? filteredProviders[0];
-    if (nextSelection && nextSelection.id !== selectedProviderId) {
-      setSelectedProviderId(nextSelection.id);
-    }
-  }, [activeProviderId, filteredProviders, selectedProviderId]);
-
-  const selectedProvider =
-    filteredProviders.find((provider) => provider.id === selectedProviderId) ??
-    providers.find((provider) => provider.id === selectedProviderId) ??
-    null;
+  const selectedProvider = providerId ? providers.find((provider) => provider.id === providerId) ?? null : null;
   const editingProvider = providers.find((provider) => provider.id === editingProviderId) ?? null;
   const deletingProvider = providers.find((provider) => provider.id === deletingProviderId) ?? null;
 
@@ -271,6 +251,9 @@ export function ProvidersScreen() {
       await deleteProvider(deletingProvider.id);
       setFeedback({ variant: "success", message: `Deleted provider ${deletingProvider.name}.` });
       setDeletingProviderId(null);
+      if (providerId === deletingProvider.id) {
+        window.location.hash = "#/providers";
+      }
       retry();
     } catch (caughtError) {
       setFeedback({
@@ -298,15 +281,45 @@ export function ProvidersScreen() {
   return (
     <div className="screen-stack">
       <PageHeader
-        eyebrow="Providers"
-        title="Provider inventory"
-        description="Manage upstream providers, account-backed routes, request policy metadata, and key coverage."
+        eyebrow={providerId ? "Provider detail" : "Providers"}
+        title={providerId && selectedProvider ? selectedProvider.name : "Provider inventory"}
+        description={
+          providerId
+            ? selectedProvider
+              ? formatUnknown(selectedProvider.baseUrl)
+              : "Inspect provider metadata, policies, and capability summaries."
+            : "Manage upstream providers, account-backed routes, request policy metadata, and key coverage."
+        }
         actions={
           <div className="page-header-actions page-header-actions-group">
-            <RefreshButton onClick={retry} />
-            <button className="button-link button-primary" onClick={() => setIsCreateOpen(true)} type="button">
-              Create Provider
-            </button>
+            {providerId ? (
+              <>
+                <a className="button-link" href="#/providers">
+                  Back to providers
+                </a>
+                {selectedProvider ? (
+                  <>
+                    <button className="button-link" onClick={() => setEditingProviderId(selectedProvider.id)} type="button">
+                      Edit provider
+                    </button>
+                    <button
+                      className="button-link button-danger"
+                      onClick={() => setDeletingProviderId(selectedProvider.id)}
+                      type="button"
+                    >
+                      Delete provider
+                    </button>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <RefreshButton onClick={retry} />
+                <button className="button-link button-primary" onClick={() => setIsCreateOpen(true)} type="button">
+                  Create Provider
+                </button>
+              </>
+            )}
           </div>
         }
       />
@@ -319,198 +332,195 @@ export function ProvidersScreen() {
         />
       ) : null}
 
-      <div className="stat-grid">
-        <StatCard label="Total providers" value={formatNumber(providers.length)} />
-        <StatCard label="Active provider" value={formatUnknown(activeProviderId)} />
-        <StatCard label="Providers with keys" value={formatNumber(providersWithKeysCount)} />
-        <StatCard label="Client routes" value={formatNumber(clientRoutes.length)} />
-        <StatCard label="OAuth/account-backed" value={formatNumber(accountBackedCount)} />
-      </div>
+      {!providerId ? (
+        <>
+          <div className="stat-grid">
+            <StatCard label="Total providers" value={formatNumber(providers.length)} />
+            <StatCard label="Active provider" value={formatUnknown(activeProviderId)} />
+            <StatCard label="Providers with keys" value={formatNumber(providersWithKeysCount)} />
+            <StatCard label="Client routes" value={formatNumber(clientRoutes.length)} />
+            <StatCard label="OAuth/account-backed" value={formatNumber(accountBackedCount)} />
+          </div>
 
-      <SurfaceCard title="Search providers" description="Filter by name, ID, base URL, auth mode, or capability metadata.">
-        <div className="provider-search">
-          <label className="field-label" htmlFor="provider-search">
-            Search provider inventory
-          </label>
-          <input
-            className="search-input"
-            id="provider-search"
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by provider name, ID, URL, auth mode, or owner"
-            type="search"
-            value={query}
+          <SurfaceCard title="Search providers" description="Filter by name, ID, base URL, auth mode, or capability metadata.">
+            <div className="provider-search">
+              <label className="field-label" htmlFor="provider-search">
+                Search provider inventory
+              </label>
+              <input
+                className="search-input"
+                id="provider-search"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search by provider name, ID, URL, auth mode, or owner"
+                type="search"
+                value={query}
+              />
+            </div>
+          </SurfaceCard>
+        </>
+      ) : null}
+
+      {providerId ? (
+        !selectedProvider ? (
+          <EmptyState
+            title="Provider not found"
+            description="This provider ID is not available in the current runtime snapshot."
+            actionHref="#/providers"
+            actionLabel="Back to providers"
           />
-        </div>
-      </SurfaceCard>
+        ) : (
+          <div className="screen-stack">
+            <div className="detail-page-grid">
+              <SurfaceCard title="Overview" description="Provider identity, connectivity, and lifecycle metadata.">
+                <div className="provider-detail">
+                  <div className="hero-status">
+                    <div>
+                      <p className="eyebrow">Provider detail</p>
+                      <h2>{selectedProvider.name}</h2>
+                      <p className="long-value">{formatUnknown(selectedProvider.baseUrl)}</p>
+                    </div>
+                    <div className="card-inline-status">
+                      {isProviderActive(selectedProvider, activeProviderId) ? (
+                        <StatusBadge variant="success">Active</StatusBadge>
+                      ) : null}
+                      <StatusBadge variant={isProviderAvailable(selectedProvider) ? "accent" : "warning"}>
+                        {isProviderAvailable(selectedProvider) ? "Available" : "Needs key"}
+                      </StatusBadge>
+                      <StatusBadge variant="neutral">{formatUnknown(selectedProvider.authMode)}</StatusBadge>
+                    </div>
+                  </div>
 
-      {providers.length === 0 ? (
+                  <dl className="detail-list">
+                    <div><dt>Name</dt><dd className="long-value">{formatUnknown(selectedProvider.name)}</dd></div>
+                    <div><dt>ID</dt><dd className="long-value">{formatUnknown(selectedProvider.id)}</dd></div>
+                    <div><dt>Base URL</dt><dd className="long-value">{formatUnknown(selectedProvider.baseUrl)}</dd></div>
+                    <div><dt>Auth mode</dt><dd>{formatUnknown(selectedProvider.authMode)}</dd></div>
+                    <div><dt>Account ID</dt><dd className="long-value">{formatUnknown(selectedProvider.chatgptAccountId)}</dd></div>
+                    <div><dt>Provider API keys</dt><dd>{formatNumber(getProviderKeyCount(selectedProvider))}</dd></div>
+                    <div><dt>Created</dt><dd>{formatDateTime(selectedProvider.createdAt)}</dd></div>
+                    <div><dt>Updated</dt><dd>{formatDateTime(selectedProvider.updatedAt)}</dd></div>
+                  </dl>
+                </div>
+              </SurfaceCard>
+
+              <SurfaceCard title="Policies" description="Current request, RTK, and error policy summary.">
+                <section className="provider-detail-section">
+                  <dl className="provider-meta-list">
+                    <div><dt>Request policy</dt><dd className="long-value">{summarizeRequestPolicy(selectedProvider)}</dd></div>
+                    <div>
+                      <dt>RTK policy</dt>
+                      <dd className="long-value">
+                        {summarizeRtkPolicy(
+                          isRecord(selectedProvider.capabilities) ? selectedProvider.capabilities.rtkPolicy : undefined,
+                        )}
+                      </dd>
+                    </div>
+                    <div><dt>Error policy</dt><dd className="long-value">{summarizeErrorPolicy(selectedProvider)}</dd></div>
+                  </dl>
+                </section>
+              </SurfaceCard>
+            </div>
+
+            <SurfaceCard title="Capabilities" description="Capability labels reported by the provider runtime.">
+              <div className="metadata-pills">
+                {summarizeCapabilityPills(selectedProvider).length ? (
+                  summarizeCapabilityPills(selectedProvider).map((item) => (
+                    <span className="metadata-pill" key={item}>
+                      {item}
+                    </span>
+                  ))
+                ) : (
+                  <span className="metadata-pill">No extra capability labels reported</span>
+                )}
+              </div>
+            </SurfaceCard>
+          </div>
+        )
+      ) : providers.length === 0 ? (
         <EmptyState
           title="No providers configured"
           description="The backend did not report any runtime providers yet."
         />
       ) : (
-        <div className="provider-layout">
-          <SurfaceCard
-            title="Provider list"
-            description={`${formatNumber(filteredProviders.length)} provider${filteredProviders.length === 1 ? "" : "s"} match the current filter.`}
-          >
-            {!filteredProviders.length ? (
-              <div className="table-empty">
-                <strong>No providers match this search</strong>
-                <p>Try a broader query to see the full provider inventory.</p>
-              </div>
-            ) : (
-              <div className="data-table-wrap">
-                <table className="data-table provider-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Name</th>
-                      <th scope="col">ID</th>
-                      <th scope="col">Auth</th>
-                      <th scope="col">Base URL</th>
-                      <th className="align-right" scope="col">Keys</th>
-                      <th scope="col">Status</th>
-                      <th scope="col">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredProviders.map((provider) => {
-                      const active = isProviderActive(provider, activeProviderId);
-                      const available = isProviderAvailable(provider);
-                      const selected = provider.id === selectedProviderId;
-                      const isEditingRow = mutationTarget === provider.id;
+        <SurfaceCard
+          className="list-card list-table"
+          title="Provider list"
+          description={`${formatNumber(filteredProviders.length)} provider${filteredProviders.length === 1 ? "" : "s"} match the current filter.`}
+        >
+          {!filteredProviders.length ? (
+            <div className="table-empty">
+              <strong>No providers match this search</strong>
+              <p>Try a broader query to see the full provider inventory.</p>
+            </div>
+          ) : (
+            <div className="data-table-wrap">
+              <table className="data-table provider-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">ID</th>
+                    <th scope="col">Auth</th>
+                    <th scope="col">Base URL</th>
+                    <th className="align-right" scope="col">Keys</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredProviders.map((provider) => {
+                    const active = isProviderActive(provider, activeProviderId);
+                    const available = isProviderAvailable(provider);
+                    const isEditingRow = mutationTarget === provider.id;
 
-                      return (
-                        <tr className={selected ? "provider-row provider-row-selected" : "provider-row"} key={provider.id}>
-                          <td>
+                    return (
+                      <tr className="provider-row" key={provider.id}>
+                        <td className="table-cell-long">
+                          <a className="item-title-link" href={`#/providers/${encodeURIComponent(provider.id)}`}>
+                            {provider.name}
+                          </a>
+                          <span className="item-meta">{active ? "Active provider" : "Open provider detail"}</span>
+                        </td>
+                        <td className="table-cell-long">
+                          <span className="long-value">{formatUnknown(provider.id)}</span>
+                        </td>
+                        <td>{formatUnknown(provider.authMode)}</td>
+                        <td className="provider-url-cell table-cell-long">
+                          <span className="long-value">{formatUnknown(provider.baseUrl)}</span>
+                        </td>
+                        <td className="align-right">{formatNumber(getProviderKeyCount(provider))}</td>
+                        <td>
+                          <div className="provider-status-stack">
+                            {active ? <StatusBadge variant="success">Active</StatusBadge> : null}
+                            <StatusBadge variant={available ? "accent" : "warning"}>
+                              {available ? "Available" : "Needs key"}
+                            </StatusBadge>
+                          </div>
+                        </td>
+                        <td>
+                          <div className="row-actions">
+                            <a className="button-link row-action-button" href={`#/providers/${encodeURIComponent(provider.id)}`}>
+                              Details
+                            </a>
+                            <button className="button-link row-action-button" onClick={() => setEditingProviderId(provider.id)} type="button">
+                              {isEditingRow ? "Saving..." : "Edit"}
+                            </button>
                             <button
-                              aria-pressed={selected}
-                              className="provider-row-button"
-                              onClick={() => setSelectedProviderId(provider.id)}
+                              className="button-link button-danger row-action-button"
+                              onClick={() => setDeletingProviderId(provider.id)}
                               type="button"
                             >
-                              <span className="provider-row-name">{provider.name}</span>
-                              <span className="provider-row-meta">{selected ? "Selected" : "View details"}</span>
+                              Delete
                             </button>
-                          </td>
-                          <td>{formatUnknown(provider.id)}</td>
-                          <td>{formatUnknown(provider.authMode)}</td>
-                          <td className="provider-url-cell">{formatUnknown(provider.baseUrl)}</td>
-                          <td className="align-right">{formatNumber(getProviderKeyCount(provider))}</td>
-                          <td>
-                            <div className="provider-status-stack">
-                              {active ? <StatusBadge variant="success">Active</StatusBadge> : null}
-                              <StatusBadge variant={available ? "accent" : "warning"}>
-                                {available ? "Available" : "Needs key"}
-                              </StatusBadge>
-                            </div>
-                          </td>
-                          <td>
-                            <div className="row-actions">
-                              <button className="button-link row-action-button" onClick={() => setEditingProviderId(provider.id)} type="button">
-                                {isEditingRow ? "Saving..." : "Edit"}
-                              </button>
-                              <button
-                                className="button-link button-danger row-action-button"
-                                onClick={() => setDeletingProviderId(provider.id)}
-                                type="button"
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </SurfaceCard>
-
-          <SurfaceCard title="Selected provider" description="Read-only details for the current provider selection.">
-            {!selectedProvider ? (
-              <div className="table-empty">
-                <strong>No provider selected</strong>
-                <p>Select a provider from the inventory list to inspect its runtime metadata.</p>
-              </div>
-            ) : (
-              <div className="provider-detail">
-                <div className="hero-status">
-                  <div>
-                    <p className="eyebrow">Provider detail</p>
-                    <h2>{selectedProvider.name}</h2>
-                    <p>{formatUnknown(selectedProvider.baseUrl)}</p>
-                  </div>
-                  <div className="card-inline-status">
-                    {isProviderActive(selectedProvider, activeProviderId) ? (
-                      <StatusBadge variant="success">Active</StatusBadge>
-                    ) : null}
-                    <StatusBadge variant={isProviderAvailable(selectedProvider) ? "accent" : "warning"}>
-                      {isProviderAvailable(selectedProvider) ? "Available" : "Needs key"}
-                    </StatusBadge>
-                    <StatusBadge variant="neutral">{formatUnknown(selectedProvider.authMode)}</StatusBadge>
-                  </div>
-                </div>
-
-                <div className="row-actions">
-                  <button className="button-link" onClick={() => setEditingProviderId(selectedProvider.id)} type="button">
-                    Edit provider
-                  </button>
-                  <button className="button-link button-danger" onClick={() => setDeletingProviderId(selectedProvider.id)} type="button">
-                    Delete provider
-                  </button>
-                </div>
-
-                <dl className="detail-list">
-                  <div><dt>Name</dt><dd>{formatUnknown(selectedProvider.name)}</dd></div>
-                  <div><dt>ID</dt><dd>{formatUnknown(selectedProvider.id)}</dd></div>
-                  <div><dt>Base URL</dt><dd>{formatUnknown(selectedProvider.baseUrl)}</dd></div>
-                  <div><dt>Auth mode</dt><dd>{formatUnknown(selectedProvider.authMode)}</dd></div>
-                  <div><dt>Account ID</dt><dd>{formatUnknown(selectedProvider.chatgptAccountId)}</dd></div>
-                  <div><dt>Provider API keys</dt><dd>{formatNumber(getProviderKeyCount(selectedProvider))}</dd></div>
-                  <div><dt>Created</dt><dd>{formatDateTime(selectedProvider.createdAt)}</dd></div>
-                  <div><dt>Updated</dt><dd>{formatDateTime(selectedProvider.updatedAt)}</dd></div>
-                </dl>
-
-                <div className="provider-detail-sections">
-                  <section className="provider-detail-section">
-                    <h3>Capabilities</h3>
-                    <div className="metadata-pills">
-                      {summarizeCapabilityPills(selectedProvider).length ? (
-                        summarizeCapabilityPills(selectedProvider).map((item) => (
-                          <span className="metadata-pill" key={item}>
-                            {item}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="metadata-pill">No extra capability labels reported</span>
-                      )}
-                    </div>
-                  </section>
-
-                  <section className="provider-detail-section">
-                    <h3>Policies</h3>
-                    <dl className="provider-meta-list">
-                      <div><dt>Request policy</dt><dd>{summarizeRequestPolicy(selectedProvider)}</dd></div>
-                      <div>
-                        <dt>RTK policy</dt>
-                        <dd>
-                          {summarizeRtkPolicy(
-                            isRecord(selectedProvider.capabilities)
-                              ? selectedProvider.capabilities.rtkPolicy
-                              : undefined,
-                          )}
-                        </dd>
-                      </div>
-                      <div><dt>Error policy</dt><dd>{summarizeErrorPolicy(selectedProvider)}</dd></div>
-                    </dl>
-                  </section>
-                </div>
-              </div>
-            )}
-          </SurfaceCard>
-        </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </SurfaceCard>
       )}
 
       <SurfaceCard title="Client route bindings" description="Read-only route-to-provider mapping and policy summary.">

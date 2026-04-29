@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
-import type { AppRoute, NavItem, Theme } from "../App";
+import type { NavItem, NavRoute, Theme } from "../App";
 import { Sidebar } from "./Sidebar";
 import { TopToolbar } from "./TopToolbar";
 
 type AppShellProps = {
-  currentRoute: AppRoute;
+  currentRoute: NavRoute;
   navItems: NavItem[];
   theme: Theme;
   onToggleTheme: () => void;

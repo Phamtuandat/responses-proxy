@@ -1,7 +1,7 @@
-import type { AppRoute, NavItem } from "../App";
+import type { NavItem, NavRoute } from "../App";
 
 type SidebarProps = {
-  currentRoute: AppRoute;
+  currentRoute: NavRoute;
   navItems: NavItem[];
 };
 
