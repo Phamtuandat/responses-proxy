@@ -16,6 +16,8 @@ import type {
   ProviderMutationResponse,
   PromptCacheLatestResponse,
   ProvidersResponse,
+  RtkPolicyInput,
+  RtkPolicyMutationResponse,
   UsageStatsResponse,
 } from "./types";
 
@@ -106,8 +108,16 @@ export function getUsageStats() {
   return apiGet<UsageStatsResponse>("/api/stats/usage");
 }
 
-export function getPromptCacheLatest() {
-  return apiGet<PromptCacheLatestResponse>("/api/debug/prompt-cache/latest");
+export function updateRtkPolicy(client: string, policy: RtkPolicyInput) {
+  return apiSend<RtkPolicyMutationResponse>("/api/rtk-policies", "POST", {
+    client,
+    policy,
+  });
+}
+
+export function getPromptCacheLatest(providerId?: string) {
+  const search = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
+  return apiGet<PromptCacheLatestResponse>(`/api/debug/prompt-cache/latest${search}`);
 }
 
 export function getChatGptOAuthStatus() {

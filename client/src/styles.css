@@ -770,6 +770,18 @@ a:focus-visible {
   gap: 14px;
 }
 
+.rtk-form-grid {
+  margin-top: 4px;
+}
+
+.rtk-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
 .oauth-card {
   display: grid;
   gap: 16px;

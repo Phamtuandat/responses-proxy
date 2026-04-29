@@ -194,6 +194,24 @@ export type UsageStatsResponse = {
   [key: string]: unknown;
 };
 
+export type RtkPolicyInput = {
+  enabled?: boolean;
+  toolOutputEnabled?: boolean;
+  maxChars?: number;
+  maxLines?: number;
+  tailLines?: number;
+  tailChars?: number;
+  detectFormat?: "auto" | "plain" | "json" | "stack" | "command";
+};
+
+export type RtkPolicyMutationResponse = {
+  ok?: boolean;
+  client?: string;
+  rtkPolicy?: RtkPolicyInput | null;
+  clientRoutes?: ClientRouteSummary[];
+  [key: string]: unknown;
+};
+
 export type PromptCacheObservation = {
   requestId?: string;
   providerId?: string;
