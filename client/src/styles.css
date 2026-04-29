@@ -667,6 +667,10 @@ textarea:disabled {
   padding-inline: var(--space-3);
 }
 
+.row-action-button {
+  white-space: nowrap;
+}
+
 .search-input,
 select,
 textarea,
@@ -1123,7 +1127,7 @@ textarea,
 }
 
 .list-table .row-actions {
-  min-width: 0;
+  min-width: max-content;
   white-space: normal;
   justify-content: flex-start;
   align-items: flex-start;
@@ -1132,7 +1136,12 @@ textarea,
 
 .list-table .row-action-button,
 .list-table .row-actions > .button-link {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+}
+
+.list-table th:last-child,
+.list-table td[data-label="Actions"] {
+  min-width: 172px;
 }
 
 .list-table .provider-status-stack {

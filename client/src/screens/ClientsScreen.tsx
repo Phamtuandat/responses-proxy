@@ -521,8 +521,6 @@ export function ClientsScreen({ clientKey }: ClientsScreenProps) {
                 <thead>
                   <tr>
                     <th scope="col">Client</th>
-                    <th scope="col">Provider</th>
-                    <th scope="col">Model override</th>
                     <th className="align-right" scope="col">API keys</th>
                     <th scope="col">Token limit</th>
                     <th scope="col">Status</th>
@@ -546,15 +544,18 @@ export function ClientsScreen({ clientKey }: ClientsScreenProps) {
                           >
                             {route.key}
                           </button>
-                          <span className="item-meta truncate-value" title={getProviderLabel(route)}>
-                            {getProviderLabel(route)}
+                          <span
+                            className="item-meta truncate-value"
+                            title={
+                              typeof route.modelOverride === "string" && route.modelOverride.trim()
+                                ? `${getProviderLabel(route)} • ${route.modelOverride}`
+                                : getProviderLabel(route)
+                            }
+                          >
+                            {typeof route.modelOverride === "string" && route.modelOverride.trim()
+                              ? `${getProviderLabel(route)} • ${route.modelOverride}`
+                              : getProviderLabel(route)}
                           </span>
-                        </td>
-                        <td className="table-cell-long" data-label="Provider">
-                          <span className="long-value">{getProviderLabel(route)}</span>
-                        </td>
-                        <td className="table-cell-long" data-label="Model override">
-                          <span className="long-value">{formatUnknown(route.modelOverride)}</span>
                         </td>
                         <td className="align-right" data-label="API keys">{formatNumber(getRouteApiKeyCount(route))}</td>
                         <td className="table-cell-long" data-label="Token limit">
