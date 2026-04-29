@@ -11,7 +11,7 @@ The app now serves the React dashboard by default after `npm run build`.
 - Set `DASHBOARD_UI=legacy` to roll back `/` to the legacy dashboard
 
 React assets are served from `/assets/*`.
-Legacy assets remain available under `/legacy/*`.
+Legacy assets are served from `/legacy/*`.
 
 Validation:
 
