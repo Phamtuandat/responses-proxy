@@ -450,7 +450,10 @@ export function AccountsScreen({ accountId }: AccountsScreenProps) {
                         >
                           {getAccountLabel(account)}
                         </button>
-                        <span className="item-meta">Open full account detail</span>
+                        <span className="item-meta">
+                          {formatUnknown(account.accountId)} • {account.disabled === true ? "Disabled" : "Enabled"} • Open full
+                          account detail
+                        </span>
                       </>
                     );
                   },
@@ -527,6 +530,7 @@ export function AccountsScreen({ accountId }: AccountsScreenProps) {
               emptyDescription="No connected OAuth accounts are currently reported."
               emptyTitle="No accounts connected"
               rows={accounts as Array<Record<string, unknown>>}
+              tableClassName="accounts-table"
             />
           </SurfaceCard>
         </>

@@ -850,8 +850,9 @@ textarea,
 }
 
 .item-title-link {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
@@ -883,6 +884,7 @@ textarea,
   color: var(--text-muted);
   font-size: var(--text-sm);
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .long-value {
@@ -1098,6 +1100,7 @@ textarea,
   min-width: 0;
   white-space: normal;
   justify-content: flex-start;
+  align-items: flex-start;
 }
 
 .list-table .row-action-button,
@@ -1480,6 +1483,48 @@ textarea,
     flex: 1 1 auto;
   }
 
+  .list-table .row-actions > *,
+  .list-table .row-action-button,
+  .list-table .row-actions > .button-link {
+    flex: 0 0 auto;
+  }
+
+  .provider-table th:nth-child(2),
+  .provider-table td:nth-child(2),
+  .provider-table th:nth-child(3),
+  .provider-table td:nth-child(3) {
+    display: none;
+  }
+
+  .provider-table th:nth-child(4),
+  .provider-table td:nth-child(4) {
+    min-width: 220px;
+  }
+
+  .provider-table th:nth-child(7),
+  .provider-table td:nth-child(7),
+  .accounts-table th:nth-child(5),
+  .accounts-table td:nth-child(5) {
+    min-width: 180px;
+  }
+
+  .provider-table td:first-child,
+  .clients-table td:first-child,
+  .accounts-table td:first-child {
+    min-width: 190px;
+  }
+
+  .clients-table th:nth-child(3),
+  .clients-table td:nth-child(3),
+  .clients-table th:nth-child(5),
+  .clients-table td:nth-child(5),
+  .accounts-table th:nth-child(2),
+  .accounts-table td:nth-child(2),
+  .accounts-table th:nth-child(4),
+  .accounts-table td:nth-child(4) {
+    display: none;
+  }
+
   .button-link,
   .refresh-button,
   .theme-toggle {
@@ -1517,6 +1562,11 @@ textarea,
   .data-table th,
   .data-table td {
     padding: 10px 12px;
+  }
+
+  .list-table .data-table,
+  .accounts-table {
+    min-width: 560px;
   }
 }
 

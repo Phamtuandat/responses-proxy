@@ -482,7 +482,10 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
                           >
                             {provider.name}
                           </button>
-                          <span className="item-meta">{active ? "Active provider • Click to edit" : "Click to edit"}</span>
+                          <span className="item-meta">
+                            {formatUnknown(provider.id)} • {formatUnknown(provider.authMode)} •{" "}
+                            {active ? "Active provider • Click to edit" : "Click to edit"}
+                          </span>
                         </td>
                         <td className="table-cell-long">
                           <span className="long-value">{formatUnknown(provider.id)}</span>

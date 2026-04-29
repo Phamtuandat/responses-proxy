@@ -13,6 +13,7 @@ type DataTableProps<Row extends Record<string, unknown>> = {
   rows: Row[];
   emptyTitle?: string;
   emptyDescription?: string;
+  tableClassName?: string;
 };
 
 export function DataTable<Row extends Record<string, unknown>>({
@@ -20,6 +21,7 @@ export function DataTable<Row extends Record<string, unknown>>({
   rows,
   emptyTitle = "No rows yet",
   emptyDescription = "Data will appear here when the backend reports it.",
+  tableClassName,
 }: DataTableProps<Row>) {
   if (!rows.length) {
     return (
@@ -32,7 +34,7 @@ export function DataTable<Row extends Record<string, unknown>>({
 
   return (
     <div className="data-table-wrap">
-      <table className="data-table">
+      <table className={tableClassName ? `data-table ${tableClassName}` : "data-table"}>
         <thead>
           <tr>
             {columns.map((column) => (

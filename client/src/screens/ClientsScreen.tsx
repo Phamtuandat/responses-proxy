@@ -517,7 +517,7 @@ export function ClientsScreen({ clientKey }: ClientsScreenProps) {
             </div>
           ) : (
             <div className="data-table-wrap">
-              <table className="data-table provider-table">
+              <table className="data-table clients-table">
                 <thead>
                   <tr>
                     <th scope="col">Client</th>
@@ -546,7 +546,9 @@ export function ClientsScreen({ clientKey }: ClientsScreenProps) {
                           >
                             {route.key}
                           </button>
-                          <span className="item-meta">Click to edit</span>
+                          <span className="item-meta">
+                            {getProviderLabel(route)} • {formatUnknown(route.modelOverride)} • {summarizeTokenLimit(tokenLimit)}
+                          </span>
                         </td>
                         <td className="table-cell-long">
                           <span className="long-value">{getProviderLabel(route)}</span>
