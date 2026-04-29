@@ -2,6 +2,14 @@
 
 Minimal Fastify proxy for a Responses API upstream.
 
+### Dashboard UI
+
+The app now serves the React dashboard by default after `npm run build`.
+
+Set `DASHBOARD_UI=legacy` to serve the old static dashboard at `/`.
+
+The legacy dashboard remains available at `/legacy`.
+
 ## Implementation Plans
 
 - [ChatGPT OAuth provider](docs/chatgpt-oauth-implementation-plan.md)

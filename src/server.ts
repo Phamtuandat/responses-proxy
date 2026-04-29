@@ -99,7 +99,9 @@ const billingRepository = BillingRepository.create(path.resolve(config.CUSTOMER_
 const chatGptOAuthStore = ChatGptOAuthStore.create(path.resolve(config.APP_DB_PATH));
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
 const publicDir = path.resolve(process.cwd(), "public");
-const publicAssetFiles = [
+const reactClientDir = path.resolve(process.cwd(), "dist", "client");
+const dashboardUi = config.DASHBOARD_UI;
+const legacyAssetFiles = [
   "app.css",
   "app.js",
   "favicon.svg",
@@ -108,18 +110,22 @@ const publicAssetFiles = [
   "dashboard-illustration.svg",
   "providers-illustration.svg",
 ] as const;
-const publicAssets = {
-  indexHtml: readFileSync(path.join(publicDir, "index.html"), "utf8"),
-  files: Object.fromEntries(
-    publicAssetFiles.map((fileName) => [
-      fileName,
-      {
-        body: readFileSync(path.join(publicDir, fileName), "utf8"),
-        contentType: resolvePublicAssetContentType(fileName),
-      },
-    ]),
-  ) as Record<(typeof publicAssetFiles)[number], { body: string; contentType: string }>,
-};
+const dashboardEntryPaths = [
+  "/",
+  "/dashboard",
+  "/providers",
+  "/clients",
+  "/accounts",
+  "/config",
+  "/config-helper",
+  "/usage",
+  "/rtk",
+  "/cache",
+  "/oauth",
+  "/auth-management",
+] as const;
+const legacyDashboard = loadLegacyDashboardAssets();
+const reactDashboard = dashboardUi === "react" ? loadReactDashboardAssets() : null;
 const quickApplyPaths = resolveQuickApplyPaths({
   hermesConfigPath: process.env.QUICK_APPLY_HERMES_CONFIG_PATH,
   codexConfigPath: process.env.QUICK_APPLY_CODEX_CONFIG_PATH,
@@ -1116,19 +1122,40 @@ app.post("/api/providers/delete", async (request, reply) => {
     .then((response) => reply.code(response.statusCode).send(response.json()));
 });
 
-app.get("/", async (_request, reply) => {
-  reply.type("text/html; charset=utf-8").send(publicAssets.indexHtml);
-});
-
-for (const [fileName, asset] of Object.entries(publicAssets.files)) {
-  app.get(`/${fileName}`, async (_request, reply) => {
-    reply.type(asset.contentType).send(asset.body);
+for (const routePath of dashboardEntryPaths) {
+  app.get(routePath, async (_request, reply) => {
+    if (dashboardUi === "legacy") {
+      return serveLegacyDashboard(reply);
+    }
+    return serveReactDashboard(reply);
   });
 }
 
+app.get("/legacy", async (_request, reply) => serveLegacyDashboard(reply, true));
+app.get("/legacy/", async (_request, reply) => serveLegacyDashboard(reply, true));
+
+for (const [fileName, asset] of Object.entries(legacyDashboard.files)) {
+  app.get(`/${fileName}`, async (_request, reply) => {
+    return sendFileResponse(reply, asset);
+  });
+  app.get(`/legacy/${fileName}`, async (_request, reply) => {
+    return sendFileResponse(reply, asset);
+  });
+}
+
+app.get("/assets/*", async (request, reply) => {
+  const params = request.params as { "*": string };
+  return serveReactAsset(params["*"], reply);
+});
+
 app.get("/favicon.ico", async (_request, reply) => {
-  const favicon = publicAssets.files["favicon.svg"];
-  reply.type(favicon.contentType).send(favicon.body);
+  const favicon = legacyDashboard.files["favicon.svg"];
+  return sendFileResponse(reply, favicon);
+});
+
+app.get("/legacy/favicon.ico", async (_request, reply) => {
+  const favicon = legacyDashboard.files["favicon.svg"];
+  return sendFileResponse(reply, favicon);
 });
 
 async function handleProviderUsageCheck(
@@ -2028,7 +2055,10 @@ function readHeaderString(value: unknown): string | undefined {
   return undefined;
 }
 
-function resolvePublicAssetContentType(fileName: string): string {
+function resolveDashboardAssetContentType(fileName: string): string {
+  if (fileName.endsWith(".html")) {
+    return "text/html; charset=utf-8";
+  }
   if (fileName.endsWith(".css")) {
     return "text/css; charset=utf-8";
   }
@@ -2038,7 +2068,161 @@ function resolvePublicAssetContentType(fileName: string): string {
   if (fileName.endsWith(".svg")) {
     return "image/svg+xml; charset=utf-8";
   }
+  if (fileName.endsWith(".ico")) {
+    return "image/x-icon";
+  }
+  if (fileName.endsWith(".json")) {
+    return "application/json; charset=utf-8";
+  }
+  if (fileName.endsWith(".map")) {
+    return "application/json; charset=utf-8";
+  }
+  if (fileName.endsWith(".png")) {
+    return "image/png";
+  }
+  if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (fileName.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (fileName.endsWith(".woff2")) {
+    return "font/woff2";
+  }
+  if (fileName.endsWith(".woff")) {
+    return "font/woff";
+  }
   return "application/octet-stream";
+}
+
+function readTextFileSafe(filePath: string): string | undefined {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function readBufferFileSafe(filePath: string): Buffer | undefined {
+  try {
+    return readFileSync(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function rewriteLegacyDashboardHtmlForLegacyPath(html: string): string {
+  const prefixedAssets = ["favicon.ico", ...legacyAssetFiles];
+  return prefixedAssets.reduce(
+    (output, fileName) => output.replaceAll(`="/${fileName}"`, `="/legacy/${fileName}"`),
+    html,
+  );
+}
+
+function loadLegacyDashboardAssets() {
+  const indexHtml = readTextFileSafe(path.join(publicDir, "index.html"));
+  if (!indexHtml) {
+    throw new Error("Legacy dashboard index.html is missing from public/");
+  }
+
+  return {
+    indexHtml,
+    legacyIndexHtml: rewriteLegacyDashboardHtmlForLegacyPath(indexHtml),
+    files: Object.fromEntries(
+      legacyAssetFiles.map((fileName) => {
+        const body = readBufferFileSafe(path.join(publicDir, fileName));
+        if (!body) {
+          throw new Error(`Legacy dashboard asset is missing: public/${fileName}`);
+        }
+        return [
+          fileName,
+          {
+            body,
+            contentType: resolveDashboardAssetContentType(fileName),
+          },
+        ] as const;
+      }),
+    ) as Record<(typeof legacyAssetFiles)[number], { body: Buffer; contentType: string }>,
+  };
+}
+
+function loadReactDashboardAssets() {
+  const indexPath = path.join(reactClientDir, "index.html");
+  const indexHtml = readTextFileSafe(indexPath);
+  if (!indexHtml) {
+    throw new Error(
+      "React dashboard build is missing at dist/client/index.html. Run `npm run build` or set DASHBOARD_UI=legacy.",
+    );
+  }
+  return {
+    indexHtml,
+  };
+}
+
+function sendFileResponse(
+  reply: {
+    type(contentType: string): { send(payload: Buffer | string): unknown };
+  },
+  asset: { body: Buffer | string; contentType: string },
+) {
+  return reply.type(asset.contentType).send(asset.body);
+}
+
+function serveLegacyDashboard(
+  reply: {
+    type(contentType: string): { send(payload: Buffer | string): unknown };
+  },
+  useLegacyPathPrefix: boolean = false,
+) {
+  return reply
+    .type("text/html; charset=utf-8")
+    .send(useLegacyPathPrefix ? legacyDashboard.legacyIndexHtml : legacyDashboard.indexHtml);
+}
+
+function serveReactDashboard(
+  reply: {
+    type(contentType: string): { send(payload: Buffer | string): unknown };
+  },
+) {
+  if (!reactDashboard) {
+    throw new Error("React dashboard assets were not loaded");
+  }
+  return reply.type("text/html; charset=utf-8").send(reactDashboard.indexHtml);
+}
+
+async function serveReactAsset(
+  assetPath: string,
+  reply: {
+    code(statusCode: number): { send(payload: Record<string, unknown>): unknown };
+    type(contentType: string): { send(payload: Buffer | string): unknown };
+  },
+) {
+  const normalizedPath = assetPath.replace(/^\/+/, "");
+  const fullPath = path.resolve(reactClientDir, "assets", normalizedPath);
+  const assetsDir = path.resolve(reactClientDir, "assets");
+
+  if (!fullPath.startsWith(`${assetsDir}${path.sep}`) && fullPath !== assetsDir) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "ASSET_NOT_FOUND",
+        message: "Asset was not found",
+      },
+    });
+  }
+
+  try {
+    const body = await readFile(fullPath);
+    return reply.type(resolveDashboardAssetContentType(fullPath)).send(body);
+  } catch {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "ASSET_NOT_FOUND",
+        message: "Asset was not found",
+      },
+    });
+  }
 }
 
 function readBearerToken(value: unknown): string | undefined {
