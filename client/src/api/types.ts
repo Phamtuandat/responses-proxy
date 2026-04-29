@@ -194,6 +194,36 @@ export type UsageStatsResponse = {
   [key: string]: unknown;
 };
 
+export type LiveUsageProvider = {
+  providerId?: string;
+  providerName?: string;
+  authMode?: string;
+  source?: string;
+  configured?: boolean;
+  usageCheckEnabled?: boolean;
+  usageCheckUrl?: string | null;
+  upstreamKeyCount?: number;
+  timestamp?: string;
+  ok?: boolean;
+  usage?: {
+    allowed?: boolean;
+    remaining?: number;
+    limit?: number;
+    used?: number;
+    [key: string]: unknown;
+  } | null;
+  error?: string;
+  [key: string]: unknown;
+};
+
+export type LiveUsageResponse = {
+  ok?: boolean;
+  providers?: LiveUsageProvider[];
+  timestamp?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
 export type RtkPolicyInput = {
   enabled?: boolean;
   toolOutputEnabled?: boolean;

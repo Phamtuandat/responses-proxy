@@ -18,7 +18,7 @@ test("dashboard serving smoke coverage", { concurrency: false }, async (t) => {
     try {
       assert.match(
         server.output,
-        /Dashboard UI: react \(serving .*dist\/client, legacy fallback at \/legacy\)/,
+        /Dashboard UI: react \(serving .*dist\/client\)/,
       );
 
       const root = await fetchText(`${server.baseUrl}/`);
@@ -26,10 +26,10 @@ test("dashboard serving smoke coverage", { concurrency: false }, async (t) => {
       assert.equal(root.response.headers.get("cache-control"), "no-cache");
       assert.match(root.text, /Responses Proxy React Shell|<div id="root"><\/div>/);
 
-      const legacy = await fetchText(`${server.baseUrl}/legacy`);
-      assert.equal(legacy.response.status, 200);
-      assert.equal(legacy.response.headers.get("cache-control"), "no-cache");
-      assert.match(legacy.text, /Responses Proxy Monitor/);
+      const favicon = await fetchText(`${server.baseUrl}/favicon.svg`);
+      assert.equal(favicon.response.status, 200);
+      assert.equal(favicon.response.headers.get("cache-control"), "no-cache");
+      assert.match(favicon.response.headers.get("content-type") ?? "", /image\/svg\+xml/);
 
       const health = await fetchJson(`${server.baseUrl}/health`);
       assert.equal(health.response.status, 200);
@@ -56,34 +56,20 @@ test("dashboard serving smoke coverage", { concurrency: false }, async (t) => {
     }
   });
 
-  await t.test("legacy mode keeps rollback behavior and startup visibility", async () => {
-    const server = await startDashboardServer({ DASHBOARD_UI: "legacy" });
+  await t.test("legacy dashboard routes are removed", async () => {
+    const server = await startDashboardServer();
     try {
-      assert.match(
-        server.output,
-        /Dashboard UI: legacy \(serving public\/, fallback also available at \/legacy\)/,
-      );
-
-      const root = await fetchText(`${server.baseUrl}/`);
-      assert.equal(root.response.status, 200);
-      assert.equal(root.response.headers.get("cache-control"), "no-cache");
-      assert.match(root.text, /Responses Proxy Monitor/);
-
-      const appJs = await fetchText(`${server.baseUrl}/app.js`);
-      assert.equal(appJs.response.status, 200);
-      assert.equal(appJs.response.headers.get("cache-control"), "no-cache");
-      assert.match(appJs.response.headers.get("content-type") ?? "", /javascript/);
-      assert.match(appJs.text, /const ROUTES =/);
-
-      const appCss = await fetchText(`${server.baseUrl}/app.css`);
-      assert.equal(appCss.response.status, 200);
-      assert.equal(appCss.response.headers.get("cache-control"), "no-cache");
-      assert.match(appCss.response.headers.get("content-type") ?? "", /text\/css/);
-      assert.match(appCss.text, /:root/);
-
       const legacy = await fetchText(`${server.baseUrl}/legacy`);
-      assert.equal(legacy.response.status, 200);
-      assert.match(legacy.text, /Responses Proxy Monitor/);
+      assert.equal(legacy.response.status, 404);
+      assert.match(legacy.response.headers.get("content-type") ?? "", /application\/json/);
+
+      const legacyAsset = await fetchText(`${server.baseUrl}/legacy/app.js`);
+      assert.equal(legacyAsset.response.status, 404);
+      assert.match(legacyAsset.response.headers.get("content-type") ?? "", /application\/json/);
+
+      const rootAsset = await fetchText(`${server.baseUrl}/app.js`);
+      assert.equal(rootAsset.response.status, 404);
+      assert.match(rootAsset.response.headers.get("content-type") ?? "", /application\/json/);
 
       const health = await fetchJson(`${server.baseUrl}/health`);
       assert.equal(health.response.status, 200);
@@ -105,8 +91,7 @@ test("dashboard serving smoke coverage", { concurrency: false }, async (t) => {
       assert.match(reactAsset.response.headers.get("content-type") ?? "", /javascript|text\/css/);
 
       const legacyAsset = await fetchText(`${server.baseUrl}/legacy/app.js`);
-      assert.equal(legacyAsset.response.status, 200);
-      assert.equal(legacyAsset.response.headers.get("cache-control"), "no-cache");
+      assert.equal(legacyAsset.response.status, 404);
 
       const traversal = await fetchText(`${server.baseUrl}/assets/..%2F..%2Fserver.js`);
       assert.equal(traversal.response.status, 404);

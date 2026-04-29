@@ -4,14 +4,11 @@ Minimal Fastify proxy for a Responses API upstream.
 
 ### Dashboard UI
 
-The app now serves the React dashboard by default after `npm run build`.
+The app now serves the React dashboard after `npm run build`.
 
 - `/` serves the React dashboard
-- `/legacy` serves the previous static dashboard
-- Set `DASHBOARD_UI=legacy` to roll back `/` to the legacy dashboard
 
 React assets are served from `/assets/*`.
-Legacy assets are served from `/legacy/*`.
 
 Validation:
 
@@ -20,12 +17,6 @@ npm install
 npm run check
 npm run build
 npm test
-```
-
-Rollback:
-
-```bash
-DASHBOARD_UI=legacy npm start
 ```
 
 ## Implementation Plans

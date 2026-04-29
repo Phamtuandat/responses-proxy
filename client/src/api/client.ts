@@ -10,6 +10,7 @@ import type {
   ClientTokenLimitResponse,
   ClientTokenLimitsResponse,
   HealthResponse,
+  LiveUsageResponse,
   ProviderDeleteResponse,
   ProviderModelsResponse,
   ProviderMutationInput,
@@ -106,6 +107,10 @@ export function updateClientTokenLimit(clientKey: string, input: {
 
 export function getUsageStats() {
   return apiGet<UsageStatsResponse>("/api/stats/usage");
+}
+
+export function getLiveUsage() {
+  return apiGet<LiveUsageResponse>("/api/providers/live-usage");
 }
 
 export function updateRtkPolicy(client: string, policy: RtkPolicyInput) {

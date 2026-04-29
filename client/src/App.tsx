@@ -74,7 +74,7 @@ function renderScreen(route: AppRoute, isUnknown: boolean) {
     return (
       <EmptyState
         title="Route not found"
-        description="This React shell mirrors the legacy dashboard routes. Return to Dashboard to continue."
+        description="This dashboard uses the current React route map. Return to Dashboard to continue."
         actionHref="#/dashboard"
         actionLabel="Go to Dashboard"
       />

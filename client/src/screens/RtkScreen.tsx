@@ -584,7 +584,7 @@ export function RtkScreen() {
           </div>
           <div>
             <dt>Telemetry fallback</dt>
-            <dd>{hasTelemetry ? "Telemetry is flowing and can be compared against policy summaries above." : "Open `/legacy#/rtk` if you need the older editor while telemetry is still sparse."}</dd>
+            <dd>{hasTelemetry ? "Telemetry is flowing and can be compared against policy summaries above." : "Telemetry is still sparse, so compare recent requests after saving a policy update."}</dd>
           </div>
           <div>
             <dt>Top-level request reduction</dt>

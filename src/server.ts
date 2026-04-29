@@ -98,19 +98,8 @@ const customerWorkspaceRepository = CustomerWorkspaceRepository.create(
 const billingRepository = BillingRepository.create(path.resolve(config.CUSTOMER_KEY_DB_PATH));
 const chatGptOAuthStore = ChatGptOAuthStore.create(path.resolve(config.APP_DB_PATH));
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
-const publicDir = path.resolve(process.cwd(), "public");
 const reactClientDir = path.resolve(process.cwd(), "dist", "client");
-const dashboardUi = config.DASHBOARD_UI;
-const legacyDashboardPath = "/legacy";
-const legacyAssetFiles = [
-  "app.css",
-  "app.js",
-  "favicon.svg",
-  "logo.svg",
-  "app-icon.svg",
-  "dashboard-illustration.svg",
-  "providers-illustration.svg",
-] as const;
+const reactRootStaticAssetFiles = ["favicon.svg", "app-icon.svg"] as const;
 const dashboardEntryPaths = [
   "/",
   "/dashboard",
@@ -125,8 +114,8 @@ const dashboardEntryPaths = [
   "/oauth",
   "/auth-management",
 ] as const;
-const legacyDashboard = loadLegacyDashboardAssets();
-const reactDashboard = dashboardUi === "react" ? loadReactDashboardAssets() : null;
+const reactDashboard = loadReactDashboardAssets();
+const reactRootStaticAssets = loadReactRootStaticAssets();
 const quickApplyPaths = resolveQuickApplyPaths({
   hermesConfigPath: process.env.QUICK_APPLY_HERMES_CONFIG_PATH,
   codexConfigPath: process.env.QUICK_APPLY_CODEX_CONFIG_PATH,
@@ -1125,21 +1114,12 @@ app.post("/api/providers/delete", async (request, reply) => {
 
 for (const routePath of dashboardEntryPaths) {
   app.get(routePath, async (_request, reply) => {
-    if (dashboardUi === "legacy") {
-      return serveLegacyDashboard(reply);
-    }
     return serveReactDashboard(reply);
   });
 }
 
-app.get("/legacy", async (_request, reply) => serveLegacyDashboard(reply, true));
-app.get("/legacy/", async (_request, reply) => serveLegacyDashboard(reply, true));
-
-for (const [fileName, asset] of Object.entries(legacyDashboard.files)) {
+for (const [fileName, asset] of Object.entries(reactRootStaticAssets)) {
   app.get(`/${fileName}`, async (_request, reply) => {
-    return sendFileResponse(reply, asset);
-  });
-  app.get(`/legacy/${fileName}`, async (_request, reply) => {
     return sendFileResponse(reply, asset);
   });
 }
@@ -1150,14 +1130,7 @@ app.get("/assets/*", async (request, reply) => {
 });
 
 app.get("/favicon.ico", async (_request, reply) => {
-  // The repo only ships favicon.svg today, so /favicon.ico intentionally falls back to it.
-  const favicon = legacyDashboard.files["favicon.svg"];
-  return sendFileResponse(reply, favicon);
-});
-
-app.get("/legacy/favicon.ico", async (_request, reply) => {
-  // The repo only ships favicon.svg today, so /legacy/favicon.ico intentionally falls back to it.
-  const favicon = legacyDashboard.files["favicon.svg"];
+  const favicon = reactRootStaticAssets["favicon.svg"];
   return sendFileResponse(reply, favicon);
 });
 
@@ -2120,39 +2093,22 @@ function readBufferFileSafe(filePath: string): Buffer | undefined {
   }
 }
 
-function rewriteLegacyDashboardHtmlForLegacyPath(html: string): string {
-  const prefixedAssets = ["favicon.ico", ...legacyAssetFiles];
-  return prefixedAssets.reduce(
-    (output, fileName) => output.replaceAll(`="/${fileName}"`, `="/legacy/${fileName}"`),
-    html,
-  );
-}
-
-function loadLegacyDashboardAssets() {
-  const indexHtml = readTextFileSafe(path.join(publicDir, "index.html"));
-  if (!indexHtml) {
-    throw new Error("Legacy dashboard index.html is missing from public/");
-  }
-
-  return {
-    indexHtml,
-    legacyIndexHtml: rewriteLegacyDashboardHtmlForLegacyPath(indexHtml),
-    files: Object.fromEntries(
-      legacyAssetFiles.map((fileName) => {
-        const body = readBufferFileSafe(path.join(publicDir, fileName));
-        if (!body) {
-          throw new Error(`Legacy dashboard asset is missing: public/${fileName}`);
-        }
-        return [
-          fileName,
-          {
-            body,
-            contentType: resolveDashboardAssetContentType(fileName),
-          },
-        ] as const;
-      }),
-    ) as Record<(typeof legacyAssetFiles)[number], { body: Buffer; contentType: string }>,
-  };
+function loadReactRootStaticAssets() {
+  return Object.fromEntries(
+    reactRootStaticAssetFiles.map((fileName) => {
+      const body = readBufferFileSafe(path.join(reactClientDir, fileName));
+      if (!body) {
+        throw new Error(`React root asset is missing: dist/client/${fileName}. Run npm run build before starting the server.`);
+      }
+      return [
+        fileName,
+        {
+          body,
+          contentType: resolveDashboardAssetContentType(fileName),
+        },
+      ] as const;
+    }),
+  ) as Record<(typeof reactRootStaticAssetFiles)[number], { body: Buffer; contentType: string }>;
 }
 
 function loadReactDashboardAssets() {
@@ -2160,7 +2116,7 @@ function loadReactDashboardAssets() {
   const indexHtml = readTextFileSafe(indexPath);
   if (!indexHtml) {
     throw new Error(
-      "React dashboard build is missing at dist/client/index.html. Run `npm run build` or set DASHBOARD_UI=legacy.",
+      "React dashboard build is missing at dist/client/index.html. Run `npm run build` before starting the server.",
     );
   }
   return {
@@ -2181,19 +2137,6 @@ function sendFileResponse(
 ) {
   reply.header("Cache-Control", cacheControl);
   return reply.type(asset.contentType).send(asset.body);
-}
-
-function serveLegacyDashboard(
-  reply: {
-    header(name: string, value: string): unknown;
-    type(contentType: string): { send(payload: Buffer | string): unknown };
-  },
-  useLegacyPathPrefix: boolean = false,
-) {
-  reply.header("Cache-Control", CACHE_CONTROL_NO_CACHE);
-  return reply
-    .type("text/html; charset=utf-8")
-    .send(useLegacyPathPrefix ? legacyDashboard.legacyIndexHtml : legacyDashboard.indexHtml);
 }
 
 function serveReactDashboard(
@@ -2247,15 +2190,8 @@ async function serveReactAsset(
 }
 
 function logDashboardMode() {
-  if (dashboardUi === "legacy") {
-    app.log.info(
-      `Dashboard UI: legacy (serving public/, fallback also available at ${legacyDashboardPath})`,
-    );
-    return;
-  }
-
   app.log.info(
-    `Dashboard UI: react (serving ${reactClientDir}, legacy fallback at ${legacyDashboardPath})`,
+    `Dashboard UI: react (serving ${reactClientDir})`,
   );
 }
 

@@ -25,7 +25,6 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
-  DASHBOARD_UI: z.enum(["react", "legacy"]).default("react"),
   LOG_BODY: z
     .string()
     .optional()
