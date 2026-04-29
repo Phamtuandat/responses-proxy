@@ -186,7 +186,7 @@ export function UsageScreen() {
       <PageHeader
         eyebrow="Usage"
         title="Usage summaries"
-        description="Read-only cache, RTK, and live provider usage. Live data refreshes every 30 seconds."
+        description="Cache efficiency, RTK savings, and live provider allowance checks. Live data refreshes every 30 seconds."
         actions={
           <div className="table-actions">
             <RefreshButton label="Refresh stats" onClick={retry} />

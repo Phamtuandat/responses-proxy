@@ -85,7 +85,7 @@ export function DashboardScreen() {
       <PageHeader
         eyebrow="Dashboard"
         title="System status"
-        description="Read-only overview from the current Fastify API. Production serving still stays on the legacy public UI."
+        description="Live service health, provider readiness, cache activity, and request telemetry at a glance."
       />
 
       <SurfaceCard className="hero-card">

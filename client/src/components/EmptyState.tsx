@@ -13,7 +13,7 @@ export function EmptyState({
 }: EmptyStateProps) {
   return (
     <section className="empty-state">
-      <p className="eyebrow">Migration shell</p>
+      <p className="eyebrow">Workspace</p>
       <h2>{title}</h2>
       <p>{description}</p>
       {actionHref && actionLabel ? (

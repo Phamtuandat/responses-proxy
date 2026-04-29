@@ -131,7 +131,7 @@ export function ClientForm({
       </div>
 
       <p className="modal-copy">
-        Manage client API keys, provider binding, and model override from the React UI. The legacy dashboard remains available as a fallback.
+        Manage client API keys, provider binding, model overrides, and token guardrails from one form.
       </p>
 
       {localError || error ? (

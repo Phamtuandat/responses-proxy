@@ -10,8 +10,8 @@ export function TopToolbar({ theme, onToggleTheme }: TopToolbarProps) {
   return (
     <header className="top-toolbar">
       <div>
-        <p className="eyebrow">Phase 3</p>
-        <p className="toolbar-copy">Read-only React views are live in dev/build artifacts. Production still serves the legacy UI.</p>
+        <p className="eyebrow">Workspace</p>
+        <p className="toolbar-copy">Monitor routing, tune providers, and manage client access from the live control plane.</p>
       </div>
       <ThemeToggle theme={theme} onToggle={onToggleTheme} />
     </header>

@@ -7,7 +7,7 @@ type ErrorStateProps = {
 export function ErrorState({ title, description, onRetry }: ErrorStateProps) {
   return (
     <section className="error-state">
-      <p className="eyebrow">Read-only endpoint</p>
+      <p className="eyebrow">Service status</p>
       <h2>{title}</h2>
       <p>{description}</p>
       {onRetry ? (

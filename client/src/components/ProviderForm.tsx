@@ -116,8 +116,8 @@ export function ProviderForm({ mode, initialData, onSubmit, onCancel }: Provider
 
       <p className="modal-copy">
         {mode === "create"
-          ? "Create a runtime provider in the React UI. The legacy dashboard remains available as a fallback."
-          : "Update provider metadata without exposing currently configured keys."}
+          ? "Create a runtime provider with routing metadata, auth mode, and upstream credentials."
+          : "Update provider metadata, account binding, and credentials without exposing existing keys."}
       </p>
 
       {error ? <InlineAlert message={error} title="Could not save provider" variant="error" /> : null}

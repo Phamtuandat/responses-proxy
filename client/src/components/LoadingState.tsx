@@ -6,7 +6,7 @@ type LoadingStateProps = {
 
 export function LoadingState({
   title = "Loading data",
-  description = "Reading the existing backend endpoints.",
+  description = "Reading live service data and workspace settings.",
   cards = 4,
 }: LoadingStateProps) {
   return (

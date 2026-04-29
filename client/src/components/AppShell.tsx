@@ -23,7 +23,7 @@ export function AppShell({
       <main className="app-panel">
         <div className="app-shell">
           <Sidebar currentRoute={currentRoute} navItems={navItems} />
-          <section className="content-area" aria-label="React migration shell">
+          <section className="content-area" aria-label="Dashboard content">
             <TopToolbar theme={theme} onToggleTheme={onToggleTheme} />
             <div className="screen-frame">{children}</div>
           </section>

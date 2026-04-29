@@ -5,8 +5,9 @@ COPY package*.json ./
 RUN npm ci
 
 COPY tsconfig.json ./
+COPY vite.config.ts ./
 COPY src ./src
-COPY public ./public
+COPY client ./client
 RUN npm run build
 
 FROM node:20-alpine AS runtime
@@ -16,7 +17,6 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/public ./public
 
 ENV NODE_ENV=production
 ENV PORT=8318

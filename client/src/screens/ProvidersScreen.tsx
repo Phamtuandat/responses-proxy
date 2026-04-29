@@ -300,7 +300,7 @@ export function ProvidersScreen() {
       <PageHeader
         eyebrow="Providers"
         title="Provider inventory"
-        description="Controlled provider CRUD is available here now. The legacy dashboard remains as a fallback while production still serves the public UI."
+        description="Manage upstream providers, account-backed routes, request policy metadata, and key coverage."
         actions={
           <div className="page-header-actions page-header-actions-group">
             <RefreshButton onClick={retry} />

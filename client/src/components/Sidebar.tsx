@@ -15,7 +15,7 @@ export function Sidebar({ currentRoute, navItems }: SidebarProps) {
         <div>
           <p className="eyebrow">Responses Proxy</p>
           <h1>Control plane</h1>
-          <p className="brand-copy">React migration shell for the existing dashboard.</p>
+          <p className="brand-copy">Routing, accounts, usage, and workspace controls in one calm workspace.</p>
         </div>
       </header>
 

@@ -353,7 +353,7 @@ export function ClientsScreen() {
       <PageHeader
         eyebrow="Clients"
         title="Client routes"
-        description="Manage client API keys, provider bindings, model overrides, and token budgets from the React UI."
+        description="Manage client API keys, provider bindings, model overrides, and token budgets for each route."
         actions={
           <div className="page-header-actions page-header-actions-group">
             <RefreshButton onClick={retry} />

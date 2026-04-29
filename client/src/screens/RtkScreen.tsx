@@ -342,7 +342,7 @@ export function RtkScreen() {
       <PageHeader
         eyebrow="RTK"
         title="RTK reduction overview"
-        description="Route-level RTK policy can now be adjusted here. Provider RTK defaults remain read-only in React for now."
+        description="Tune route-level RTK policy, review recent savings, and compare live telemetry against your current rules."
         actions={<RefreshButton onClick={retry} />}
       />
 
@@ -380,7 +380,7 @@ export function RtkScreen() {
 
       <SurfaceCard
         title="Edit client route RTK policy"
-        description="This form posts to `/api/rtk-policies` using the same backend contract as the legacy dashboard."
+        description="Save route-level RTK policy changes against the live backend contract used by the proxy."
       >
         {feedback ? (
           <InlineAlert
@@ -568,7 +568,7 @@ export function RtkScreen() {
         />
       </SurfaceCard>
 
-      <SurfaceCard title="Policy notes" description="Helpful context while provider RTK defaults still stay in the legacy editor.">
+      <SurfaceCard title="Policy notes" description="Helpful context for choosing conservative defaults before widening route-level policy.">
         <dl className="detail-list">
           <div>
             <dt>Selected route</dt>
