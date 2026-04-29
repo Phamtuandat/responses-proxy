@@ -101,6 +101,7 @@ const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.A
 const publicDir = path.resolve(process.cwd(), "public");
 const reactClientDir = path.resolve(process.cwd(), "dist", "client");
 const dashboardUi = config.DASHBOARD_UI;
+const legacyDashboardPath = "/legacy";
 const legacyAssetFiles = [
   "app.css",
   "app.js",
@@ -1149,11 +1150,13 @@ app.get("/assets/*", async (request, reply) => {
 });
 
 app.get("/favicon.ico", async (_request, reply) => {
+  // The repo only ships favicon.svg today, so /favicon.ico intentionally falls back to it.
   const favicon = legacyDashboard.files["favicon.svg"];
   return sendFileResponse(reply, favicon);
 });
 
 app.get("/legacy/favicon.ico", async (_request, reply) => {
+  // The repo only ships favicon.svg today, so /legacy/favicon.ico intentionally falls back to it.
   const favicon = legacyDashboard.files["favicon.svg"];
   return sendFileResponse(reply, favicon);
 });
@@ -2095,6 +2098,12 @@ function resolveDashboardAssetContentType(fileName: string): string {
   return "application/octet-stream";
 }
 
+function isPathInsideDirectory(candidatePath: string, directoryPath: string): boolean {
+  return (
+    candidatePath === directoryPath || candidatePath.startsWith(`${directoryPath}${path.sep}`)
+  );
+}
+
 function readTextFileSafe(filePath: string): string | undefined {
   try {
     return readFileSync(filePath, "utf8");
@@ -2212,7 +2221,7 @@ async function serveReactAsset(
   const fullPath = path.resolve(reactClientDir, "assets", normalizedPath);
   const assetsDir = path.resolve(reactClientDir, "assets");
 
-  if (!fullPath.startsWith(`${assetsDir}${path.sep}`) && fullPath !== assetsDir) {
+  if (!isPathInsideDirectory(fullPath, assetsDir)) {
     return reply.code(404).send({
       error: {
         type: "not_found",
@@ -2235,6 +2244,19 @@ async function serveReactAsset(
       },
     });
   }
+}
+
+function logDashboardMode() {
+  if (dashboardUi === "legacy") {
+    app.log.info(
+      `Dashboard UI: legacy (serving public/, fallback also available at ${legacyDashboardPath})`,
+    );
+    return;
+  }
+
+  app.log.info(
+    `Dashboard UI: react (serving ${reactClientDir}, legacy fallback at ${legacyDashboardPath})`,
+  );
 }
 
 function readBearerToken(value: unknown): string | undefined {
@@ -4236,6 +4258,7 @@ app.setErrorHandler((error, _request, reply) => {
 });
 
 async function main(): Promise<void> {
+  logDashboardMode();
   await app.listen({
     host: config.HOST,
     port: config.PORT,
