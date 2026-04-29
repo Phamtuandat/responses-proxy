@@ -535,7 +535,7 @@ export function ClientsScreen({ clientKey }: ClientsScreenProps) {
                     const tokenLimit = getTokenLimitEntry(tokenLimitsByClient, route.key);
                     return (
                       <tr className="provider-row" key={route.key}>
-                        <td className="table-cell-long">
+                        <td className="table-cell-long provider-name-cell" data-label="Client">
                           <button
                             className="item-title-link"
                             onClick={() => {
@@ -546,26 +546,26 @@ export function ClientsScreen({ clientKey }: ClientsScreenProps) {
                           >
                             {route.key}
                           </button>
-                          <span className="item-meta">
-                            {getProviderLabel(route)} • {formatUnknown(route.modelOverride)} • {summarizeTokenLimit(tokenLimit)}
+                          <span className="item-meta truncate-value" title={getProviderLabel(route)}>
+                            {getProviderLabel(route)}
                           </span>
                         </td>
-                        <td className="table-cell-long">
+                        <td className="table-cell-long" data-label="Provider">
                           <span className="long-value">{getProviderLabel(route)}</span>
                         </td>
-                        <td className="table-cell-long">
+                        <td className="table-cell-long" data-label="Model override">
                           <span className="long-value">{formatUnknown(route.modelOverride)}</span>
                         </td>
-                        <td className="align-right">{formatNumber(getRouteApiKeyCount(route))}</td>
-                        <td className="table-cell-long">
+                        <td className="align-right" data-label="API keys">{formatNumber(getRouteApiKeyCount(route))}</td>
+                        <td className="table-cell-long" data-label="Token limit">
                           <span className="long-value">{summarizeTokenLimit(tokenLimit)}</span>
                         </td>
-                        <td>
+                        <td data-label="Status">
                           <div className="provider-status-stack">
                             <StatusBadge variant={status.variant}>{status.label}</StatusBadge>
                           </div>
                         </td>
-                        <td>
+                        <td data-label="Actions">
                           <div className="row-actions">
                             <a className="button-link row-action-button" href={`#/clients/${encodeURIComponent(route.key)}`}>
                               Details

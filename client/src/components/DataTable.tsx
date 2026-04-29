@@ -50,7 +50,11 @@ export function DataTable<Row extends Record<string, unknown>>({
               {columns.map((column) => {
                 const value = row[column.key];
                 return (
-                  <td className={column.align ? `align-${column.align}` : undefined} key={String(column.key)}>
+                  <td
+                    className={column.align ? `align-${column.align}` : undefined}
+                    data-label={column.label}
+                    key={String(column.key)}
+                  >
                     {column.render ? column.render(value, row) : formatUnknown(value)}
                   </td>
                 );

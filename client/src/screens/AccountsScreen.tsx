@@ -494,7 +494,7 @@ export function AccountsScreen({ accountId }: AccountsScreenProps) {
                           onClick={() => void handleRefreshAccount(rowAccountId)}
                           type="button"
                         >
-                          {pendingAction === `${actionBase}:refresh` ? "Refreshing..." : "Refresh"}
+                          {pendingAction === `${actionBase}:refresh` ? "Syncing..." : "Sync"}
                         </button>
                         <button
                           className="button-link row-action-button"

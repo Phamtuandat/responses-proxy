@@ -474,7 +474,7 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
 
                     return (
                       <tr className="provider-row" key={provider.id}>
-                        <td className="table-cell-long provider-name-cell">
+                        <td className="table-cell-long provider-name-cell" data-label="Name">
                           <button
                             className="item-title-link"
                             onClick={() => setEditingProviderId(provider.id)}
@@ -486,15 +486,15 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
                             {formatUnknown(provider.id)}
                           </span>
                         </td>
-                        <td className="table-cell-long">
+                        <td className="table-cell-long" data-label="ID">
                           <span className="long-value">{formatUnknown(provider.id)}</span>
                         </td>
-                        <td className="table-cell-nowrap">{formatUnknown(provider.authMode)}</td>
-                        <td className="provider-url-cell table-cell-long">
+                        <td className="table-cell-nowrap" data-label="Auth">{formatUnknown(provider.authMode)}</td>
+                        <td className="provider-url-cell table-cell-long" data-label="Base URL">
                           <span className="long-value">{formatUnknown(provider.baseUrl)}</span>
                         </td>
-                        <td className="align-right">{formatNumber(getProviderKeyCount(provider))}</td>
-                        <td>
+                        <td className="align-right" data-label="Keys">{formatNumber(getProviderKeyCount(provider))}</td>
+                        <td data-label="Status">
                           <div className="provider-status-stack">
                             {active ? <StatusBadge variant="success">Active</StatusBadge> : null}
                             <StatusBadge variant={available ? "accent" : "warning"}>
@@ -502,7 +502,7 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
                             </StatusBadge>
                           </div>
                         </td>
-                        <td>
+                        <td data-label="Actions">
                           <div className="row-actions">
                             <a className="button-link row-action-button" href={`#/providers/${encodeURIComponent(provider.id)}`}>
                               Details
