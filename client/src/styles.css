@@ -887,6 +887,12 @@ textarea,
   white-space: normal;
 }
 
+.item-meta.truncate-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .long-value {
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -905,6 +911,19 @@ textarea,
   max-width: 360px;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.provider-name-cell {
+  min-width: 220px;
+}
+
+.table-cell-nowrap {
+  white-space: nowrap;
+}
+
+.clients-table .provider-name-cell,
+.accounts-table td:first-child {
+  min-width: 220px;
 }
 
 .metadata-pills {
@@ -995,6 +1014,7 @@ textarea,
   font-weight: 700;
   letter-spacing: 0.02em;
   border: 1px solid transparent;
+  white-space: nowrap;
 }
 
 .status-badge-neutral {
@@ -1101,6 +1121,7 @@ textarea,
   white-space: normal;
   justify-content: flex-start;
   align-items: flex-start;
+  flex-wrap: nowrap;
 }
 
 .list-table .row-action-button,
@@ -1109,7 +1130,24 @@ textarea,
 }
 
 .list-table .provider-status-stack {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
   white-space: normal;
+}
+
+.provider-status-stack .status-badge {
+  flex: 0 0 auto;
+}
+
+.account-row-actions {
+  gap: 6px;
+}
+
+.account-row-actions .row-action-button {
+  min-height: 32px;
+  padding-inline: 10px;
 }
 
 .table-empty,
@@ -1487,6 +1525,10 @@ textarea,
   .list-table .row-action-button,
   .list-table .row-actions > .button-link {
     flex: 0 0 auto;
+  }
+
+  .list-table .row-actions {
+    flex-wrap: wrap;
   }
 
   .provider-table th:nth-child(2),

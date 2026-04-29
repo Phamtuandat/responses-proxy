@@ -474,7 +474,7 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
 
                     return (
                       <tr className="provider-row" key={provider.id}>
-                        <td className="table-cell-long">
+                        <td className="table-cell-long provider-name-cell">
                           <button
                             className="item-title-link"
                             onClick={() => setEditingProviderId(provider.id)}
@@ -482,15 +482,14 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
                           >
                             {provider.name}
                           </button>
-                          <span className="item-meta">
-                            {formatUnknown(provider.id)} • {formatUnknown(provider.authMode)} •{" "}
-                            {active ? "Active provider • Click to edit" : "Click to edit"}
+                          <span className="item-meta truncate-value" title={formatUnknown(provider.id)}>
+                            {formatUnknown(provider.id)}
                           </span>
                         </td>
                         <td className="table-cell-long">
                           <span className="long-value">{formatUnknown(provider.id)}</span>
                         </td>
-                        <td>{formatUnknown(provider.authMode)}</td>
+                        <td className="table-cell-nowrap">{formatUnknown(provider.authMode)}</td>
                         <td className="provider-url-cell table-cell-long">
                           <span className="long-value">{formatUnknown(provider.baseUrl)}</span>
                         </td>
@@ -499,7 +498,7 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
                           <div className="provider-status-stack">
                             {active ? <StatusBadge variant="success">Active</StatusBadge> : null}
                             <StatusBadge variant={available ? "accent" : "warning"}>
-                              {available ? "Available" : "Needs key"}
+                              {available ? "Ready" : "Needs key"}
                             </StatusBadge>
                           </div>
                         </td>

@@ -450,9 +450,8 @@ export function AccountsScreen({ accountId }: AccountsScreenProps) {
                         >
                           {getAccountLabel(account)}
                         </button>
-                        <span className="item-meta">
-                          {formatUnknown(account.accountId)} • {account.disabled === true ? "Disabled" : "Enabled"} • Open full
-                          account detail
+                        <span className="item-meta truncate-value" title={formatUnknown(account.accountId)}>
+                          {formatUnknown(account.accountId)}
                         </span>
                       </>
                     );
@@ -488,10 +487,7 @@ export function AccountsScreen({ accountId }: AccountsScreenProps) {
                     const rowAccountId = typeof value === "string" ? value : "";
                     const actionBase = `account:${rowAccountId}`;
                     return (
-                      <div className="row-actions">
-                        <a className="button-link row-action-button" href={`#/oauth/${encodeURIComponent(rowAccountId)}`}>
-                          Details
-                        </a>
+                      <div className="row-actions account-row-actions">
                         <button
                           className="button-link row-action-button"
                           disabled={!oauthEnabled || pendingAction === `${actionBase}:refresh`}
