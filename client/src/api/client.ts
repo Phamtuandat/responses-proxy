@@ -2,6 +2,8 @@ import type {
   ChatGptOAuthStatusResponse,
   ChatGptOAuthStartResponse,
   ChatGptOAuthCallbackResponse,
+  ClientConfigApplyInput,
+  ClientConfigApplyResponse,
   ClientMutationInput,
   ClientMutationResponse,
   ClientConfigsStatusResponse,
@@ -9,6 +11,7 @@ import type {
   ClientTokenLimitsResponse,
   HealthResponse,
   ProviderDeleteResponse,
+  ProviderModelsResponse,
   ProviderMutationInput,
   ProviderMutationResponse,
   PromptCacheLatestResponse,
@@ -153,4 +156,12 @@ export function deleteAccount(accountId: string) {
 
 export function getClientConfigsStatus() {
   return apiGet<ClientConfigsStatusResponse>("/api/client-configs/status");
+}
+
+export function applyClientConfig(input: ClientConfigApplyInput) {
+  return apiSend<ClientConfigApplyResponse>("/api/client-configs/apply", "POST", input);
+}
+
+export function getProviderModels(providerId: string) {
+  return apiGet<ProviderModelsResponse>(`/api/provider-models?providerId=${encodeURIComponent(providerId)}`);
 }

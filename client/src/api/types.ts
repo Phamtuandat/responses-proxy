@@ -311,3 +311,34 @@ export type ClientConfigsStatusResponse = {
   };
   [key: string]: unknown;
 };
+
+export type QuickApplyClientKey = "hermes" | "codex";
+
+export type ClientConfigApplyInput = {
+  client: QuickApplyClientKey;
+  baseUrl?: string;
+  routeApiKey?: string;
+  clientApiKey?: string;
+  model?: string;
+};
+
+export type ClientConfigApplyResponse = {
+  ok?: boolean;
+  client?: QuickApplyClientKey;
+  changed?: boolean;
+  backupCreated?: boolean;
+  configChanged?: boolean;
+  authChanged?: boolean;
+  proxyBaseUrl?: string;
+  status?: ClientConfigStatus;
+  clientRoutes?: ClientRouteSummary[];
+  error?: unknown;
+  [key: string]: unknown;
+};
+
+export type ProviderModelsResponse = {
+  ok?: boolean;
+  providerId?: string;
+  models?: string[];
+  [key: string]: unknown;
+};
