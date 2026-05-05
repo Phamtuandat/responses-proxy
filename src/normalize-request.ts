@@ -23,6 +23,8 @@ type NormalizeRequestOptions = {
   promptCacheSummaryKeepRecentItems?: number;
   promptCacheRetentionByFamilyEnabled?: boolean;
   promptCacheRetentionByFamilyRules?: Array<{ prefix: string; retention: string }>;
+  promptCacheRetentionByStaticKeyEnabled?: boolean;
+  promptCacheRetentionByStaticKeyRules?: Array<{ prefix: string; retention: string }>;
   preserveMessagesPayload?: boolean;
 };
 
@@ -427,6 +429,8 @@ export function normalizeResponsesRequestWithCache(
     defaultRetention: options.defaultPromptCacheRetention,
     retentionByFamilyEnabled: options.promptCacheRetentionByFamilyEnabled,
     familyRetentionRules: options.promptCacheRetentionByFamilyRules,
+    retentionByStaticKeyEnabled: options.promptCacheRetentionByStaticKeyEnabled,
+    staticKeyRetentionRules: options.promptCacheRetentionByStaticKeyRules,
   });
 
   if (body.prompt_cache_key !== undefined) {

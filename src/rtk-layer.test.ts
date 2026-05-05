@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyRtkLayer } from "./rtk-layer.js";
+import { applyRtkLayer, resolveRtkLayerPolicy } from "./rtk-layer.js";
 import type { ProxyResponsesRequest } from "./schema.js";
 
 test("rtk layer is inert when disabled", () => {
@@ -216,4 +216,19 @@ test("rtk layer preserves important command log lines from the middle segment", 
   assert.match(content, /fmt=command/);
   assert.match(content, /ERROR request failed with status code 502/);
   assert.match(content, /build finished/);
+});
+
+test("rtk policy resolution prefers client override over provider default", () => {
+  const resolved = resolveRtkLayerPolicy(
+    { enabled: true, toolOutputEnabled: true, maxChars: 4000, maxLines: 120, tailLines: 0, detectFormat: "auto" },
+    { maxChars: 2400, tailLines: 3 },
+    { maxLines: 60, detectFormat: "json" },
+  );
+
+  assert.equal(resolved.enabled, true);
+  assert.equal(resolved.toolOutputEnabled, true);
+  assert.equal(resolved.maxChars, 2400);
+  assert.equal(resolved.maxLines, 60);
+  assert.equal(resolved.tailLines, 3);
+  assert.equal(resolved.detectFormat, "json");
 });

@@ -120,6 +120,14 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform(parsePromptCacheFamilyRetentionRules),
+  PROVIDER_PROMPT_CACHE_RETENTION_BY_STATIC_KEY_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  PROVIDER_PROMPT_CACHE_RETENTION_BY_STATIC_KEY: z
+    .string()
+    .optional()
+    .transform(parsePromptCacheFamilyRetentionRules),
   RTK_LAYER_ENABLED: z
     .string()
     .optional()

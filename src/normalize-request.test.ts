@@ -215,6 +215,52 @@ test("family retention rules apply by family prefix", () => {
   assert.equal(normalized.request.prompt_cache_retention, "72h");
 });
 
+test("static key retention rules take precedence over family retention rules", () => {
+  const base = normalizeResponsesRequestWithCache(
+    {
+      model: "cx/gpt-5.4-xhigh",
+      input: [
+        { role: "assistant", content: "Stable context" },
+        { role: "user", content: "Hello" },
+      ],
+    },
+    {
+      promptCacheRedesignEnabled: true,
+    },
+  );
+
+  const normalized = normalizeResponsesRequestWithCache(
+    {
+      model: "cx/gpt-5.4-xhigh",
+      input: [
+        { role: "assistant", content: "Stable context" },
+        { role: "user", content: "Different latest turn" },
+      ],
+    },
+    {
+      promptCacheRedesignEnabled: true,
+      defaultPromptCacheRetention: "24h",
+      promptCacheRetentionByFamilyEnabled: true,
+      promptCacheRetentionByFamilyRules: [
+        {
+          prefix: base.cacheLayout.familyId,
+          retention: "48h",
+        },
+      ],
+      promptCacheRetentionByStaticKeyEnabled: true,
+      promptCacheRetentionByStaticKeyRules: [
+        {
+          prefix: base.cacheLayout.staticKey,
+          retention: "96h",
+        },
+      ],
+    },
+  );
+
+  assert.equal(normalized.cacheLayout.staticKey, base.cacheLayout.staticKey);
+  assert.equal(normalized.request.prompt_cache_retention, "96h");
+});
+
 test("strip policy removes max_output_tokens including injected defaults", () => {
   const normalized = normalizeResponsesRequestWithCache(
     {

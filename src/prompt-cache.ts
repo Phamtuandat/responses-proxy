@@ -8,6 +8,8 @@ export type PromptCacheRedesignOptions = {
   defaultRetention?: string;
   retentionByFamilyEnabled?: boolean;
   familyRetentionRules?: Array<{ prefix: string; retention: string }>;
+  retentionByStaticKeyEnabled?: boolean;
+  staticKeyRetentionRules?: Array<{ prefix: string; retention: string }>;
 };
 
 export type PromptCacheLayout = {
@@ -95,7 +97,7 @@ export function buildPromptCacheLayout(
   const familyId = `family:${modelSlug}:core:${shortHash(familySignature)}`;
   const staticKey = `static:${familyId}:${shortHash(stableStringify(stablePrefix))}`;
   const requestKey = `request:${staticKey}:${shortHash(stableStringify(dynamicTail))}`;
-  const promptCacheRetention = resolvePromptCacheRetention(familyId, options);
+  const promptCacheRetention = resolvePromptCacheRetention(familyId, staticKey, options);
 
   return {
     familyId,
@@ -244,8 +246,18 @@ function mergeStableInstructions(
 
 function resolvePromptCacheRetention(
   familyId: string,
+  staticKey: string,
   options: PromptCacheRedesignOptions,
 ): string | undefined {
+  if (options.retentionByStaticKeyEnabled) {
+    const bestStaticMatch = [...(options.staticKeyRetentionRules ?? [])]
+      .filter((rule) => staticKey.startsWith(rule.prefix))
+      .sort((left, right) => right.prefix.length - left.prefix.length)[0];
+    if (bestStaticMatch) {
+      return bestStaticMatch.retention;
+    }
+  }
+
   if (!options.retentionByFamilyEnabled) {
     return options.defaultRetention;
   }

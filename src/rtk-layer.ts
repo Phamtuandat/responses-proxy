@@ -106,8 +106,8 @@ export function resolveRtkLayerPolicy(
 ): RtkLayerOptions {
   const merged = {
     ...base,
-    ...(cloneRtkLayerPolicy(providerPolicy) ?? {}),
-    ...(cloneRtkLayerPolicy(clientPolicy) ?? {}),
+    ...compactRtkLayerPolicy(cloneRtkLayerPolicy(providerPolicy)),
+    ...compactRtkLayerPolicy(cloneRtkLayerPolicy(clientPolicy)),
   };
 
   return {
@@ -119,6 +119,24 @@ export function resolveRtkLayerPolicy(
     tailChars: merged.tailChars,
     detectFormat: normalizeDetectFormat(merged.detectFormat) ?? DEFAULT_DETECT_FORMAT,
   };
+}
+
+function compactRtkLayerPolicy(policy?: RtkLayerPolicy): RtkLayerPolicy {
+  if (!policy) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(policy).filter(([, value]) => value !== undefined),
+  ) as RtkLayerPolicy;
+}
+
+export function mergeRtkLayerPolicies(
+  base: RtkLayerOptions,
+  providerPolicy?: RtkLayerPolicy,
+  clientPolicy?: RtkLayerPolicy,
+): RtkLayerOptions {
+  return resolveRtkLayerPolicy(base, providerPolicy, clientPolicy);
 }
 
 export function applyRtkLayer(

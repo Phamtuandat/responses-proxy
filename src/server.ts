@@ -1478,6 +1478,10 @@ async function handleResponsesRequest(
         promptCacheRetentionByFamilyEnabled:
           config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY_ENABLED,
         promptCacheRetentionByFamilyRules: config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY,
+        promptCacheRetentionByStaticKeyEnabled:
+          config.PROVIDER_PROMPT_CACHE_RETENTION_BY_STATIC_KEY_ENABLED,
+        promptCacheRetentionByStaticKeyRules:
+          config.PROVIDER_PROMPT_CACHE_RETENTION_BY_STATIC_KEY,
         defaultTruncation:
           maxOutputTokensRule.mode === "strip" ? undefined : config.OPENCLAW_DEFAULT_TRUNCATION,
         maxOutputTokensPolicy: maxOutputTokensRule,
