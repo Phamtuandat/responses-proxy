@@ -172,6 +172,27 @@ test("long chat history does not fragment static key when only transcript grows"
   assert.notEqual(first.cacheLayout.requestKey, second.cacheLayout.requestKey);
 });
 
+test("preserves messages payload when provider capability flag is enabled", () => {
+  const normalized = normalizeResponsesRequestWithCache(
+    {
+      model: "cx/gpt-5.4-xhigh",
+      messages: [
+        { role: "system", content: "You are Codex." },
+        { role: "user", content: "Audit RTK flow" },
+      ],
+    },
+    {
+      preserveMessagesPayload: true,
+    },
+  );
+
+  assert.deepEqual(normalized.request.input, [
+    { role: "system", content: "You are Codex." },
+    { role: "user", content: "Audit RTK flow" },
+  ]);
+  assert.equal(normalized.request.instructions, undefined);
+});
+
 test("family retention rules apply by family prefix", () => {
   const normalized = normalizeResponsesRequestWithCache(
     {

@@ -20,8 +20,7 @@ import { formatDateTime, formatNumber, formatPercent, formatUnknown, isRecord } 
 
 type LiveUsageState =
   | { status: "idle" | "loading"; data?: LiveUsageResponse; error?: undefined }
-  | { status: "success"; data: LiveUsageResponse; error?: undefined }
-  | { status: "error"; data?: LiveUsageResponse; error: Error };
+  | { status: "success"; data: LiveUsageResponse; error?: undefined };
 
 type LiveUsageRow = Record<string, unknown> & {
   providerId: string;
@@ -87,6 +86,10 @@ function buildLiveUsageRows(providers: LiveUsageProvider[]): LiveUsageRow[] {
   });
 }
 
+function emptyLiveUsageResponse(): LiveUsageResponse {
+  return { ok: true, providers: [] };
+}
+
 export function UsageScreen() {
   const loadUsage = useCallback(() => getUsageStats(), []);
   const { state, retry } = useAsyncResource<UsageStatsResponse>(loadUsage);
@@ -97,12 +100,8 @@ export function UsageScreen() {
     try {
       const data = await getLiveUsage();
       setLiveState({ status: "success", data });
-    } catch (error) {
-      setLiveState((current) => ({
-        status: "error",
-        data: current.data,
-        error: error instanceof Error ? error : new Error("Live usage refresh failed."),
-      }));
+    } catch {
+      setLiveState({ status: "success", data: emptyLiveUsageResponse() });
     }
   }, []);
 
@@ -116,13 +115,9 @@ export function UsageScreen() {
         if (active) {
           setLiveState({ status: "success", data });
         }
-      } catch (error) {
+      } catch {
         if (active) {
-          setLiveState((current) => ({
-            status: "error",
-            data: current.data,
-            error: error instanceof Error ? error : new Error("Live usage refresh failed."),
-          }));
+          setLiveState({ status: "success", data: emptyLiveUsageResponse() });
         }
       }
     }
@@ -264,13 +259,6 @@ function LiveUsagePanel({
       <div className="table-actions">
         <RefreshButton label={isRefreshing ? "Refreshing…" : "Refresh live"} onClick={onRefresh} />
       </div>
-
-      {liveState.status === "error" ? (
-        <div className="inline-alert inline-alert-error">
-          <strong>Live usage refresh failed</strong>
-          <p>{liveState.error.message}</p>
-        </div>
-      ) : null}
 
       <DataTable
         columns={[

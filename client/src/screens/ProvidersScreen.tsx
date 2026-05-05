@@ -135,6 +135,7 @@ function buildProviderPayload(
     chatgptAccountId?: string;
     providerApiKeys?: string[];
     replaceKeys: boolean;
+    transportMode: "responses" | "chat_completions";
   },
 ): ProviderMutationInput {
   return {
@@ -147,7 +148,10 @@ function buildProviderPayload(
       : provider && Array.isArray(provider.providerApiKeys)
         ? provider.providerApiKeys
         : [],
-    capabilities: provider && isRecord(provider.capabilities) ? provider.capabilities : {},
+    capabilities: {
+      ...(provider && isRecord(provider.capabilities) ? provider.capabilities : {}),
+      transportMode: values.transportMode,
+    },
   };
 }
 
@@ -162,6 +166,10 @@ function getInitialFormData(provider?: ProviderSummary | null): Partial<Provider
     authMode: provider.authMode === "chatgpt_oauth" ? "chatgpt_oauth" : "api_key",
     chatgptAccountId: typeof provider.chatgptAccountId === "string" ? provider.chatgptAccountId : "",
     providerApiKeysText: "",
+    transportMode:
+      isRecord(provider.capabilities) && provider.capabilities.transportMode === "chat_completions"
+        ? "chat_completions"
+        : "responses",
   };
 }
 
@@ -205,6 +213,7 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
     chatgptAccountId?: string;
     providerApiKeys?: string[];
     replaceKeys: boolean;
+    transportMode: "responses" | "chat_completions";
   }) {
     setMutationTarget("create");
     try {
@@ -224,6 +233,7 @@ export function ProvidersScreen({ providerId }: ProvidersScreenProps) {
     chatgptAccountId?: string;
     providerApiKeys?: string[];
     replaceKeys: boolean;
+    transportMode: "responses" | "chat_completions";
   }) {
     if (!editingProvider) {
       throw new Error("Provider no longer exists.");

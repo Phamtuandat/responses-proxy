@@ -28,6 +28,9 @@ export type RuntimeProviderCapabilities = {
   stripMaxOutputTokens: boolean;
   requestParameterPolicy: ProviderRequestParameterPolicy;
   sanitizeReasoningSummary: boolean;
+  preserveMessagesPayload?: boolean;
+  preserveRawRequestBody?: boolean;
+  transportMode?: "responses" | "chat_completions";
   stripModelPrefixes: string[];
   modelAliases?: Record<string, string>;
   rtkPolicy?: RtkLayerPolicy;
@@ -183,6 +186,9 @@ type ProviderRow = {
   strip_max_output_tokens: number | null;
   request_parameter_policy: string | null;
   sanitize_reasoning_summary: number | null;
+  preserve_messages_payload: number | null;
+  preserve_raw_request_body: number | null;
+  transport_mode: string | null;
   strip_model_prefixes: string | null;
   model_aliases: string | null;
   rtk_policy: string | null;
@@ -1044,6 +1050,9 @@ export class RuntimeProviderRepository {
           strip_max_output_tokens,
           request_parameter_policy,
           sanitize_reasoning_summary,
+          preserve_messages_payload,
+          preserve_raw_request_body,
+          transport_mode,
           strip_model_prefixes,
           model_aliases,
           rtk_policy,
@@ -1054,7 +1063,7 @@ export class RuntimeProviderRepository {
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertApiKey = this.db.prepare(`
         INSERT INTO provider_api_keys (provider_id, api_key, position)
@@ -1093,6 +1102,9 @@ export class RuntimeProviderRepository {
             cloneProviderRequestParameterPolicy(provider.capabilities.requestParameterPolicy),
           ),
           provider.capabilities.sanitizeReasoningSummary ? 1 : 0,
+          provider.capabilities.preserveMessagesPayload ? 1 : 0,
+          provider.capabilities.preserveRawRequestBody ? 1 : 0,
+          provider.capabilities.transportMode ?? "responses",
           JSON.stringify(provider.capabilities.stripModelPrefixes),
           JSON.stringify(provider.capabilities.modelAliases ?? {}),
           JSON.stringify(cloneRtkLayerPolicy(provider.capabilities.rtkPolicy) ?? {}),
@@ -1171,6 +1183,9 @@ function ensureSchema(db: Database): void {
       strip_max_output_tokens INTEGER NOT NULL DEFAULT 0,
       request_parameter_policy TEXT NOT NULL DEFAULT '{}',
       sanitize_reasoning_summary INTEGER NOT NULL DEFAULT 0,
+      preserve_messages_payload INTEGER NOT NULL DEFAULT 0,
+      preserve_raw_request_body INTEGER NOT NULL DEFAULT 0,
+      transport_mode TEXT NOT NULL DEFAULT 'responses',
       strip_model_prefixes TEXT NOT NULL DEFAULT '[]',
       model_aliases TEXT NOT NULL DEFAULT '{}',
       rtk_policy TEXT NOT NULL DEFAULT '{}',
@@ -1248,6 +1263,9 @@ function ensureSchema(db: Database): void {
   ensureProvidersColumn(db, "strip_max_output_tokens", "INTEGER NOT NULL DEFAULT 0");
   ensureProvidersColumn(db, "request_parameter_policy", "TEXT NOT NULL DEFAULT '{}'");
   ensureProvidersColumn(db, "sanitize_reasoning_summary", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "preserve_messages_payload", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "preserve_raw_request_body", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "transport_mode", "TEXT NOT NULL DEFAULT 'responses'");
   ensureProvidersColumn(db, "strip_model_prefixes", "TEXT NOT NULL DEFAULT '[]'");
   ensureProvidersColumn(db, "model_aliases", "TEXT NOT NULL DEFAULT '{}'");
   ensureProvidersColumn(db, "rtk_policy", "TEXT NOT NULL DEFAULT '{}'");
@@ -1275,6 +1293,9 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       strip_max_output_tokens,
       request_parameter_policy,
       sanitize_reasoning_summary,
+      preserve_messages_payload,
+      preserve_raw_request_body,
+      transport_mode,
       strip_model_prefixes,
       model_aliases,
       rtk_policy,
@@ -1337,6 +1358,9 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
         row.strip_max_output_tokens === 1,
       ),
       sanitizeReasoningSummary: row.sanitize_reasoning_summary === 1,
+      preserveMessagesPayload: row.preserve_messages_payload === 1,
+      preserveRawRequestBody: row.preserve_raw_request_body === 1,
+      transportMode: normalizeTransportMode(row.transport_mode),
       stripModelPrefixes: normalizeStringList(row.strip_model_prefixes),
       modelAliases: normalizeStringMap(row.model_aliases),
       rtkPolicy: parseRtkLayerPolicyInput(safeJsonParse(row.rtk_policy ?? "{}")),
@@ -1898,6 +1922,13 @@ function parseProviderCapabilitiesInput(value: unknown): RuntimeProviderCapabili
     stripMaxOutputTokens: maxOutputTokensRule.mode === "strip",
     requestParameterPolicy,
     sanitizeReasoningSummary: coerceBoolean(record.sanitizeReasoningSummary),
+    preserveMessagesPayload: coerceBoolean(
+      record.preserveMessagesPayload ?? record.preserve_messages_payload,
+    ),
+    preserveRawRequestBody: coerceBoolean(
+      record.preserveRawRequestBody ?? record.preserve_raw_request_body,
+    ),
+    transportMode: normalizeTransportMode(record.transportMode ?? record.transport_mode),
     stripModelPrefixes: normalizeStringList(record.stripModelPrefixes),
     modelAliases: normalizeStringMap(record.modelAliases ?? record.model_aliases),
     rtkPolicy: parseRtkLayerPolicyInput(record.rtkPolicy ?? record.rtk_policy),
@@ -1921,6 +1952,9 @@ function cloneCapabilities(
       maxOutputTokens: maxOutputTokensRule,
     }),
     sanitizeReasoningSummary: capabilities?.sanitizeReasoningSummary ?? false,
+    preserveMessagesPayload: capabilities?.preserveMessagesPayload ?? false,
+    preserveRawRequestBody: capabilities?.preserveRawRequestBody ?? false,
+    transportMode: normalizeTransportMode(capabilities?.transportMode) ?? "responses",
     stripModelPrefixes: [...(capabilities?.stripModelPrefixes ?? [])],
     modelAliases: { ...(capabilities?.modelAliases ?? {}) },
     rtkPolicy: cloneRtkLayerPolicy(capabilities?.rtkPolicy),
@@ -1938,6 +1972,17 @@ function normalizeOptionalUrl(value: string): string {
       message: "capabilities.usageCheckUrl must be a valid URL",
     });
   }
+}
+
+function normalizeTransportMode(value: unknown): "responses" | "chat_completions" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "responses" || normalized === "chat_completions") {
+    return normalized;
+  }
+  return undefined;
 }
 
 function coerceBoolean(value: unknown): boolean {

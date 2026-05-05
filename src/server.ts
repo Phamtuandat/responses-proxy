@@ -1086,6 +1086,46 @@ app.put("/api/providers/:providerId", async (request, reply) => {
   }
 });
 
+app.post("/api/providers/:providerId/transport-mode", async (request, reply) => {
+  const params = request.params as { providerId?: string };
+  const providerId = typeof params.providerId === "string" ? params.providerId.trim() : "";
+  const body = request.body as { mode?: unknown } | undefined;
+  const mode = typeof body?.mode === "string" ? body.mode.trim().toLowerCase() : "";
+  if (mode !== "responses" && mode !== "chat_completions") {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_TRANSPORT_MODE",
+        message: "mode must be either 'responses' or 'chat_completions'",
+      },
+    });
+  }
+
+  try {
+    const existing = providerRepository.getProviderOrThrow(providerId);
+    const provider = providerRepository.updateProvider(providerId, {
+      name: existing.name,
+      baseUrl: existing.baseUrl,
+      responsesUrl: existing.responsesUrl,
+      authMode: existing.authMode,
+      chatgptAccountId: existing.chatgptAccountId,
+      providerApiKeys: existing.providerApiKeys,
+      clientApiKeys: existing.clientApiKeys,
+      capabilities: {
+        ...existing.capabilities,
+        transportMode: mode,
+      },
+    });
+    return reply.send({
+      ok: true,
+      activeProviderId: providerRepository.getActiveProviderId(),
+      provider: providerRepository.getProviderForUiOrThrow(provider.id),
+    });
+  } catch (error) {
+    return sendProviderRepositoryError(reply, error);
+  }
+});
+
 app.delete("/api/providers/:providerId", async (request, reply) => {
   const params = request.params as { providerId?: string };
   const providerId = typeof params.providerId === "string" ? params.providerId.trim() : "";
@@ -1393,44 +1433,54 @@ async function handleResponsesRequest(
         model: currentModelOverride,
       }
     : parsed.data;
-  const resolvedRtkPolicy = resolveRtkLayerPolicy(
-    {
-      enabled: config.RTK_LAYER_ENABLED,
-      toolOutputEnabled: config.RTK_LAYER_TOOL_OUTPUT_ENABLED,
-      maxChars: config.RTK_LAYER_TOOL_OUTPUT_MAX_CHARS,
-      maxLines: config.RTK_LAYER_TOOL_OUTPUT_MAX_LINES,
-      tailLines: config.RTK_LAYER_TOOL_OUTPUT_TAIL_LINES,
-      tailChars: config.RTK_LAYER_TOOL_OUTPUT_TAIL_CHARS,
-      detectFormat: config.RTK_LAYER_TOOL_OUTPUT_DETECT_FORMAT,
-    },
-    selectedProvider.capabilities.rtkPolicy,
-    clientRouteRtkPolicy,
-  );
+  const preserveRawRequestBody = selectedProvider.capabilities.preserveRawRequestBody === true;
+  const resolvedRtkPolicy = preserveRawRequestBody
+    ? {
+        enabled: false,
+        toolOutputEnabled: false,
+      }
+    : resolveRtkLayerPolicy(
+        {
+          enabled: config.RTK_LAYER_ENABLED,
+          toolOutputEnabled: config.RTK_LAYER_TOOL_OUTPUT_ENABLED,
+          maxChars: config.RTK_LAYER_TOOL_OUTPUT_MAX_CHARS,
+          maxLines: config.RTK_LAYER_TOOL_OUTPUT_MAX_LINES,
+          tailLines: config.RTK_LAYER_TOOL_OUTPUT_TAIL_LINES,
+          tailChars: config.RTK_LAYER_TOOL_OUTPUT_TAIL_CHARS,
+          detectFormat: config.RTK_LAYER_TOOL_OUTPUT_DETECT_FORMAT,
+        },
+        selectedProvider.capabilities.rtkPolicy,
+        clientRouteRtkPolicy,
+      );
   const rtkLayerResult = applyRtkLayer(requestBody, resolvedRtkPolicy);
   const effectiveRequestBody = rtkLayerResult.body;
-
-  const normalizedResult = normalizeResponsesRequestWithCache(effectiveRequestBody, {
-    openClawTokenOptimizationEnabled: config.OPENCLAW_TOKEN_OPTIMIZATION_ENABLED,
-    defaultReasoningEffort: config.OPENCLAW_DEFAULT_REASONING_EFFORT,
-    defaultReasoningSummary: config.OPENCLAW_DEFAULT_REASONING_SUMMARY,
-    defaultTextVerbosity: config.OPENCLAW_DEFAULT_TEXT_VERBOSITY,
-    defaultMaxOutputTokens: config.OPENCLAW_DEFAULT_MAX_OUTPUT_TOKENS,
-    autoPromptCacheKey: config.OPENCLAW_AUTO_PROMPT_CACHE_KEY,
-    defaultPromptCacheRetention: config.OPENCLAW_PROMPT_CACHE_RETENTION,
-    promptCacheRedesignEnabled: config.PROVIDER_PROMPT_CACHE_REDESIGN_ENABLED,
-    promptCacheStableSummarizationEnabled:
-      config.PROVIDER_PROMPT_CACHE_STABLE_SUMMARIZATION_ENABLED,
-    promptCacheSummaryTriggerItems: config.PROVIDER_PROMPT_CACHE_SUMMARY_TRIGGER_ITEMS,
-    promptCacheSummaryKeepRecentItems: config.PROVIDER_PROMPT_CACHE_SUMMARY_KEEP_RECENT_ITEMS,
-    promptCacheRetentionByFamilyEnabled:
-      config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY_ENABLED,
-    promptCacheRetentionByFamilyRules: config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY,
-    defaultTruncation:
-      maxOutputTokensRule.mode === "strip" ? undefined : config.OPENCLAW_DEFAULT_TRUNCATION,
-    maxOutputTokensPolicy: maxOutputTokensRule,
-    sanitizeReasoningSummary: selectedProvider.capabilities.sanitizeReasoningSummary,
-  });
-  const normalized = sanitizeNormalizedRequestForProvider(normalizedResult.request, selectedProvider);
+  const normalizedResult = preserveRawRequestBody
+    ? { request: effectiveRequestBody as Record<string, unknown>, cacheLayout: {} }
+    : normalizeResponsesRequestWithCache(effectiveRequestBody, {
+        openClawTokenOptimizationEnabled: config.OPENCLAW_TOKEN_OPTIMIZATION_ENABLED,
+        defaultReasoningEffort: config.OPENCLAW_DEFAULT_REASONING_EFFORT,
+        defaultReasoningSummary: config.OPENCLAW_DEFAULT_REASONING_SUMMARY,
+        defaultTextVerbosity: config.OPENCLAW_DEFAULT_TEXT_VERBOSITY,
+        defaultMaxOutputTokens: config.OPENCLAW_DEFAULT_MAX_OUTPUT_TOKENS,
+        autoPromptCacheKey: config.OPENCLAW_AUTO_PROMPT_CACHE_KEY,
+        defaultPromptCacheRetention: config.OPENCLAW_PROMPT_CACHE_RETENTION,
+        promptCacheRedesignEnabled: config.PROVIDER_PROMPT_CACHE_REDESIGN_ENABLED,
+        promptCacheStableSummarizationEnabled:
+          config.PROVIDER_PROMPT_CACHE_STABLE_SUMMARIZATION_ENABLED,
+        promptCacheSummaryTriggerItems: config.PROVIDER_PROMPT_CACHE_SUMMARY_TRIGGER_ITEMS,
+        promptCacheSummaryKeepRecentItems: config.PROVIDER_PROMPT_CACHE_SUMMARY_KEEP_RECENT_ITEMS,
+        promptCacheRetentionByFamilyEnabled:
+          config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY_ENABLED,
+        promptCacheRetentionByFamilyRules: config.PROVIDER_PROMPT_CACHE_RETENTION_BY_FAMILY,
+        defaultTruncation:
+          maxOutputTokensRule.mode === "strip" ? undefined : config.OPENCLAW_DEFAULT_TRUNCATION,
+        maxOutputTokensPolicy: maxOutputTokensRule,
+        sanitizeReasoningSummary: selectedProvider.capabilities.sanitizeReasoningSummary,
+        preserveMessagesPayload: selectedProvider.capabilities.preserveMessagesPayload === true,
+      });
+  const normalized = preserveRawRequestBody
+    ? (effectiveRequestBody as Record<string, unknown>)
+    : sanitizeNormalizedRequestForProvider(normalizedResult.request, selectedProvider);
   const activeProviderId = selectedProvider.id;
   const isStream = normalized.stream === true;
   const traceContext: Record<string, unknown> = {
@@ -1487,6 +1537,18 @@ async function handleResponsesRequest(
     rtk: rtkLayerResult.stats,
     ...traceContext,
   });
+
+  if (preserveRawRequestBody) {
+    request.log.info(
+      {
+        requestId,
+        providerId: activeProviderId,
+        forwardMode: "transparent_raw",
+        topLevelKeys: Object.keys(normalized).sort(),
+      },
+      "forwarding raw request body without proxy transforms",
+    );
+  }
 
   if (config.LOG_BODY) {
     request.log.debug({ requestId, normalized }, "normalized responses payload");
@@ -2254,6 +2316,11 @@ async function resolveForwardTarget(args: {
 }
 
 async function buildForwardTarget(provider: RuntimeProviderPreset): Promise<ForwardTarget> {
+  const transportMode = provider.capabilities.transportMode ?? "responses";
+  const transportUrl =
+    transportMode === "chat_completions"
+      ? `${provider.baseUrl.replace(/\/+$/, "")}/chat/completions`
+      : provider.responsesUrl;
   if (provider.authMode === "chatgpt_oauth") {
     const accessToken = await resolveChatGptAccessToken({
       provider,
@@ -2263,7 +2330,7 @@ async function buildForwardTarget(provider: RuntimeProviderPreset): Promise<Forw
     });
     return {
       name: provider.id,
-      url: provider.responsesUrl,
+      url: transportUrl,
       headers: {
         ...buildChatGptCodexHeaders(),
         Authorization: `Bearer ${accessToken}`,
@@ -2273,7 +2340,7 @@ async function buildForwardTarget(provider: RuntimeProviderPreset): Promise<Forw
 
   return {
     name: provider.id,
-    url: provider.responsesUrl,
+    url: transportUrl,
     apiKey: getDefaultProviderApiKey(provider),
   };
 }
@@ -2296,6 +2363,8 @@ async function forwardJsonWithFallback(args: {
   sessionLog: ReturnType<typeof createSessionLogContext>;
 }): Promise<{ upstream: Response; target: ForwardTarget }> {
   const primaryTarget = await resolveForwardTarget(args);
+  const disableFallback =
+    providerRepository.getProvider(primaryTarget.name)?.capabilities.preserveRawRequestBody === true;
   const fallbackProvider = getFallbackProviderPreset(args.clientRoute, primaryTarget.name);
   const usingFallbackAsPrimary = fallbackProvider
     ? primaryTarget.name === fallbackProvider.id
@@ -2321,14 +2390,14 @@ async function forwardJsonWithFallback(args: {
       return { upstream: primaryResponse, target: primaryTarget };
     }
 
-    if (!shouldFallbackFromStatus(primaryResponse.status) || !fallbackProvider) {
+    if (disableFallback || !shouldFallbackFromStatus(primaryResponse.status) || !fallbackProvider) {
       throw await buildUpstreamError(args.requestId, primaryResponse);
     }
 
     const primaryError = await buildUpstreamError(args.requestId, primaryResponse);
     await logFallbackAttempt(args, "response", primaryError, primaryResponse.status);
   } else {
-    if (!shouldFallbackFromError(primaryResponse) || !fallbackProvider) {
+    if (disableFallback || !shouldFallbackFromError(primaryResponse) || !fallbackProvider) {
       throw primaryResponse;
     }
 
@@ -2550,6 +2619,8 @@ async function forwardSseWithFallback(args: {
   onEvent?: (entry: Record<string, unknown>) => void;
 }): Promise<ForwardTarget> {
   const primaryTarget = await resolveForwardTarget(args);
+  const disableFallback =
+    providerRepository.getProvider(primaryTarget.name)?.capabilities.preserveRawRequestBody === true;
   const fallbackProvider = getFallbackProviderPreset(args.clientRoute, primaryTarget.name);
   const usingFallbackAsPrimary = fallbackProvider
     ? primaryTarget.name === fallbackProvider.id
@@ -2583,6 +2654,7 @@ async function forwardSseWithFallback(args: {
   } catch (error) {
     if (
       usingFallbackAsPrimary ||
+      disableFallback ||
       !fallbackProvider ||
       args.responseRaw.headersSent ||
       !shouldFallbackFromError(error)
@@ -2919,15 +2991,10 @@ function buildQuickApplyClientStatus(
 ) {
   const pathToRead = client === "hermes" ? quickApplyPaths.hermesConfigPath : quickApplyPaths.codexConfigPath;
   const route = providerRepository.getClientRoutesForUi().find((entry) => entry.key === client);
-  const routeApiKeys = providerRepository.getClientRouteApiKeys(client);
-  const allClientApiKeys = providerRepository
-    .getClientRoutesForUi()
-    .filter((entry) => entry.key !== "default")
-    .flatMap((entry) => entry.apiKeys);
-  let routeApiKey = routeApiKeys[0] || "";
+  const routeApiKey = providerRepository.getClientRouteApiKeys(client)[0] || "";
   const access = getQuickApplyAccess(client);
   const raw = readQuickConfigFile(pathToRead);
-  let status = readQuickApplyStatus(
+  const status = readQuickApplyStatus(
     raw,
     {
       client,
@@ -2937,20 +3004,6 @@ function buildQuickApplyClientStatus(
     },
     pathToRead,
   );
-  const detectedApiKey = typeof status.detected.apiKey === "string" ? status.detected.apiKey : "";
-  if (detectedApiKey && allClientApiKeys.includes(detectedApiKey) && detectedApiKey !== routeApiKey) {
-    routeApiKey = detectedApiKey;
-    status = readQuickApplyStatus(
-      raw,
-      {
-        client,
-        proxyBaseUrl,
-        routeApiKey,
-        model: providerRepository.getModelOverride(client),
-      },
-      pathToRead,
-    );
-  }
 
   return {
     ...status,

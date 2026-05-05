@@ -7,6 +7,7 @@ export type ProviderFormData = {
   authMode: "api_key" | "chatgpt_oauth";
   chatgptAccountId: string;
   providerApiKeysText: string;
+  transportMode: "responses" | "chat_completions";
 };
 
 type ProviderFormSubmitValue = {
@@ -16,6 +17,7 @@ type ProviderFormSubmitValue = {
   chatgptAccountId?: string;
   providerApiKeys?: string[];
   replaceKeys: boolean;
+  transportMode: "responses" | "chat_completions";
 };
 
 type ProviderFormProps = {
@@ -39,6 +41,7 @@ export function ProviderForm({ mode, initialData, onSubmit, onCancel }: Provider
     authMode: initialData?.authMode === "chatgpt_oauth" ? "chatgpt_oauth" : "api_key",
     chatgptAccountId: initialData?.chatgptAccountId ?? "",
     providerApiKeysText: initialData?.providerApiKeysText ?? "",
+    transportMode: initialData?.transportMode === "chat_completions" ? "chat_completions" : "responses",
   });
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -96,6 +99,7 @@ export function ProviderForm({ mode, initialData, onSubmit, onCancel }: Provider
         chatgptAccountId: chatgptAccountId || undefined,
         providerApiKeys,
         replaceKeys,
+        transportMode: form.transportMode,
       });
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Could not save provider.");
@@ -174,6 +178,23 @@ export function ProviderForm({ mode, initialData, onSubmit, onCancel }: Provider
           />
         </label>
       ) : null}
+
+      <label className="form-field">
+        <span className="field-label">Transport mode</span>
+        <select
+          className="search-input"
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              transportMode: event.target.value === "chat_completions" ? "chat_completions" : "responses",
+            }))
+          }
+          value={form.transportMode}
+        >
+          <option value="responses">Responses API (/responses)</option>
+          <option value="chat_completions">Chat Completions (/chat/completions)</option>
+        </select>
+      </label>
 
       <label className="form-field">
         <span className="field-label">

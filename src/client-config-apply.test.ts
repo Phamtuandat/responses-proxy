@@ -35,6 +35,58 @@ test("applyHermesConfig points Hermes to proxy while preserving unrelated sectio
   assert.match(next, /browser:\n  inactivity_timeout: 120/);
 });
 
+test("readQuickApplyStatus rejects Hermes config when it contains another client's route API key", () => {
+  const raw = [
+    "model:",
+    "  default: gpt-5.4",
+    "  provider: custom",
+    "  api_key: sk-codex-route-abc",
+    "  base_url: http://127.0.0.1:8318/v1",
+    "  api_mode: codex_responses",
+    "",
+  ].join("\n");
+
+  const status = readQuickApplyStatus(
+    raw,
+    {
+      client: "hermes",
+      proxyBaseUrl: "http://127.0.0.1:8318/v1",
+      routeApiKey: "sk-hermes-route-abc",
+    },
+    "/tmp/hermes-config.yaml",
+  );
+
+  assert.equal(status.configured, false);
+  assert.equal(status.detected.apiKey, "sk-codex-route-abc");
+  assert.equal(status.routeApiKey, "sk-hermes-route-abc");
+});
+
+test("readQuickApplyStatus rejects Hermes config when the configured model differs", () => {
+  const raw = [
+    "model:",
+    "  default: cx/gpt-5.4",
+    "  provider: custom",
+    "  api_key: sk-hermes-route-abc",
+    "  base_url: http://127.0.0.1:8318/v1",
+    "  api_mode: codex_responses",
+    "",
+  ].join("\n");
+
+  const status = readQuickApplyStatus(
+    raw,
+    {
+      client: "hermes",
+      proxyBaseUrl: "http://127.0.0.1:8318/v1",
+      routeApiKey: "sk-hermes-route-abc",
+      model: "cx/gpt-5.5",
+    },
+    "/tmp/hermes-config.yaml",
+  );
+
+  assert.equal(status.configured, false);
+  assert.equal(status.detected.model, "cx/gpt-5.4");
+});
+
 test("applyCodexConfig switches active provider to responses_proxy and preserves project sections", () => {
   const raw = [
     'model = "gpt-5.4"',

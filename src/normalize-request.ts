@@ -23,6 +23,7 @@ type NormalizeRequestOptions = {
   promptCacheSummaryKeepRecentItems?: number;
   promptCacheRetentionByFamilyEnabled?: boolean;
   promptCacheRetentionByFamilyRules?: Array<{ prefix: string; retention: string }>;
+  preserveMessagesPayload?: boolean;
 };
 
 export type NormalizedResponsesRequestResult = {
@@ -302,8 +303,17 @@ export function normalizeResponsesRequestWithCache(
   body: ProxyResponsesRequest,
   options: NormalizeRequestOptions = {},
 ): NormalizedResponsesRequestResult {
+  const preserveMessagesPayload =
+    options.preserveMessagesPayload === true && body.input === undefined && Array.isArray(body.messages);
   const normalizedBase =
-    body.input !== undefined ? normalizeDirectInput(body) : convertMessagesToInput(body);
+    body.input !== undefined
+      ? normalizeDirectInput(body)
+      : preserveMessagesPayload
+        ? {
+            input: normalizeInputValue(body.messages),
+            instructions: normalizeInstructions(body.instructions),
+          }
+        : convertMessagesToInput(body);
   const isOpenClaw = options.openClawTokenOptimizationEnabled
     ? isLikelyHermesPayload(body, normalizedBase.instructions)
     : false;

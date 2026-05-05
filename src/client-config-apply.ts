@@ -189,6 +189,7 @@ function readHermesStatus(
     path,
     exists: typeof raw === "string",
     configured:
+      (!config.model?.trim() || detected.model === config.model.trim()) &&
       detected.provider === "custom" &&
       normalizeProxyBaseUrl(detected.baseUrl) === normalizeProxyBaseUrl(config.proxyBaseUrl) &&
       detected.apiKey === config.routeApiKey &&
@@ -219,6 +220,7 @@ function readCodexStatus(
     path,
     exists: typeof raw === "string",
     configured:
+      (!config.model?.trim() || detected.model === config.model.trim()) &&
       detected.modelProvider === "responses_proxy" &&
       normalizeProxyBaseUrl(detected.baseUrl) === normalizeProxyBaseUrl(config.proxyBaseUrl) &&
       detected.apiKey === config.routeApiKey &&
