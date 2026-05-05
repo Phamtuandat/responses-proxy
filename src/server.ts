@@ -1261,9 +1261,15 @@ app.get("/api/providers/live-usage", async (request, reply) => {
     isOpenAiCodexOAuthProvider(provider) ||
     (provider.capabilities.usageCheckEnabled === true && Boolean(provider.capabilities.usageCheckUrl)),
   );
-  const entries = await Promise.all(
+  const entries = (await Promise.all(
     providers.map((provider) => buildLiveProviderUsageEntry(provider, requestId, request.log)),
-  );
+  )).filter((entry) => {
+    if (entry.authMode !== "chatgpt_oauth") {
+      return true;
+    }
+
+    return entry.ok === true && entry.usage !== null;
+  });
   return reply.send({
     ok: true,
     timestamp: new Date().toISOString(),
