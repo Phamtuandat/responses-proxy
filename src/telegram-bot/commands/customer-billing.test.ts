@@ -193,7 +193,7 @@ test("quota command shows expired entitlement details", async () => {
     });
     const granted = billing.grantSubscription({
       workspaceId: workspace.id,
-      planId: "trial",
+      planId: "basic",
       days: 1,
       now: new Date("2026-04-27T00:00:00.000Z"),
     });
@@ -301,7 +301,7 @@ test("customer action buttons load key, usage, quota, and dashboard", async () =
     (quotaCtx as any).match = quotaFound.match;
     await quotaFound.handler(quotaCtx as any);
     assert.equal(quotaCtx.replies[0].includes("Your quota"), true);
-    assert.equal(quotaCtx.replies[0].includes("remaining_tokens: 999987"), true);
+    assert.equal(quotaCtx.replies[0].includes("remaining_tokens: 9999987"), true);
 
     const dashboardFound = harness.callbackHandler("v1:customer:dashboard");
     const dashboardCtx = createContext({ userId: 46, chatId: 46, chatType: "private", command: "callback" });

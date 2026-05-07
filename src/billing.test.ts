@@ -17,8 +17,11 @@ function withRepository(fn: (repo: BillingRepository) => void): void {
 test("BillingRepository seeds default plans", () => {
   withRepository((repo) => {
     const plans = repo.listPlans();
-    assert.equal(plans.some((plan) => plan.id === "trial"), true);
     assert.equal(plans.some((plan) => plan.id === "basic"), true);
+    assert.equal(plans.length, 1);
+    assert.equal(plans[0]?.priceCents, 5_000);
+    assert.equal(plans[0]?.currency, "VND");
+    assert.equal(plans[0]?.monthlyTokenLimit, 10_000_000);
   });
 });
 
@@ -75,7 +78,7 @@ test("BillingRepository expires outdated entitlements and subscriptions", () => 
   withRepository((repo) => {
     repo.grantSubscription({
       workspaceId: "workspace-1",
-      planId: "trial",
+      planId: "basic",
       days: 1,
       now: new Date("2026-04-27T00:00:00.000Z"),
     });
@@ -126,7 +129,7 @@ test("BillingRepository returns the latest entitlement for expired workspaces", 
   withRepository((repo) => {
     repo.grantSubscription({
       workspaceId: "workspace-expired",
-      planId: "trial",
+      planId: "basic",
       days: 1,
       now: new Date("2026-04-27T00:00:00.000Z"),
     });

@@ -194,16 +194,11 @@ export class BillingRepository {
         created_at,
         updated_at
       )
-      VALUES (?, ?, 'active', ?, 'USD', 'month', ?, ?, '[]', '{}', ?, ?)
+      VALUES (?, ?, 'active', ?, 'VND', 'month', ?, ?, '[]', '{}', ?, ?)
       ON CONFLICT(id) DO NOTHING`,
     );
 
-    insertPlan.run("trial", "Trial", 0, 50_000, 1, timestamp, timestamp);
-    insertPlan.run("basic", "Basic", 1_900, 1_000_000, 1, timestamp, timestamp);
-    insertPlan.run("starter", "Starter", 900, 500_000, 1, timestamp, timestamp);
-    insertPlan.run("pro", "Pro", 4_900, 5_000_000, 3, timestamp, timestamp);
-    insertPlan.run("team", "Team", 19_900, 20_000_000, 10, timestamp, timestamp);
-    insertPlan.run("enterprise", "Enterprise", 99_900, 100_000_000, 25, timestamp, timestamp);
+    insertPlan.run("basic", "Basic", 5_000, 10_000_000, 1, timestamp, timestamp);
   }
 
   listPlans(): PlanRecord[] {

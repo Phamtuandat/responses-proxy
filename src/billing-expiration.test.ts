@@ -38,7 +38,7 @@ test("expired subscription becomes expired and active key becomes suspended", as
     });
     const granted = billing.grantSubscription({
       workspaceId: workspace.id,
-      planId: "trial",
+      planId: "basic",
       days: 1,
       now: new Date("2026-04-20T00:00:00.000Z"),
     });
@@ -89,7 +89,7 @@ test("running billing expiration twice is idempotent", async () => {
     });
     billing.grantSubscription({
       workspaceId: workspace.id,
-      planId: "trial",
+      planId: "basic",
       days: 1,
       now: new Date("2026-04-20T00:00:00.000Z"),
     });

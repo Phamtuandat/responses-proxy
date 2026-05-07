@@ -149,10 +149,7 @@ test("plans lists available seeded plan ids for admins", async () => {
     await harness.handler("plans")(ctx);
 
     assert.equal(ctx.replies.length, 1);
-    assert.equal(ctx.replies[0].includes("- trial:"), true);
     assert.equal(ctx.replies[0].includes("- basic:"), true);
-    assert.equal(ctx.replies[0].includes("- pro:"), true);
-    assert.equal(ctx.replies[0].includes("- team:"), true);
     assert.equal(ctx.replies[0].includes("price_cents="), true);
   });
 });
@@ -167,20 +164,20 @@ test("plans create adds a new admin-created plan", async () => {
       fromId: 1,
       chatId: 1,
       chatType: "private",
-      match: "create growth Growth 2500000 2 2900 USD month",
+      match: "create premium Premium 2500000 2 2900 USD month",
     });
 
     await harness.handler("plans")(ctx);
 
-    const plan = billing.getPlan("growth");
+    const plan = billing.getPlan("premium");
     assert.ok(plan);
-    assert.equal(plan.name, "Growth");
+    assert.equal(plan.name, "Premium");
     assert.equal(plan.monthlyTokenLimit, 2_500_000);
     assert.equal(plan.maxApiKeys, 2);
     assert.equal(plan.priceCents, 2_900);
     assert.equal(plan.currency, "USD");
     assert.equal(plan.billingInterval, "month");
-    assert.equal(ctx.replies[0].includes("Created plan growth"), true);
+    assert.equal(ctx.replies[0].includes("Created plan premium"), true);
   });
 });
 
@@ -194,12 +191,12 @@ test("plans create rejects duplicate plan ids", async () => {
       fromId: 1,
       chatId: 1,
       chatType: "private",
-      match: "create pro Pro 5000000 3 4900 USD month",
+      match: "create basic Basic 10000000 1 5000 VND month",
     });
 
     await harness.handler("plans")(ctx);
 
-    assert.equal(ctx.replies[0], "Plan already exists: pro");
+    assert.equal(ctx.replies[0], "Plan already exists: basic");
   });
 });
 
@@ -220,6 +217,6 @@ test("grant suggests valid plan ids when planId is unknown", async () => {
 
     assert.equal(ctx.replies.length, 1);
     assert.equal(ctx.replies[0].includes("Unknown planId: unknown"), true);
-    assert.equal(ctx.replies[0].includes("Available planIds: basic, enterprise, pro, starter, team, trial"), true);
+    assert.equal(ctx.replies[0].includes("Available planIds: basic"), true);
   });
 });
