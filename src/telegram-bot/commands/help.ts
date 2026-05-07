@@ -25,12 +25,13 @@ export function registerHelpCommand(bot: Bot, deps: BotDependencies): void {
               "/apikey - show your Responses API key",
               "/usage - show token usage for your current period",
               "/quota - show token limit, remaining balance, and expiration",
-              "/renew - choose a plan and send a renewal request to admin",
+              "/renew - request a 24h renewal from admin",
               "/tailscale - install Tailscale and ask admin for a fresh invite",
             ]
         : [
             "Admin Ops:",
-            "/plans - list billing plan ids and limits",
+            "/plans - list billing plan ids, limits, and pricing",
+            "/plans create <planId> <name> <monthlyTokenLimit> <maxApiKeys> [priceCents] [currency] [billingInterval] - create a billing plan",
             "/grant <telegramUserId> <planId> <days> - activate customer access",
             "/renewuser <telegramUserId> <planId> <days> [replace-key] - renew customer access",
             "/renew list | approve | close - manage renewal requests",
@@ -46,7 +47,7 @@ export function registerHelpCommand(bot: Bot, deps: BotDependencies): void {
           "/apikey - show your Responses API key",
           "/usage - show token usage for your current period",
           "/quota - show token limit, remaining balance, and expiration",
-          "/renew - choose a plan and send a renewal request to admin",
+          "/renew - request a 24h renewal from admin",
           "/tailscale - install Tailscale and ask admin for a fresh invite",
         ];
     await ctx.reply(lines.join("\n"));

@@ -238,7 +238,7 @@ async function withRepos(
   }
 }
 
-test("customer /renew without args shows a plan picker", async () => {
+test("customer /renew without args creates a 24h renewal request", async () => {
   await withRepos(async ({ identities, workspaces, customerKeys, billing, auditLog, sessions, deps }) => {
     identities.upsertUser({
       telegramUserId: "42",
@@ -262,11 +262,15 @@ test("customer /renew without args shows a plan picker", async () => {
 
     await harness.handler("renew")(ctx);
 
-    assert.equal(ctx.replies[0], "Choose a plan for your renewal request.");
+    const request = billing.listRenewalRequests("open")[0];
+    assert.equal(request?.requestedDays, 1);
+    assert.equal(request?.requestedPlanId, undefined);
+    assert.equal(ctx.replies[0]?.includes("Renewal request submitted."), true);
+    assert.equal(ctx.replies[0]?.includes("requested_days: 1"), true);
   });
 });
 
-test("customer can open the plan picker from the start button", async () => {
+test("customer can request 24h renewal from the start button", async () => {
   await withRepos(async ({ identities, workspaces, customerKeys, billing, auditLog, sessions, deps }) => {
     identities.upsertUser({
       telegramUserId: "42",
@@ -293,7 +297,9 @@ test("customer can open the plan picker from the start button", async () => {
 
     await found.handler(ctx as any);
 
-    assert.equal(ctx.replies[0] ?? ctx.editedTexts[0], "Choose a plan for your renewal request.");
+    const request = billing.listRenewalRequests("open")[0];
+    assert.equal(request?.requestedDays, 1);
+    assert.equal((ctx.replies[0] ?? ctx.editedTexts[0])?.includes("Renewal request submitted."), true);
   });
 });
 
@@ -329,7 +335,7 @@ test("customer /renew creates a renewal request and notifies admin", async () =>
       fromId: 42,
       chatId: 42,
       chatType: "private",
-      match: "basic 15",
+      match: "",
       sendMessageImpl: async (chatId, text) => {
         notified.push({ chatId, text });
       },
@@ -343,7 +349,8 @@ test("customer /renew creates a renewal request and notifies admin", async () =>
     assert.equal(notified[0]?.chatId, 1);
     assert.equal(notified[0]?.text.includes("Renewal request."), true);
     assert.equal(notified[0]?.text.includes("customer: Atger | id=42"), true);
-    assert.equal(notified[0]?.text.includes("requested_plan: basic (Basic)"), true);
+    assert.equal(notified[0]?.text.includes("requested_plan: manual review needed"), true);
+    assert.equal(notified[0]?.text.includes("requested_days: 1"), true);
     assert.equal(notified[0]?.text.includes("current_expiry:"), true);
   });
 });
@@ -372,7 +379,7 @@ test("customer sees a warning when admin notification fails", async () => {
       fromId: 42,
       chatId: 42,
       chatType: "private",
-      match: "basic 15",
+      match: "",
       sendMessageImpl: async () => {
         throw new Error("telegram send failed");
       },
@@ -407,7 +414,7 @@ test("admin notification marks users without an active token as new access", asy
       fromId: 42,
       chatId: 42,
       chatType: "private",
-      match: "basic 15",
+      match: "",
       sendMessageImpl: async (chatId, text) => {
         notified.push({ chatId, text });
       },
@@ -441,13 +448,13 @@ test("duplicate open /renew returns the existing request", async () => {
       fromId: 42,
       chatId: 42,
       chatType: "private",
-      match: "basic 15",
+      match: "",
     });
     const second = createContext({
       fromId: 42,
       chatId: 42,
       chatType: "private",
-      match: "basic 15",
+      match: "",
     });
 
     await harness.handler("renew")(first);

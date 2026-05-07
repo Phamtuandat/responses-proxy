@@ -34,22 +34,8 @@ export function registerRenewCommand(
   });
 
   bot.callbackQuery("v1:renew:open", async (ctx) => {
-    await answerCallbackQuerySafely(ctx, { text: "Choose a plan" });
+    await answerCallbackQuerySafely(ctx, { text: "24h renewal request" });
     await handleCustomerRenewCommand(ctx, deps, stateStore, identities, workspaces, customerKeys, billing, auditLog, "");
-  });
-
-  bot.callbackQuery(/^v1:renew:plan:([A-Za-z0-9_-]+)$/, async (ctx) => {
-    const token = ctx.match[1];
-    const callbackState = stateStore.readCallbackToken(token);
-    if (callbackState?.kind !== "renewal_plan") {
-      await answerCallbackQuerySafely(ctx, { text: "Selection expired. Run /renew again.", show_alert: true });
-      return;
-    }
-    await answerCallbackQuerySafely(ctx, { text: "Plan selected" });
-    await handleCustomerRenewRequest(ctx, deps, stateStore, identities, workspaces, customerKeys, billing, auditLog, {
-      planId: callbackState.planId,
-      days: callbackState.days,
-    });
   });
 
   bot.callbackQuery(
@@ -363,24 +349,13 @@ async function handleCustomerRenewCommand(
   }
 
   if (!rawArgs.trim()) {
-    const plans = billing.listPlans().filter((plan) => plan.status === "active");
-    if (plans.length === 0) {
-      await replyOrEditMessage(ctx, "No billing plans are available right now. Please contact admin.");
-      return;
-    }
-    await replyOrEditMessage(ctx, "Choose a plan for your renewal request.", {
-      reply_markup: buildRenewPlanKeyboard(stateStore, plans),
+    await handleCustomerRenewRequest(ctx, deps, stateStore, identities, workspaces, customerKeys, billing, auditLog, {
+      days: 1,
     });
     return;
   }
 
-  const parsed = parseCustomerRenewArgs(rawArgs);
-  if (!parsed) {
-    await replyOrEditMessage(ctx, "Usage: /renew or /renew <planId> <days>");
-    return;
-  }
-
-  await handleCustomerRenewRequest(ctx, deps, stateStore, identities, workspaces, customerKeys, billing, auditLog, parsed);
+  await replyOrEditMessage(ctx, "Usage: /renew - request a 24h renewal");
 }
 
 async function handleCustomerRenewRequest(
@@ -392,7 +367,7 @@ async function handleCustomerRenewRequest(
   customerKeys: CustomerKeyRepository,
   billing: BillingRepository,
   auditLog: AuditLogRepository,
-  parsed?: { planId: string; days: number },
+  parsed?: { planId?: string; days: number },
 ): Promise<void> {
   const telegramUserId = ctx.from?.id?.toString();
   if (!telegramUserId) {
@@ -535,19 +510,6 @@ async function handleAdminRenewCommand(
   );
 }
 
-function parseCustomerRenewArgs(raw: string): { planId: string; days: number } | undefined {
-  const args = raw.trim().split(/\s+/g).filter(Boolean);
-  if (args.length === 0) {
-    return undefined;
-  }
-  const [planId, daysRaw] = args;
-  const days = Number(daysRaw);
-  if (!planId || !Number.isInteger(days) || days <= 0) {
-    return undefined;
-  }
-  return { planId, days };
-}
-
 async function notifyAdminsAboutRenewalRequest(
   ctx: Context,
   deps: BotDependencies,
@@ -589,22 +551,6 @@ async function notifyAdminsAboutRenewalRequest(
     }
   }
   return { sent, failed };
-}
-
-function buildRenewPlanKeyboard(stateStore: TelegramBotStateStore, plans: ReturnType<BillingRepository["listPlans"]>): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  plans.forEach((plan, index) => {
-    const token = stateStore.issueCallbackToken({
-      kind: "renewal_plan",
-      planId: plan.id,
-      days: defaultDaysForPlan(plan.billingInterval),
-    });
-    keyboard.text(plan.name, `v1:renew:plan:${token}`);
-    if (index % 2 === 1) {
-      keyboard.row();
-    }
-  });
-  return keyboard;
 }
 
 function buildAdminRenewalListKeyboard(
@@ -740,13 +686,6 @@ function buildRenewalCustomerKeyboard(stateStore: TelegramBotStateStore, request
   return new InlineKeyboard()
     .text("⚪ Back", `v1:renew:back:${backToken}`)
     .url("⚪ Open customer chat", `tg://user?id=${request.telegramUserId}`);
-}
-
-function defaultDaysForPlan(interval: "month" | "year" | "one_time"): number {
-  if (interval === "year") {
-    return 365;
-  }
-  return 30;
 }
 
 function normalizeRenewalAction(

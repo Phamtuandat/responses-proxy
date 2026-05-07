@@ -14,7 +14,7 @@ export function buildCustomerActionKeyboard(hasActiveKey: boolean): InlineKeyboa
     .text("📊 Usage", "v1:customer:usage")
     .row()
     .text("🧾 Quota", "v1:customer:quota")
-    .text(hasActiveKey ? "🔵 Renew" : "🟢 New", "v1:renew:open")
+    .text(hasActiveKey ? "⏱ Renew 24h" : "⏱ New 24h", "v1:renew:open")
     .row()
     .text("🔄 Refresh", "v1:customer:dashboard");
 }

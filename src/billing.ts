@@ -20,6 +20,20 @@ export type PlanRecord = {
   updatedAt: string;
 };
 
+export type CreatePlanInput = {
+  id: string;
+  name: string;
+  priceCents?: number;
+  currency?: string;
+  billingInterval?: "month" | "year" | "one_time";
+  monthlyTokenLimit: number;
+  maxApiKeys: number;
+  allowedModels?: string[];
+  metadataJson?: string;
+  status?: "active" | "archived";
+  now?: Date;
+};
+
 export type SubscriptionRecord = {
   id: string;
   workspaceId: string;
@@ -185,7 +199,11 @@ export class BillingRepository {
     );
 
     insertPlan.run("trial", "Trial", 0, 50_000, 1, timestamp, timestamp);
-    insertPlan.run("basic", "Basic", 0, 1_000_000, 1, timestamp, timestamp);
+    insertPlan.run("basic", "Basic", 1_900, 1_000_000, 1, timestamp, timestamp);
+    insertPlan.run("starter", "Starter", 900, 500_000, 1, timestamp, timestamp);
+    insertPlan.run("pro", "Pro", 4_900, 5_000_000, 3, timestamp, timestamp);
+    insertPlan.run("team", "Team", 19_900, 20_000_000, 10, timestamp, timestamp);
+    insertPlan.run("enterprise", "Enterprise", 99_900, 100_000_000, 25, timestamp, timestamp);
   }
 
   listPlans(): PlanRecord[] {
@@ -196,6 +214,53 @@ export class BillingRepository {
   getPlan(planId: string): PlanRecord | undefined {
     const row = this.db.prepare("SELECT * FROM plans WHERE id = ?").get(planId) as PlanRow | undefined;
     return row ? mapPlanRow(row) : undefined;
+  }
+
+  createPlan(input: CreatePlanInput): PlanRecord {
+    const now = input.now ?? new Date();
+    const timestamp = now.toISOString();
+    const status = input.status ?? "active";
+    const currency = (input.currency ?? "USD").toUpperCase();
+    const billingInterval = input.billingInterval ?? "month";
+
+    this.db
+      .prepare(
+        `INSERT INTO plans (
+          id,
+          name,
+          status,
+          price_cents,
+          currency,
+          billing_interval,
+          monthly_token_limit,
+          max_api_keys,
+          allowed_models_json,
+          metadata_json,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.id,
+        input.name,
+        status,
+        input.priceCents ?? 0,
+        currency,
+        billingInterval,
+        input.monthlyTokenLimit,
+        input.maxApiKeys,
+        JSON.stringify(input.allowedModels ?? []),
+        input.metadataJson ?? "{}",
+        timestamp,
+        timestamp,
+      );
+
+    const plan = this.getPlan(input.id);
+    if (!plan) {
+      throw new Error(`Plan not found after create: ${input.id}`);
+    }
+    return plan;
   }
 
   grantSubscription(input: {

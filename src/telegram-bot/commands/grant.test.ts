@@ -151,6 +151,55 @@ test("plans lists available seeded plan ids for admins", async () => {
     assert.equal(ctx.replies.length, 1);
     assert.equal(ctx.replies[0].includes("- trial:"), true);
     assert.equal(ctx.replies[0].includes("- basic:"), true);
+    assert.equal(ctx.replies[0].includes("- pro:"), true);
+    assert.equal(ctx.replies[0].includes("- team:"), true);
+    assert.equal(ctx.replies[0].includes("price_cents="), true);
+  });
+});
+
+test("plans create adds a new admin-created plan", async () => {
+  await withRepos(async ({ billing, deps }) => {
+    const harness = createBotHarness();
+    registerPlansCommand(harness.bot as any, deps, billing);
+
+    const ctx = createContext({
+      command: "plans",
+      fromId: 1,
+      chatId: 1,
+      chatType: "private",
+      match: "create growth Growth 2500000 2 2900 USD month",
+    });
+
+    await harness.handler("plans")(ctx);
+
+    const plan = billing.getPlan("growth");
+    assert.ok(plan);
+    assert.equal(plan.name, "Growth");
+    assert.equal(plan.monthlyTokenLimit, 2_500_000);
+    assert.equal(plan.maxApiKeys, 2);
+    assert.equal(plan.priceCents, 2_900);
+    assert.equal(plan.currency, "USD");
+    assert.equal(plan.billingInterval, "month");
+    assert.equal(ctx.replies[0].includes("Created plan growth"), true);
+  });
+});
+
+test("plans create rejects duplicate plan ids", async () => {
+  await withRepos(async ({ deps, billing }) => {
+    const harness = createBotHarness();
+    registerPlansCommand(harness.bot as any, deps, billing);
+
+    const ctx = createContext({
+      command: "plans",
+      fromId: 1,
+      chatId: 1,
+      chatType: "private",
+      match: "create pro Pro 5000000 3 4900 USD month",
+    });
+
+    await harness.handler("plans")(ctx);
+
+    assert.equal(ctx.replies[0], "Plan already exists: pro");
   });
 });
 
@@ -164,13 +213,13 @@ test("grant suggests valid plan ids when planId is unknown", async () => {
       fromId: 1,
       chatId: 1,
       chatType: "private",
-      match: "42 pro 30",
+      match: "42 unknown 30",
     });
 
     await harness.handler("grant")(ctx);
 
     assert.equal(ctx.replies.length, 1);
-    assert.equal(ctx.replies[0].includes("Unknown planId: pro"), true);
-    assert.equal(ctx.replies[0].includes("Available planIds: basic, trial"), true);
+    assert.equal(ctx.replies[0].includes("Unknown planId: unknown"), true);
+    assert.equal(ctx.replies[0].includes("Available planIds: basic, enterprise, pro, starter, team, trial"), true);
   });
 });
