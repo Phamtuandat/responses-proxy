@@ -202,7 +202,7 @@ function formatBillingPlans(billing: BillingRepository): string {
     "Billing plans:",
     ...plans.map(
       (plan) =>
-        `- ${plan.id}: ${plan.name} | status=${plan.status} | monthly_token_limit=${plan.monthlyTokenLimit} | max_api_keys=${plan.maxApiKeys}`,
+        `- ${plan.id}: ${plan.name} | status=${plan.status} | price_cents=${plan.priceCents} | currency=${plan.currency} | billing_interval=${plan.billingInterval} | monthly_token_limit=${plan.monthlyTokenLimit} | max_api_keys=${plan.maxApiKeys}`,
     ),
   ].join("\n");
 }

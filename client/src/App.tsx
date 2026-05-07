@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getDashboardAuthSession, logoutDashboard } from "./api/client";
+import type { DashboardAuthSession } from "./api/types";
 import { AppShell } from "./components/AppShell";
 import { EmptyState } from "./components/EmptyState";
+import { LoadingState } from "./components/LoadingState";
 import { AccountsScreen } from "./screens/AccountsScreen";
 import { AuthScreen } from "./screens/AuthScreen";
 import { CacheScreen } from "./screens/CacheScreen";
 import { ClientsScreen } from "./screens/ClientsScreen";
 import { ConfigHelperScreen } from "./screens/ConfigHelperScreen";
 import { DashboardScreen } from "./screens/DashboardScreen";
+import { LoginScreen } from "./screens/LoginScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
 import { RtkScreen } from "./screens/RtkScreen";
 import { UsageScreen } from "./screens/UsageScreen";
@@ -50,6 +54,11 @@ type RouteState = {
   isUnknown: boolean;
 };
 
+type AuthState =
+  | { status: "loading" }
+  | { status: "authenticated"; session: DashboardAuthSession }
+  | { status: "anonymous" };
+
 const THEME_STORAGE_KEY = "responses-proxy-theme";
 const DEFAULT_ROUTE: NavRoute = "dashboard";
 
@@ -81,21 +90,11 @@ function readRouteFromHash(): RouteState {
   const baseRoute = segments[0];
 
   if (!baseRoute) {
-    return {
-      route: DEFAULT_ROUTE,
-      baseRoute: DEFAULT_ROUTE,
-      params: {},
-      isUnknown: false,
-    };
+    return { route: DEFAULT_ROUTE, baseRoute: DEFAULT_ROUTE, params: {}, isUnknown: false };
   }
 
   if (!navRouteSet.has(baseRoute as NavRoute)) {
-    return {
-      route: DEFAULT_ROUTE,
-      baseRoute: DEFAULT_ROUTE,
-      params: {},
-      isUnknown: true,
-    };
+    return { route: DEFAULT_ROUTE, baseRoute: DEFAULT_ROUTE, params: {}, isUnknown: true };
   }
 
   const resolvedBaseRoute = baseRoute as NavRoute;
@@ -193,6 +192,7 @@ function renderScreen(routeState: RouteState) {
 export function App() {
   const [routeState, setRouteState] = useState<RouteState>(readRouteFromHash);
   const [theme, setTheme] = useState<Theme>(readInitialTheme);
+  const [authState, setAuthState] = useState<AuthState>({ status: "loading" });
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -203,6 +203,25 @@ export function App() {
       // Theme persistence is progressive enhancement.
     }
   }, [theme]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getDashboardAuthSession()
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        setAuthState(result.authenticated && result.session ? { status: "authenticated", session: result.session } : { status: "anonymous" });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAuthState({ status: "anonymous" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!window.location.hash) {
@@ -218,14 +237,35 @@ export function App() {
     setTheme((currentTheme) => (currentTheme === "dark" ? "light" : "dark"));
   }, []);
 
+  const handleLogout = useCallback(async () => {
+    await logoutDashboard().catch(() => undefined);
+    setAuthState({ status: "anonymous" });
+  }, []);
+
   const screen = useMemo(() => renderScreen(routeState), [routeState]);
+
+  if (authState.status === "loading") {
+    return (
+      <div className="app-page">
+        <main className="app-panel">
+          <LoadingState title="Checking dashboard login" description="Validating your admin session." cards={3} />
+        </main>
+      </div>
+    );
+  }
+
+  if (authState.status === "anonymous") {
+    return <LoginScreen onAuthenticated={(session) => setAuthState({ status: "authenticated", session })} />;
+  }
 
   return (
     <AppShell
       currentRoute={routeState.baseRoute}
       navItems={navItems}
       theme={theme}
+      session={authState.session}
       onToggleTheme={toggleTheme}
+      onLogout={handleLogout}
     >
       {screen}
     </AppShell>

@@ -274,6 +274,8 @@ test("admin start panel can show billing plans and renewal requests", async () =
     (plansCtx as any).match = plans.match;
     await plans.handler(plansCtx as any);
     assert.equal(plansCtx.editedReplies[0]?.text.includes("Billing plans:"), true);
+    assert.equal(plansCtx.editedReplies[0]?.text.includes("price_cents=5000"), true);
+    assert.equal(plansCtx.editedReplies[0]?.text.includes("currency=VND"), true);
     const plansKeyboard = JSON.parse(JSON.stringify(plansCtx.editedReplies[0]?.options?.reply_markup));
     assert.equal(plansKeyboard.inline_keyboard?.[0]?.[0]?.callback_data, "v1:admin:plans");
     assert.equal(plansKeyboard.inline_keyboard?.[0]?.[1]?.callback_data, "v1:admin:renewals");

@@ -82,6 +82,7 @@ import { CustomerKeyRepository } from "./customer-keys.js";
 import { resolveCustomerRoutingAccess } from "./customer-key-access.js";
 import { recordCustomerUsageFromPayload } from "./customer-usage.js";
 import { CustomerWorkspaceRepository } from "./telegram-bot/customer-workspace-repository.js";
+import { DashboardAuthRepository } from "./dashboard-auth.js";
 
 const config = readConfig(process.env);
 const CHATGPT_OAUTH_PROVIDER_ID = "account-openai-codex";
@@ -96,6 +97,11 @@ const customerWorkspaceRepository = CustomerWorkspaceRepository.create(
   path.resolve(config.CUSTOMER_KEY_DB_PATH),
 );
 const billingRepository = BillingRepository.create(path.resolve(config.CUSTOMER_KEY_DB_PATH));
+const dashboardAuthRepository = DashboardAuthRepository.create(path.resolve(config.CUSTOMER_KEY_DB_PATH));
+const dashboardAdminUserIds = new Set([
+  ...config.TELEGRAM_OWNER_USER_IDS,
+  ...config.TELEGRAM_ADMIN_USER_IDS,
+]);
 const chatGptOAuthStore = ChatGptOAuthStore.create(path.resolve(config.APP_DB_PATH));
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
 const reactClientDir = path.resolve(process.cwd(), "dist", "client");
@@ -146,6 +152,87 @@ export const app = Fastify({
   requestTimeout: config.REQUEST_TIMEOUT_MS,
   bodyLimit: config.REQUEST_BODY_LIMIT_BYTES,
   disableRequestLogging: true,
+});
+
+const DASHBOARD_SESSION_COOKIE = "responses_proxy_dashboard_session";
+
+app.addHook("onRequest", async (request, reply) => {
+  if (!isDashboardProtectedPath(request.url)) {
+    return;
+  }
+
+  const session = dashboardAuthRepository.getSessionByToken(readCookie(request.headers.cookie, DASHBOARD_SESSION_COOKIE));
+  if (session) {
+    return;
+  }
+
+  return reply.code(401).send({
+    error: {
+      code: "DASHBOARD_AUTH_REQUIRED",
+      message: "Dashboard login required.",
+    },
+  });
+});
+
+app.get("/api/dashboard-auth/session", async (request) => {
+  const session = dashboardAuthRepository.getSessionByToken(readCookie(request.headers.cookie, DASHBOARD_SESSION_COOKIE));
+  return {
+    authenticated: Boolean(session),
+    session: session
+      ? {
+          telegramUserId: session.telegramUserId,
+          role: session.role,
+          expiresAt: session.expiresAt,
+        }
+      : undefined,
+  };
+});
+
+app.post("/api/dashboard-auth/request-otp", async (request, reply) => {
+  const body = request.body as { telegramUserId?: unknown } | undefined;
+  const telegramUserId = typeof body?.telegramUserId === "string" ? body.telegramUserId.trim() : "";
+  if (!/^\d+$/.test(telegramUserId)) {
+    return reply.code(400).send({ error: { code: "INVALID_TELEGRAM_USER_ID", message: "Enter a numeric Telegram user id." } });
+  }
+  if (!dashboardAdminUserIds.has(telegramUserId)) {
+    return reply.code(403).send({ error: { code: "DASHBOARD_AUTH_FORBIDDEN", message: "This Telegram user is not allowed to access the dashboard." } });
+  }
+  if (!config.TELEGRAM_BOT_TOKEN) {
+    return reply.code(503).send({ error: { code: "DASHBOARD_AUTH_BOT_DISABLED", message: "Telegram bot token is not configured for dashboard login." } });
+  }
+
+  const challenge = dashboardAuthRepository.createChallenge({ telegramUserId, ttlMs: config.DASHBOARD_AUTH_OTP_TTL_MS });
+  await sendTelegramDashboardOtp({ botToken: config.TELEGRAM_BOT_TOKEN, telegramUserId, otp: challenge.otp, expiresAt: challenge.expiresAt });
+  return {
+    ok: true,
+    expiresAt: challenge.expiresAt,
+    debugOtp: config.TELEGRAM_BOT_TOKEN.startsWith("test-") ? challenge.otp : undefined,
+  };
+});
+
+app.post("/api/dashboard-auth/verify", async (request, reply) => {
+  const body = request.body as { telegramUserId?: unknown; otp?: unknown } | undefined;
+  const telegramUserId = typeof body?.telegramUserId === "string" ? body.telegramUserId.trim() : "";
+  const otp = typeof body?.otp === "string" ? body.otp.trim() : "";
+  if (!dashboardAdminUserIds.has(telegramUserId)) {
+    return reply.code(403).send({ error: { code: "DASHBOARD_AUTH_FORBIDDEN", message: "This Telegram user is not allowed to access the dashboard." } });
+  }
+  if (!/^\d{6}$/.test(otp)) {
+    return reply.code(400).send({ error: { code: "INVALID_DASHBOARD_OTP", message: "Enter the 6-digit OTP from Telegram." } });
+  }
+  const consumed = dashboardAuthRepository.consumeChallenge({ telegramUserId, otp });
+  if (!consumed.ok) {
+    return reply.code(401).send({ error: { code: consumed.reason === "expired" ? "DASHBOARD_OTP_EXPIRED" : "DASHBOARD_OTP_INVALID", message: consumed.reason === "expired" ? "OTP expired. Request a new code." : "Invalid OTP." } });
+  }
+  const { token, session } = dashboardAuthRepository.createSession({ telegramUserId, ttlMs: config.DASHBOARD_AUTH_SESSION_TTL_MS });
+  reply.header("Set-Cookie", serializeCookie(DASHBOARD_SESSION_COOKIE, token, { maxAgeSeconds: Math.floor(config.DASHBOARD_AUTH_SESSION_TTL_MS / 1000) }));
+  return { ok: true, session: { telegramUserId: session.telegramUserId, role: session.role, expiresAt: session.expiresAt } };
+});
+
+app.post("/api/dashboard-auth/logout", async (request, reply) => {
+  dashboardAuthRepository.revokeSessionByToken(readCookie(request.headers.cookie, DASHBOARD_SESSION_COOKIE));
+  reply.header("Set-Cookie", serializeCookie(DASHBOARD_SESSION_COOKIE, "", { maxAgeSeconds: 0 }));
+  return { ok: true };
 });
 
 app.get("/health", async () => ({
@@ -2182,6 +2269,73 @@ function loadReactRootStaticAssets() {
     }),
   ) as Record<(typeof reactRootStaticAssetFiles)[number], { body: Buffer; contentType: string }>;
 }
+
+
+function isDashboardProtectedPath(url: string): boolean {
+  const pathname = url.split("?", 1)[0] || "/";
+  if (!pathname.startsWith("/api/")) {
+    return false;
+  }
+  return !pathname.startsWith("/api/dashboard-auth/");
+}
+
+function readCookie(cookieHeader: string | undefined, name: string): string | undefined {
+  if (!cookieHeader) {
+    return undefined;
+  }
+  const prefix = `${name}=`;
+  for (const part of cookieHeader.split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return decodeURIComponent(trimmed.slice(prefix.length));
+    }
+  }
+  return undefined;
+}
+
+function serializeCookie(
+  name: string,
+  value: string,
+  options: { maxAgeSeconds: number },
+): string {
+  return [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${options.maxAgeSeconds}`,
+  ].join("; ");
+}
+
+async function sendTelegramDashboardOtp(input: {
+  botToken: string;
+  telegramUserId: string;
+  otp: string;
+  expiresAt: string;
+}): Promise<void> {
+  if (input.botToken.startsWith("test-")) {
+    return;
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${input.botToken}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: input.telegramUserId,
+      text: [
+        "Responses Proxy dashboard login",
+        `OTP: ${input.otp}`,
+        `Expires: ${input.expiresAt}`,
+        "If you did not request this, ignore this message.",
+      ].join("\n"),
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Telegram sendMessage failed: ${response.status}`);
+  }
+}
+
 
 function loadReactDashboardAssets() {
   const indexPath = path.join(reactClientDir, "index.html");

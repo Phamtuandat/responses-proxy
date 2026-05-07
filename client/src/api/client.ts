@@ -2,6 +2,9 @@ import type {
   ChatGptOAuthStatusResponse,
   ChatGptOAuthStartResponse,
   ChatGptOAuthCallbackResponse,
+  DashboardAuthRequestOtpResponse,
+  DashboardAuthSessionResponse,
+  DashboardAuthVerifyResponse,
   ClientConfigApplyInput,
   ClientConfigApplyResponse,
   ClientMutationInput,
@@ -53,6 +56,22 @@ export async function apiSend<T>(path: string, method: "POST" | "PUT" | "PATCH" 
   }
 
   return payload as T;
+}
+
+export function getDashboardAuthSession() {
+  return apiGet<DashboardAuthSessionResponse>("/api/dashboard-auth/session");
+}
+
+export function requestDashboardOtp(telegramUserId: string) {
+  return apiSend<DashboardAuthRequestOtpResponse>("/api/dashboard-auth/request-otp", "POST", { telegramUserId });
+}
+
+export function verifyDashboardOtp(telegramUserId: string, otp: string) {
+  return apiSend<DashboardAuthVerifyResponse>("/api/dashboard-auth/verify", "POST", { telegramUserId, otp });
+}
+
+export function logoutDashboard() {
+  return apiSend<{ ok: true }>("/api/dashboard-auth/logout", "POST");
 }
 
 export function getHealth() {

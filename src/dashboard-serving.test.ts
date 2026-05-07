@@ -36,7 +36,29 @@ test("dashboard serving smoke coverage", { concurrency: false }, async (t) => {
       assert.match(health.response.headers.get("content-type") ?? "", /application\/json/);
       assert.equal(health.body.ok, true);
 
-      const providers = await fetchJson(`${server.baseUrl}/api/providers`);
+      const protectedBeforeLogin = await fetchJson(`${server.baseUrl}/api/providers`);
+      assert.equal(protectedBeforeLogin.response.status, 401);
+
+      const otpRequest = await fetchJson(`${server.baseUrl}/api/dashboard-auth/request-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telegramUserId: "1" }),
+      });
+      assert.equal(otpRequest.response.status, 200);
+      assert.equal(typeof otpRequest.body.debugOtp, "string");
+
+      const verify = await fetchJson(`${server.baseUrl}/api/dashboard-auth/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telegramUserId: "1", otp: otpRequest.body.debugOtp }),
+      });
+      assert.equal(verify.response.status, 200);
+      const sessionCookie = verify.response.headers.get("set-cookie") ?? "";
+      assert.match(sessionCookie, /responses_proxy_dashboard_session=/);
+
+      const providers = await fetchJson(`${server.baseUrl}/api/providers`, {
+        headers: { Cookie: sessionCookie },
+      });
       assert.equal(providers.response.status, 200);
       assert.match(providers.response.headers.get("content-type") ?? "", /application\/json/);
       assert.equal(typeof providers.body, "object");
@@ -108,15 +130,15 @@ function extractBuiltReactAssetPath(indexHtml: string): string {
   return match[1];
 }
 
-async function fetchText(url: string) {
-  const response = await fetch(url);
+async function fetchText(url: string, init?: RequestInit) {
+  const response = await fetch(url, init);
   const text = await response.text();
   return { response, text };
 }
 
-async function fetchJson(url: string) {
-  const response = await fetch(url);
-  const body = (await response.json()) as Record<string, unknown>;
+async function fetchJson(url: string, init?: RequestInit) {
+  const response = await fetch(url, init);
+  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   return { response, body };
 }
 
@@ -138,6 +160,9 @@ async function startDashboardServer(extraEnv: Record<string, string> = {}) {
         SESSION_LOG_DIR: path.join(tempDir, "sessions"),
         PROVIDER_USAGE_CHECK_ENABLED: "false",
         CHATGPT_OAUTH_ENABLED: "false",
+        TELEGRAM_BOT_TOKEN: "test-dashboard-bot-token",
+        TELEGRAM_OWNER_USER_IDS: "1",
+        TELEGRAM_ADMIN_USER_IDS: "1",
         LOG_LEVEL: "info",
         ...extraEnv,
       },

@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+function parseIdList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/[,\r?\n]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8318),
   HOST: z.string().min(1).default("0.0.0.0"),
@@ -164,6 +171,11 @@ const envSchema = z.object({
     .string()
     .default("429,500,502,503,504")
     .transform(parseFallbackStatusCodes),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_OWNER_USER_IDS: z.string().optional().transform(parseIdList),
+  TELEGRAM_ADMIN_USER_IDS: z.string().optional().transform(parseIdList),
+  DASHBOARD_AUTH_OTP_TTL_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
+  DASHBOARD_AUTH_SESSION_TTL_MS: z.coerce.number().int().positive().default(12 * 60 * 60 * 1000),
   APP_DB_PATH: z.string().min(1).default("./logs/app.sqlite"),
   CUSTOMER_KEY_DB_PATH: z.string().min(1).default("./logs/telegram-bot.sqlite"),
   SESSION_LOG_DIR: z.string().min(1).default("./logs/sessions"),

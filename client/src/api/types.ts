@@ -1,3 +1,24 @@
+export type DashboardAuthSession = {
+  telegramUserId: string;
+  role: "admin";
+  expiresAt: string;
+};
+
+export type DashboardAuthSessionResponse = {
+  authenticated: boolean;
+  session?: DashboardAuthSession;
+};
+
+export type DashboardAuthRequestOtpResponse = {
+  ok: true;
+  expiresAt: string;
+};
+
+export type DashboardAuthVerifyResponse = {
+  ok: true;
+  session: DashboardAuthSession;
+};
+
 export type HealthResponse = {
   ok: boolean;
   service?: string | null;

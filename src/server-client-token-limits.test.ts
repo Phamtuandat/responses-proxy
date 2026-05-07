@@ -15,6 +15,9 @@ process.env.UPSTREAM_API_KEY = "provider-key";
 process.env.PROVIDER_USAGE_CHECK_ENABLED = "false";
 process.env.CHATGPT_OAUTH_ENABLED = "false";
 process.env.LOG_LEVEL = "silent";
+process.env.TELEGRAM_BOT_TOKEN = "test-dashboard-bot-token";
+process.env.TELEGRAM_OWNER_USER_IDS = "1";
+process.env.TELEGRAM_ADMIN_USER_IDS = "1";
 
 const { app } = await import("./server.js");
 
@@ -23,10 +26,30 @@ test.after(async () => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
+async function loginDashboard(): Promise<string> {
+  const otpResponse = await app.inject({
+    method: "POST",
+    url: "/api/dashboard-auth/request-otp",
+    payload: { telegramUserId: "1" },
+  });
+  assert.equal(otpResponse.statusCode, 200);
+  const otp = otpResponse.json().debugOtp as string;
+  const verifyResponse = await app.inject({
+    method: "POST",
+    url: "/api/dashboard-auth/verify",
+    payload: { telegramUserId: "1", otp },
+  });
+  assert.equal(verifyResponse.statusCode, 200);
+  return verifyResponse.headers["set-cookie"] as string;
+}
+
 test("client token limit admin API creates reads and resets limits", async () => {
+  const cookie = await loginDashboard();
+
   const initial = await app.inject({
     method: "GET",
     url: "/api/client-token-limits/default",
+    headers: { cookie },
   });
   assert.equal(initial.statusCode, 200);
   assert.equal(initial.json().client.config, null);
@@ -34,6 +57,7 @@ test("client token limit admin API creates reads and resets limits", async () =>
   const update = await app.inject({
     method: "PUT",
     url: "/api/client-token-limits/default",
+    headers: { cookie },
     payload: {
       enabled: true,
       tokenLimit: 12,
@@ -48,15 +72,19 @@ test("client token limit admin API creates reads and resets limits", async () =>
   const reset = await app.inject({
     method: "POST",
     url: "/api/client-token-limits/default/reset",
+    headers: { cookie },
   });
   assert.equal(reset.statusCode, 200);
   assert.equal(reset.json().client.usage.totalTokens, 0);
 });
 
 test("client token limit admin API accepts disabled config without usable limit values", async () => {
+  const cookie = await loginDashboard();
+
   const update = await app.inject({
     method: "PUT",
     url: "/api/client-token-limits/default",
+    headers: { cookie },
     payload: {
       enabled: false,
       tokenLimit: 0,
@@ -71,6 +99,7 @@ test("client token limit admin API accepts disabled config without usable limit 
 });
 
 test("client token limit enforcement rejects over-limit requests before upstream", async () => {
+  const cookie = await loginDashboard();
   const now = new Date();
   const windowStart = new Date(now);
   windowStart.setUTCHours(0, 0, 0, 0);
@@ -78,6 +107,7 @@ test("client token limit enforcement rejects over-limit requests before upstream
   await app.inject({
     method: "PUT",
     url: "/api/client-token-limits/default",
+    headers: { cookie },
     payload: {
       enabled: true,
       tokenLimit: 1,
