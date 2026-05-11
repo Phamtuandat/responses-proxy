@@ -5,7 +5,6 @@ MODE="${1:-status}"
 TABLE="responses_proxy_public_guard"
 ADMIN_LAN_CIDR="${ADMIN_LAN_CIDR:-192.168.0.0/24}"
 ROLLBACK_FILE="/root/responses-proxy-firewall-rollback.sh"
-BACKUP_FILE="/root/responses-proxy-firewall-backup.nft"
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -22,11 +21,12 @@ require_nft() {
 }
 
 write_rollback() {
-  nft list ruleset > "$BACKUP_FILE"
   cat > "$ROLLBACK_FILE" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-nft -f "$BACKUP_FILE"
+if nft list table inet "$TABLE" >/dev/null 2>&1; then
+  nft delete table inet "$TABLE"
+fi
 EOF
   chmod 700 "$ROLLBACK_FILE"
 }
