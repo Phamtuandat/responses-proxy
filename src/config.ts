@@ -29,6 +29,16 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value !== "false"),
   REQUEST_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  HTTP_RATE_LIMIT_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  HTTP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  HTTP_RATE_LIMIT_RESPONSES_MAX_REQUESTS: z.coerce.number().int().positive().default(120),
+  HTTP_RATE_LIMIT_UNAUTHENTICATED_MAX_REQUESTS: z.coerce.number().int().positive().default(20),
+  HTTP_RATE_LIMIT_AUTH_MAX_REQUESTS: z.coerce.number().int().positive().default(30),
+  HTTP_RATE_LIMIT_WEBHOOK_MAX_REQUESTS: z.coerce.number().int().positive().default(60),
+  HTTP_RATE_LIMIT_HEALTH_MAX_REQUESTS: z.coerce.number().int().positive().default(240),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),

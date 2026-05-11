@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import type { FastifyBaseLogger } from "fastify";
-import { randomInt, randomUUID } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import readline from "node:readline";
@@ -74,6 +74,7 @@ import {
 import { ResponseCacheStore } from "./response-cache.js";
 import { buildCostSummary } from "./cost-analytics.js";
 import { resolveModelRouting } from "./model-routing.js";
+import { InMemoryHttpRateLimiter } from "./http-rate-limit.js";
 import { applyRtkLayer, parseRtkLayerPolicyInput, resolveRtkLayerPolicy } from "./rtk-layer.js";
 import {
   buildClientTokenLimitError,
@@ -112,6 +113,7 @@ const chatGptOAuthStore = ChatGptOAuthStore.create(path.resolve(config.APP_DB_PA
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
 const responseCacheStore = ResponseCacheStore.create(path.resolve(config.APP_DB_PATH));
 setInterval(() => responseCacheStore.prune(), 10 * 60 * 1000).unref();
+const httpRateLimiter = new InMemoryHttpRateLimiter();
 const reactClientDir = path.resolve(process.cwd(), "dist", "client");
 const reactRootStaticAssetFiles = ["favicon.svg", "app-icon.svg"] as const;
 const dashboardEntryPaths = [
@@ -163,6 +165,46 @@ export const app = Fastify({
 });
 
 const DASHBOARD_SESSION_COOKIE = "responses_proxy_dashboard_session";
+
+app.addHook("onRequest", async (request, reply) => {
+  if (!config.HTTP_RATE_LIMIT_ENABLED) {
+    return;
+  }
+
+  const policy = resolveHttpRateLimitPolicy(request.url, request.headers.authorization);
+  if (!policy) {
+    return;
+  }
+
+  const identifier = buildHttpRateLimitIdentifier(request.headers, request.ip);
+  const result = httpRateLimiter.consume(`${policy.scope}:${identifier}`, {
+    windowMs: config.HTTP_RATE_LIMIT_WINDOW_MS,
+    maxRequests: policy.maxRequests,
+  });
+  reply.header("x-ratelimit-limit", String(policy.maxRequests));
+  reply.header("x-ratelimit-remaining", String(result.remaining));
+  if (result.allowed) {
+    return;
+  }
+
+  const retryAfterSeconds = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
+  request.log.warn(
+    {
+      scope: policy.scope,
+      retryAfterSeconds,
+    },
+    "http rate limit exceeded",
+  );
+  reply.header("retry-after", String(retryAfterSeconds));
+  return reply.code(429).send({
+    error: {
+      type: "rate_limit_error",
+      code: "HTTP_RATE_LIMIT_EXCEEDED",
+      message: "Too many requests. Retry later.",
+      retryable: true,
+    },
+  });
+});
 
 app.addHook("onRequest", async (request, reply) => {
   if (!isDashboardProtectedPath(request.url)) {
@@ -2761,6 +2803,61 @@ function readBearerToken(value: unknown): string | undefined {
   }
   const match = /^Bearer\s+(.+)$/i.exec(header);
   return match?.[1]?.trim() || undefined;
+}
+
+function resolveHttpRateLimitPolicy(
+  url: string,
+  authorizationHeader: unknown,
+): { scope: string; maxRequests: number } | undefined {
+  const pathname = url.split("?", 1)[0] || "/";
+  if (pathname === "/v1/responses") {
+    return {
+      scope: "responses",
+      maxRequests: readBearerToken(authorizationHeader)
+        ? config.HTTP_RATE_LIMIT_RESPONSES_MAX_REQUESTS
+        : config.HTTP_RATE_LIMIT_UNAUTHENTICATED_MAX_REQUESTS,
+    };
+  }
+  if (pathname.startsWith("/api/dashboard-auth/")) {
+    return {
+      scope: "dashboard-auth",
+      maxRequests: config.HTTP_RATE_LIMIT_AUTH_MAX_REQUESTS,
+    };
+  }
+  if (pathname === "/api/sepay/webhook") {
+    return {
+      scope: "sepay-webhook",
+      maxRequests: config.HTTP_RATE_LIMIT_WEBHOOK_MAX_REQUESTS,
+    };
+  }
+  if (pathname === "/health") {
+    return {
+      scope: "health",
+      maxRequests: config.HTTP_RATE_LIMIT_HEALTH_MAX_REQUESTS,
+    };
+  }
+  return undefined;
+}
+
+function buildHttpRateLimitIdentifier(
+  headers: Record<string, unknown>,
+  fallbackIp?: string,
+): string {
+  const bearerToken = readBearerToken(headers.authorization);
+  if (bearerToken) {
+    return `bearer:${hashRateLimitValue(bearerToken)}`;
+  }
+
+  const forwardedFor = readHeaderString(headers["x-forwarded-for"])
+    ?.split(",")[0]
+    ?.trim();
+  const realIp = readHeaderString(headers["x-real-ip"]);
+  const candidate = forwardedFor || realIp || fallbackIp || "unknown";
+  return `ip:${hashRateLimitValue(candidate)}`;
+}
+
+function hashRateLimitValue(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 function isOperatorRequest(request: { headers: Record<string, unknown> }): boolean {

@@ -16,6 +16,16 @@ require_tailscale() {
 }
 
 require_local_proxy() {
+  case "$TAILSCALE_LOCAL_TARGET" in
+    http://127.0.0.1:*|http://localhost:*)
+      ;;
+    *)
+      echo "TAILSCALE_LOCAL_TARGET must point at localhost, got: $TAILSCALE_LOCAL_TARGET"
+      echo "Expose responses-proxy through Tailscale Funnel only after binding Docker to 127.0.0.1."
+      exit 1
+      ;;
+  esac
+
   if ! curl -fsS "$TAILSCALE_LOCAL_TARGET/health" >/dev/null 2>&1; then
     echo "responses-proxy is not responding at $TAILSCALE_LOCAL_TARGET"
     echo "Start it first with: $(cd "$(dirname "$0")/.." && pwd)/scripts/start.sh"
