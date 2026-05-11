@@ -9,6 +9,7 @@ import { maskApiKey } from "../format.js";
 import { renewCustomerAccess } from "../grants.js";
 import { replyWithProxyError, type BotDependencies } from "../actions.js";
 import { formatField, formatSection } from "../message-format.js";
+import { sendCustomerCodexSetup } from "../codex-config-delivery.js";
 
 export function registerRenewUserCommand(
   bot: Bot,
@@ -88,7 +89,29 @@ export function registerRenewUserCommand(
           .join("\n\n"),
       );
 
-      await notifyCustomer(ctx, parsed.telegramUserId, parsed.planId, result);
+      const customerNotified = await notifyCustomer(
+        ctx,
+        parsed.telegramUserId,
+        parsed.planId,
+        deps.config.publicResponsesBaseUrl,
+        deps.config.defaultModel,
+        result,
+      );
+      if (result.apiKey && customerNotified) {
+        auditLog.record({
+          event: "api_key.revealed",
+          actor: { type: "bot", id: "renewuser" },
+          subjectType: "customer_api_key",
+          subjectId: result.keyId,
+          metadata: {
+            telegramUserId: parsed.telegramUserId,
+            workspaceId: result.workspaceId,
+            keyPreview: result.keyPreview,
+            audience: "customer_private_chat",
+            apiKey: result.apiKey,
+          },
+        });
+      }
     } catch (error) {
       await replyWithProxyError(ctx, error);
     }
@@ -124,30 +147,43 @@ async function notifyCustomer(
   ctx: Context,
   telegramUserId: string,
   planId: string,
+  baseUrl: string,
+  model: string,
   result: {
     clientRoute: string;
     subscriptionEndsAt: string;
     apiKey?: string;
   },
-): Promise<void> {
+): Promise<boolean> {
+  if (result.apiKey) {
+    const sent = await sendCustomerCodexSetup(ctx, {
+      telegramUserId,
+      baseUrl,
+      apiKey: result.apiKey,
+      model,
+      title: "Your access has been renewed",
+      details: [
+        formatField("Plan ID", planId),
+        formatField("Client route", result.clientRoute),
+        formatField("Subscription ends at", result.subscriptionEndsAt),
+      ],
+    });
+    if (sent) {
+      return true;
+    }
+  }
+
   try {
     await ctx.api.sendMessage(
       Number(telegramUserId),
       [
         "Your access has been renewed",
-        formatSection("Plan", [
-          formatField("Plan ID", planId),
-          formatField("Client route", result.clientRoute),
-          formatField("Subscription ends at", result.subscriptionEndsAt),
-        ]),
-        formatSection("API key", [
-          result.apiKey
-            ? `api_key: ${result.apiKey}`
-            : "Run /apikey in this private chat to view your current key status.",
-        ]),
+        "Run /apikey in this private chat to receive your Codex config files.",
       ].join("\n\n"),
     );
+    return true;
   } catch {
     await ctx.reply("Customer notification could not be delivered yet. They may need to /start the bot first.");
+    return false;
   }
 }

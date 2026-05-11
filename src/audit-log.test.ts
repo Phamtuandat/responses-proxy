@@ -126,6 +126,7 @@ function createContext(input: {
   const replies: string[] = [];
   const replyMarkups: unknown[] = [];
   const answeredCallbacks: Array<{ text?: string; show_alert?: boolean }> = [];
+  const sentDocuments: Array<{ chatId: number; filename?: string; content: string }> = [];
   return ({
     from: { id: input.fromId, is_bot: false, first_name: "User" },
     chat:
@@ -151,6 +152,7 @@ function createContext(input: {
     replies,
     replyMarkups,
     answeredCallbacks,
+    sentDocuments,
     reply(text: string, options?: { reply_markup?: unknown }) {
       replies.push(text);
       replyMarkups.push(options?.reply_markup);
@@ -164,8 +166,22 @@ function createContext(input: {
       async sendMessage() {
         return {} as any;
       },
+      async sendDocument(chatId: number, document: { filename?: string; fileData?: Uint8Array }) {
+        sentDocuments.push({
+          chatId,
+          filename: document.filename,
+          content: document.fileData ? Buffer.from(document.fileData).toString("utf8") : "",
+        });
+        return {} as any;
+      },
     },
-  } as unknown) as Context & { match: string; replies: string[]; replyMarkups: unknown[]; answeredCallbacks: Array<{ text?: string; show_alert?: boolean }> };
+  } as unknown) as Context & {
+    match: string;
+    replies: string[];
+    replyMarkups: unknown[];
+    answeredCallbacks: Array<{ text?: string; show_alert?: boolean }>;
+    sentDocuments: Array<{ chatId: number; filename?: string; content: string }>;
+  };
 }
 
 async function withRepos(
@@ -288,7 +304,10 @@ test("apikey issue writes redacted reveal audit metadata", async () => {
     });
     await harness.handler("apikey")(customerCtx);
 
-    assert.equal(customerCtx.replies[0]?.includes("api_key:"), true);
+    assert.equal(customerCtx.replies[0]?.includes("api_key:"), false);
+    assert.deepEqual(customerCtx.sentDocuments.map((document) => document.filename), ["config.toml", "auth.json"]);
+    assert.match(customerCtx.sentDocuments[0]?.content ?? "", /base_url = "http:\/\/127\.0\.0\.1:8318\/v1"/);
+    assert.match(customerCtx.sentDocuments[0]?.content ?? "", /api_key = "sk-/);
     assert.equal(customerCtx.replies[0]?.includes("full_key: unavailable_for_legacy_key"), false);
   });
 });
@@ -423,7 +442,7 @@ test("admin can list, show, suspend, activate, and rotate customer API keys", as
   });
 });
 
-test("grant in admin group does not print the full key or reveal it in audit", async () => {
+test("grant in admin group does not print the full key in the group", async () => {
   await withRepos(async ({ identities, workspaces, customerKeys, billing, auditLog, deps }) => {
     const harness = createBotHarness();
     registerGrantCommand(harness.bot as any, deps, identities, workspaces, customerKeys, billing, auditLog);
@@ -440,7 +459,10 @@ test("grant in admin group does not print the full key or reveal it in audit", a
 
     assert.equal(ctx.replies[0]?.includes("api_key:"), false);
     assert.equal(ctx.replies[0]?.includes("Full key: shown only in private admin chat"), true);
-    assert.equal(auditLog.listEvents({ event: "api_key.revealed", limit: 1 }).length, 0);
+    const revealEvent = auditLog.listEvents({ event: "api_key.revealed", limit: 1 })[0];
+    assert.ok(revealEvent);
+    assert.equal(revealEvent.metadata.audience, "customer_private_chat");
+    assert.equal(revealEvent.metadata.apiKey, "[redacted]");
   });
 });
 

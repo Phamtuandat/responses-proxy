@@ -130,6 +130,7 @@ function createContext(input: {
 }) {
   const replies: string[] = [];
   const sentMessages: Array<{ chatId: number; text: string }> = [];
+  const sentDocuments: Array<{ chatId: number; filename?: string; content: string }> = [];
   const editedTexts: string[] = [];
   const replyMarkups: unknown[] = [];
   const editedMarkups: unknown[] = [];
@@ -167,6 +168,7 @@ function createContext(input: {
     match: input.match,
     replies,
     sentMessages,
+    sentDocuments,
     editedTexts,
     replyMarkups,
     editedMarkups,
@@ -195,6 +197,14 @@ function createContext(input: {
         sentMessages.push({ chatId, text });
         return {} as any;
       },
+      async sendDocument(chatId: number, document: { filename?: string; fileData?: Uint8Array }) {
+        sentDocuments.push({
+          chatId,
+          filename: document.filename,
+          content: document.fileData ? Buffer.from(document.fileData).toString("utf8") : "",
+        });
+        return {} as any;
+      },
       async editMessageText(_chatId: number, _messageId: number, text: string) {
         editedTexts.push(text);
         return {} as any;
@@ -204,6 +214,7 @@ function createContext(input: {
     match: string;
     replies: string[];
     sentMessages: Array<{ chatId: number; text: string }>;
+    sentDocuments: Array<{ chatId: number; filename?: string; content: string }>;
     editedTexts: string[];
     replyMarkups: unknown[];
     editedMarkups: unknown[];
@@ -807,7 +818,11 @@ test("admin approval of a new access request sends the full key to the customer"
     assert.equal(customerKeys.getActiveKeyForUser("42")?.status, "active");
     assert.equal(ctx.sentMessages[0]?.chatId, 42);
     assert.equal(ctx.sentMessages[0]?.text.includes("Your access has been approved"), true);
-    assert.equal(ctx.sentMessages[0]?.text.includes("api_key:"), true);
+    assert.equal(ctx.sentMessages[0]?.text.includes("api_key:"), false);
+    assert.deepEqual(ctx.sentDocuments.map((document) => document.filename), ["config.toml", "auth.json"]);
+    assert.match(ctx.sentDocuments[0]?.content ?? "", /base_url = "http:\/\/127\.0\.0\.1:8318\/v1"/);
+    assert.match(ctx.sentDocuments[0]?.content ?? "", /api_key = "sk-/);
+    assert.match(ctx.sentDocuments[1]?.content ?? "", /"OPENAI_API_KEY": "sk-/);
     assert.equal(auditLog.listEvents({ event: "api_key.revealed", limit: 5 }).length, 2);
   });
 });
@@ -1045,7 +1060,10 @@ test("admin can approve and rotate key from callback button", async () => {
     assert.equal(customerKeys.getActiveKeyForUser("42")?.id === firstKey.record.id, false);
     assert.equal(ctx.sentMessages[0]?.chatId, 42);
     assert.equal(ctx.sentMessages[0]?.text.includes("Your access has been approved"), true);
-    assert.equal(ctx.sentMessages[0]?.text.includes("api_key:"), true);
+    assert.equal(ctx.sentMessages[0]?.text.includes("api_key:"), false);
+    assert.deepEqual(ctx.sentDocuments.map((document) => document.filename), ["config.toml", "auth.json"]);
+    assert.match(ctx.sentDocuments[0]?.content ?? "", /base_url = "http:\/\/127\.0\.0\.1:8318\/v1"/);
+    assert.match(ctx.sentDocuments[0]?.content ?? "", /api_key = "sk-/);
     assert.equal(ctx.editedTexts[0]?.includes("Renewal request approved"), true);
   });
 });

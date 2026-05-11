@@ -75,6 +75,8 @@ function createContext(input: {
   match: string;
 }) {
   const replies: string[] = [];
+  const sentMessages: Array<{ chatId: number; text: string }> = [];
+  const sentDocuments: Array<{ chatId: number; filename?: string; content: string }> = [];
   return ({
     from: { id: input.fromId, is_bot: false, first_name: "Admin" },
     chat:
@@ -92,16 +94,32 @@ function createContext(input: {
     },
     match: input.match,
     replies,
+    sentMessages,
+    sentDocuments,
     reply(text: string) {
       replies.push(text);
       return Promise.resolve({} as any);
     },
     api: {
-      async sendMessage() {
+      async sendMessage(chatId: number, text: string) {
+        sentMessages.push({ chatId, text });
+        return {} as any;
+      },
+      async sendDocument(chatId: number, document: { filename?: string; fileData?: Uint8Array }) {
+        sentDocuments.push({
+          chatId,
+          filename: document.filename,
+          content: document.fileData ? Buffer.from(document.fileData).toString("utf8") : "",
+        });
         return {} as any;
       },
     },
-  } as unknown) as Context & { match: string; replies: string[] };
+  } as unknown) as Context & {
+    match: string;
+    replies: string[];
+    sentMessages: Array<{ chatId: number; text: string }>;
+    sentDocuments: Array<{ chatId: number; filename?: string; content: string }>;
+  };
 }
 
 async function withRepos(
@@ -197,6 +215,32 @@ test("plans create rejects duplicate plan ids", async () => {
     await harness.handler("plans")(ctx);
 
     assert.equal(ctx.replies[0], "Plan already exists: basic");
+  });
+});
+
+test("grant sends Codex config files to the customer", async () => {
+  await withRepos(async ({ identities, workspaces, customerKeys, billing, auditLog, deps }) => {
+    const harness = createBotHarness();
+    registerGrantCommand(harness.bot as any, deps, identities, workspaces, customerKeys, billing, auditLog);
+
+    const ctx = createContext({
+      command: "grant",
+      fromId: 1,
+      chatId: 1,
+      chatType: "private",
+      match: "42 basic 30",
+    });
+
+    await harness.handler("grant")(ctx);
+
+    assert.equal(customerKeys.getActiveKeyForUser("42")?.status, "active");
+    assert.equal(ctx.sentMessages[0]?.chatId, 42);
+    assert.equal(ctx.sentMessages[0]?.text.includes("Your access is active"), true);
+    assert.deepEqual(ctx.sentDocuments.map((document) => document.filename), ["config.toml", "auth.json"]);
+    assert.match(ctx.sentDocuments[0]?.content ?? "", /base_url = "http:\/\/127\.0\.0\.1:8318\/v1"/);
+    assert.match(ctx.sentDocuments[0]?.content ?? "", /api_key = "sk-/);
+    assert.match(ctx.sentDocuments[1]?.content ?? "", /"OPENAI_API_KEY": "sk-/);
+    assert.equal(auditLog.listEvents({ event: "api_key.revealed", limit: 5 }).length, 2);
   });
 });
 

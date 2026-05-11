@@ -82,6 +82,7 @@ function createContext(input: {
 }) {
   const replies: string[] = [];
   const sentMessages: Array<{ chatId: number; text: string }> = [];
+  const sentDocuments: Array<{ chatId: number; filename?: string; content: string }> = [];
   const ctx = ({
     from: { id: input.fromId, is_bot: false, first_name: "User" },
     chat:
@@ -100,6 +101,7 @@ function createContext(input: {
     match: input.match,
     replies,
     sentMessages,
+    sentDocuments,
     reply(text: string) {
       replies.push(text);
       return Promise.resolve({} as any);
@@ -112,11 +114,20 @@ function createContext(input: {
         }
         return {} as any;
       },
+      async sendDocument(chatId: number, document: { filename?: string; fileData?: Uint8Array }) {
+        sentDocuments.push({
+          chatId,
+          filename: document.filename,
+          content: document.fileData ? Buffer.from(document.fileData).toString("utf8") : "",
+        });
+        return {} as any;
+      },
     },
   } as unknown) as Context & {
     match: string;
     replies: string[];
     sentMessages: Array<{ chatId: number; text: string }>;
+    sentDocuments: Array<{ chatId: number; filename?: string; content: string }>;
   };
   return ctx;
 }
@@ -217,6 +228,10 @@ test("renewuser replace-key does not print the new key into a group chat", async
     assert.equal(ctx.replies[0].includes("Full key: replacement key is shown only in private chat"), true);
     assert.equal(ctx.sentMessages.length, 1);
     assert.equal(ctx.sentMessages[0]?.chatId, 1283361952);
-    assert.equal(ctx.sentMessages[0]?.text.includes("api_key:"), true);
+    assert.equal(ctx.sentMessages[0]?.text.includes("api_key:"), false);
+    assert.deepEqual(ctx.sentDocuments.map((document) => document.filename), ["config.toml", "auth.json"]);
+    assert.match(ctx.sentDocuments[0]?.content ?? "", /base_url = "http:\/\/127\.0\.0\.1:8318\/v1"/);
+    assert.match(ctx.sentDocuments[0]?.content ?? "", /api_key = "sk-/);
+    assert.match(ctx.sentDocuments[1]?.content ?? "", /"OPENAI_API_KEY": "sk-/);
   });
 });

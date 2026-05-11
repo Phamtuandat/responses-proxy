@@ -14,6 +14,7 @@ import { readCustomerBillingOverview } from "../customer-billing.js";
 import { answerCallbackQuerySafely, replyOrEditMessage } from "../callbacks.js";
 import { renewCustomerAccess } from "../grants.js";
 import { getProxyErrorMessage } from "../actions.js";
+import { sendCustomerCodexSetup } from "../codex-config-delivery.js";
 import {
   buildTelegramSessionScope,
   type TelegramBotCallbackPayload,
@@ -1367,6 +1368,8 @@ async function approveRenewalRequest(
     }
     const customerNotified = await notifyCustomerAboutApprovedRenewal(ctx, {
       telegramUserId: request.telegramUserId,
+      baseUrl: deps.config.publicResponsesBaseUrl,
+      model: deps.config.defaultModel,
       planId,
       clientRoute: result.clientRoute,
       subscriptionEndsAt: result.subscriptionEndsAt,
@@ -1419,27 +1422,35 @@ async function notifyCustomerAboutApprovedRenewal(
   ctx: Context,
   input: {
     telegramUserId: string;
+    baseUrl: string;
+    model: string;
     planId: string;
     clientRoute: string;
     subscriptionEndsAt: string;
     apiKey?: string;
   },
 ): Promise<boolean> {
+  if (input.apiKey) {
+    return sendCustomerCodexSetup(ctx, {
+      telegramUserId: input.telegramUserId,
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey,
+      model: input.model,
+      title: "Your access has been approved",
+      details: [
+        formatField("Plan ID", input.planId),
+        formatField("Client route", input.clientRoute),
+        formatField("Subscription ends at", formatDateTime(input.subscriptionEndsAt)),
+      ],
+    });
+  }
+
   try {
     await ctx.api.sendMessage(
       Number(input.telegramUserId),
       [
         "Your access has been approved",
-        formatSection("Plan", [
-          formatField("Plan ID", input.planId),
-          formatField("Client route", input.clientRoute),
-          formatField("Subscription ends at", formatDateTime(input.subscriptionEndsAt)),
-        ]),
-        formatSection("API key", [
-          input.apiKey
-            ? `api_key: ${input.apiKey}`
-            : "Run /apikey in this private chat to view your current key status.",
-        ]),
+        "Run /apikey in this private chat to receive your Codex config files.",
       ].join("\n\n"),
     );
     return true;

@@ -9,6 +9,7 @@ import { maskApiKey } from "../format.js";
 import { grantCustomerAccess } from "../grants.js";
 import { replyWithProxyError, type BotDependencies } from "../actions.js";
 import { formatDateTime, formatField, formatSection } from "../message-format.js";
+import { sendCustomerCodexSetup } from "../codex-config-delivery.js";
 
 function formatGrantUsage(billing: BillingRepository): string {
   const planIds = billing.listPlans().map((plan) => plan.id);
@@ -110,25 +111,52 @@ export function registerGrantCommand(
           .join("\n\n"),
       );
 
-      try {
-        await ctx.api.sendMessage(
-          Number(telegramUserId),
-          [
-            "Your access is active",
-            formatSection("Plan", [
+      const customerNotified = result.apiKey
+        ? await sendCustomerCodexSetup(ctx, {
+            telegramUserId,
+            baseUrl: deps.config.publicResponsesBaseUrl,
+            apiKey: result.apiKey,
+            model: deps.config.defaultModel,
+            title: "Your access is active",
+            details: [
               formatField("Plan ID", planId),
               formatField("Client route", result.clientRoute),
               formatField("Subscription ends at", formatDateTime(result.subscriptionEndsAt)),
-            ]),
-            formatSection("API key", [
-              result.apiKey
-                ? `api_key: ${result.apiKey}`
-                : "Run /apikey in this private chat to view your current key status.",
-            ]),
-          ].join("\n\n"),
-        );
-      } catch {
-        await ctx.reply("Customer notification could not be delivered yet. They may need to /start the bot first.");
+            ],
+          })
+        : false;
+      if (result.apiKey && customerNotified) {
+        auditLog.record({
+          event: "api_key.revealed",
+          actor: { type: "bot", id: "grant" },
+          subjectType: "customer_api_key",
+          subjectId: result.keyId,
+          metadata: {
+            telegramUserId,
+            workspaceId: result.workspaceId,
+            keyPreview: result.keyPreview,
+            audience: "customer_private_chat",
+            apiKey: result.apiKey,
+          },
+        });
+      }
+      if (!customerNotified) {
+        let fallbackDelivered = false;
+        try {
+          await ctx.api.sendMessage(
+            Number(telegramUserId),
+            [
+              "Your access is active",
+              "Run /apikey in this private chat to receive your Codex config files.",
+            ].join("\n\n"),
+          );
+          fallbackDelivered = true;
+        } catch {
+          // Admin receives the manual follow-up notice below.
+        }
+        if (!fallbackDelivered) {
+          await ctx.reply("Customer notification could not be delivered yet. They may need to /start the bot first.");
+        }
       }
     } catch (error) {
       await replyWithProxyError(ctx, error);
