@@ -31,5 +31,8 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Compose config smoke test
+        run: docker compose -f docker-compose.yml -f docker-compose.proxy.yml config
+
       - name: Docker build smoke test
         run: docker build -t responses-proxy:ci .
