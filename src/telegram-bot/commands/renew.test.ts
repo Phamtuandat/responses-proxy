@@ -616,6 +616,7 @@ test("duplicate open /renew returns the existing request", async () => {
 
     assert.equal(billing.listRenewalRequests("open").length, 1);
     assert.equal(second.replies[0]?.includes("You already have an open renewal request."), true);
+    assert.equal(second.replies[0]?.includes("admin_notification: reminder_sent"), true);
   });
 });
 

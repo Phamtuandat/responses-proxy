@@ -571,20 +571,20 @@ async function handleCustomerRenewRequest(
       ]);
   const resultLines = [message];
 
-  if (created.created) {
-    const notification = await notifyAdminsAboutRenewalRequest(
-      ctx,
-      deps,
-      stateStore,
-      identities,
-      workspaces,
-      customerKeys,
-      billing,
-      created.request,
-    );
-    if (notification.sent === 0) {
-      resultLines.push("admin_notification: pending_manual_follow_up");
-    }
+  const notification = await notifyAdminsAboutRenewalRequest(
+    ctx,
+    deps,
+    stateStore,
+    identities,
+    workspaces,
+    customerKeys,
+    billing,
+    created.request,
+  );
+  if (notification.sent === 0) {
+    resultLines.push("admin_notification: pending_manual_follow_up");
+  } else if (!created.created) {
+    resultLines.push("admin_notification: reminder_sent");
   }
   await replyOrEditMessage(ctx, resultLines.filter(Boolean).join("\n"), {
     reply_markup: buildCustomerActionKeyboard(activeKey?.status === "active"),
