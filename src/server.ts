@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from "fastify";
 import { createHash, randomInt, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import readline from "node:readline";
 import path from "node:path";
 import { readConfig } from "./config.js";
@@ -161,6 +162,7 @@ export const app = Fastify({
   },
   requestTimeout: config.REQUEST_TIMEOUT_MS,
   bodyLimit: config.REQUEST_BODY_LIMIT_BYTES,
+  trustProxy: config.HTTP_TRUST_PROXY,
   disableRequestLogging: true,
 });
 
@@ -176,7 +178,7 @@ app.addHook("onRequest", async (request, reply) => {
     return;
   }
 
-  const identifier = buildHttpRateLimitIdentifier(request.headers, request.ip);
+  const identifier = buildHttpRateLimitIdentifier(request.headers.authorization, request.ip);
   const result = httpRateLimiter.consume(`${policy.scope}:${identifier}`, {
     windowMs: config.HTTP_RATE_LIMIT_WINDOW_MS,
     maxRequests: policy.maxRequests,
@@ -430,6 +432,13 @@ app.get("/health", async () => ({
 app.post("/api/sepay/webhook", async (request, reply) => {
   if (!config.SEPAY_WEBHOOK_ENABLED) {
     return reply.code(404).send({ error: { code: "SEPAY_WEBHOOK_DISABLED", message: "Sepay webhook is disabled." } });
+  }
+  if (config.SEPAY_WEBHOOK_ALLOWED_IPS.length > 0) {
+    const callerIp = normalizeIpAddress(request.ip);
+    if (!isAllowedWebhookIp(callerIp, config.SEPAY_WEBHOOK_ALLOWED_IPS)) {
+      request.log.warn({ callerIp }, "sepay webhook blocked by IP allowlist");
+      return reply.code(403).send({ error: { code: "SEPAY_WEBHOOK_IP_FORBIDDEN", message: "Webhook source IP is not allowed." } });
+    }
   }
   const expectedSecret = config.SEPAY_WEBHOOK_SECRET;
   if (!expectedSecret) {
@@ -2840,24 +2849,58 @@ function resolveHttpRateLimitPolicy(
 }
 
 function buildHttpRateLimitIdentifier(
-  headers: Record<string, unknown>,
+  authorizationHeader: unknown,
   fallbackIp?: string,
 ): string {
-  const bearerToken = readBearerToken(headers.authorization);
+  const bearerToken = readBearerToken(authorizationHeader);
   if (bearerToken) {
     return `bearer:${hashRateLimitValue(bearerToken)}`;
   }
 
-  const forwardedFor = readHeaderString(headers["x-forwarded-for"])
-    ?.split(",")[0]
-    ?.trim();
-  const realIp = readHeaderString(headers["x-real-ip"]);
-  const candidate = forwardedFor || realIp || fallbackIp || "unknown";
-  return `ip:${hashRateLimitValue(candidate)}`;
+  return `ip:${hashRateLimitValue(normalizeIpAddress(fallbackIp ?? "unknown"))}`;
 }
 
 function hashRateLimitValue(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function isAllowedWebhookIp(callerIp: string, allowedIps: string[]): boolean {
+  const normalizedCallerIp = normalizeIpAddress(callerIp);
+  return allowedIps.some((allowedIp) => {
+    const normalizedAllowedIp = normalizeIpAddress(allowedIp);
+    if (normalizedAllowedIp.includes("/")) {
+      return isIpv4InCidr(normalizedCallerIp, normalizedAllowedIp);
+    }
+    return normalizedCallerIp === normalizedAllowedIp;
+  });
+}
+
+function isIpv4InCidr(candidateIp: string, cidr: string): boolean {
+  const [baseIp, prefixText] = cidr.split("/", 2);
+  if (isIP(candidateIp) !== 4 || isIP(baseIp) !== 4) {
+    return false;
+  }
+
+  const prefix = Number(prefixText);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+    return false;
+  }
+
+  const candidateValue = ipv4ToNumber(candidateIp);
+  const baseValue = ipv4ToNumber(baseIp);
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (candidateValue & mask) === (baseValue & mask);
+}
+
+function ipv4ToNumber(value: string): number {
+  return value.split(".").reduce((accumulator, octet) => {
+    const parsed = Number(octet);
+    return ((accumulator << 8) >>> 0) + parsed;
+  }, 0);
+}
+
+function normalizeIpAddress(value: string): string {
+  return value.startsWith("::ffff:") ? value.slice("::ffff:".length) : value;
 }
 
 function isOperatorRequest(request: { headers: Record<string, unknown> }): boolean {

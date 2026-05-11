@@ -31,13 +31,13 @@ The compose files bind `responses-proxy` to `127.0.0.1:8318` by default via
 3. Enable Tailscale Funnel:
 
    ```bash
-   npm run tailnet:funnel
+   TAILSCALE_FUNNEL_HTTPS_PORT=443 npm run tailnet:funnel
    ```
 
    Or directly:
 
    ```bash
-   TAILSCALE_LOCAL_TARGET=http://127.0.0.1:8318 ./scripts/tailnet-funnel.sh
+   TAILSCALE_FUNNEL_HTTPS_PORT=443 TAILSCALE_LOCAL_TARGET=http://127.0.0.1:8318 ./scripts/tailnet-funnel.sh
    ```
 
 4. Verify:
@@ -96,3 +96,7 @@ HTTP_RATE_LIMIT_HEALTH_MAX_REQUESTS=240
 These limits reduce app-layer abuse but are not a volumetric DDoS shield. For
 large attacks, keep the service behind Tailscale Funnel and avoid raw WAN port
 forwarding.
+
+Default public body limit is `2097152` bytes in compose/env profiles.
+Keep `HTTP_TRUST_PROXY=false` unless a trusted edge proxy overwrites forwarded
+headers. Docker-to-Docker calls still use `http://responses-proxy:8318`.

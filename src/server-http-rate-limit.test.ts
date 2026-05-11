@@ -15,6 +15,7 @@ process.env.UPSTREAM_API_KEY = "provider-key";
 process.env.PROVIDER_USAGE_CHECK_ENABLED = "false";
 process.env.CHATGPT_OAUTH_ENABLED = "false";
 process.env.LOG_LEVEL = "silent";
+process.env.HTTP_TRUST_PROXY = "false";
 process.env.HTTP_RATE_LIMIT_ENABLED = "true";
 process.env.HTTP_RATE_LIMIT_WINDOW_MS = "60000";
 process.env.HTTP_RATE_LIMIT_RESPONSES_MAX_REQUESTS = "1";
@@ -44,7 +45,7 @@ test("responses endpoint returns 429 after configured rate limit threshold", asy
     method: "POST",
     url: "/v1/responses",
     headers: {
-      "x-forwarded-for": "203.0.113.10",
+      "x-forwarded-for": "198.51.100.10",
     },
     payload: {},
   });
@@ -53,4 +54,36 @@ test("responses endpoint returns 429 after configured rate limit threshold", asy
   assert.equal(second.headers["x-ratelimit-limit"], "1");
   assert.equal(second.headers["x-ratelimit-remaining"], "0");
   assert.equal(second.json().error.code, "HTTP_RATE_LIMIT_EXCEEDED");
+});
+
+test("bearer requests get separate rate limit buckets by token", async () => {
+  const firstBearer = await app.inject({
+    method: "POST",
+    url: "/v1/responses",
+    headers: {
+      authorization: "Bearer bearer-token-a",
+    },
+    payload: {},
+  });
+  assert.equal(firstBearer.statusCode, 400);
+
+  const secondBearer = await app.inject({
+    method: "POST",
+    url: "/v1/responses",
+    headers: {
+      authorization: "Bearer bearer-token-b",
+    },
+    payload: {},
+  });
+  assert.equal(secondBearer.statusCode, 400);
+
+  const thirdBearer = await app.inject({
+    method: "POST",
+    url: "/v1/responses",
+    headers: {
+      authorization: "Bearer bearer-token-a",
+    },
+    payload: {},
+  });
+  assert.equal(thirdBearer.statusCode, 429);
 });

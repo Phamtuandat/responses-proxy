@@ -7,6 +7,13 @@ function parseIdList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseDelimitedList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/[,\r?\n]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8318),
   HOST: z.string().min(1).default("0.0.0.0"),
@@ -29,6 +36,10 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value !== "false"),
   REQUEST_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  HTTP_TRUST_PROXY: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
   HTTP_RATE_LIMIT_ENABLED: z
     .string()
     .optional()
@@ -223,6 +234,7 @@ const envSchema = z.object({
       return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
     }),
   SEPAY_WEBHOOK_SECRET: z.string().optional(),
+  SEPAY_WEBHOOK_ALLOWED_IPS: z.string().optional().transform(parseDelimitedList),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/tailnet-lib.sh"
 
-require_tailscale
 require_local_proxy
+require_tailscale
 
 tailscale serve --bg "$TAILSCALE_LOCAL_TARGET"
 

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 TAILSCALE_LOCAL_TARGET="${TAILSCALE_LOCAL_TARGET:-http://127.0.0.1:8318}"
+TAILSCALE_FUNNEL_HTTPS_PORT="${TAILSCALE_FUNNEL_HTTPS_PORT:-443}"
 
 require_tailscale() {
   if ! command -v tailscale >/dev/null 2>&1; then
@@ -31,6 +32,18 @@ require_local_proxy() {
     echo "Start it first with: $(cd "$(dirname "$0")/.." && pwd)/scripts/start.sh"
     exit 1
   fi
+}
+
+require_valid_funnel_https_port() {
+  case "$TAILSCALE_FUNNEL_HTTPS_PORT" in
+    443|8443|10000)
+      ;;
+    *)
+      echo "TAILSCALE_FUNNEL_HTTPS_PORT must be one of 443, 8443, or 10000."
+      echo "Got: $TAILSCALE_FUNNEL_HTTPS_PORT"
+      exit 1
+      ;;
+  esac
 }
 
 tailnet_https_url() {
