@@ -4,13 +4,13 @@ import path from "node:path";
 import test from "node:test";
 
 const scriptPath = path.resolve(process.cwd(), "scripts", "tailnet-funnel.sh");
-const zshLookup = spawnSync("sh", ["-c", "command -v zsh"], {
+const bashLookup = spawnSync("sh", ["-c", "command -v bash"], {
   encoding: "utf8",
 });
-const zshPath = zshLookup.status === 0 ? zshLookup.stdout.trim() : "";
+const bashPath = bashLookup.status === 0 ? bashLookup.stdout.trim() : "";
 
-test("tailnet funnel script rejects invalid public https port", { skip: !zshPath }, () => {
-  const result = spawnSync(zshPath, [scriptPath], {
+test("tailnet funnel script rejects invalid public https port", { skip: !bashPath }, () => {
+  const result = spawnSync(bashPath, [scriptPath], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -23,8 +23,8 @@ test("tailnet funnel script rejects invalid public https port", { skip: !zshPath
   assert.match(`${result.stdout}${result.stderr}`, /TAILSCALE_FUNNEL_HTTPS_PORT/);
 });
 
-test("tailnet funnel script rejects non-localhost target", { skip: !zshPath }, () => {
-  const result = spawnSync(zshPath, [scriptPath], {
+test("tailnet funnel script rejects non-localhost target", { skip: !bashPath }, () => {
+  const result = spawnSync(bashPath, [scriptPath], {
     encoding: "utf8",
     env: {
       ...process.env,
