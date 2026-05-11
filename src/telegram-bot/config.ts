@@ -59,6 +59,10 @@ const envSchema = z.object({
   BOT_LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
+  BOT_SEPAY_ACCOUNT_NUMBER: z.string().optional(),
+  BOT_SEPAY_BANK_CODE: z.string().default("MBBank"),
+  BOT_SEPAY_TEMPLATE: z.string().default("compact"),
+  BOT_SEPAY_DOWNLOAD: envBoolean(false),
 });
 
 export type TelegramBotConfig = {
@@ -83,6 +87,10 @@ export type TelegramBotConfig = {
   rateLimitWindowMs: number;
   rateLimitMaxRequests: number;
   logLevel: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
+  sepayAccountNumber?: string;
+  sepayBankCode?: string;
+  sepayTemplate?: string;
+  sepayDownload?: boolean;
 };
 
 export function readTelegramBotConfig(env: NodeJS.ProcessEnv): TelegramBotConfig {
@@ -109,6 +117,10 @@ export function readTelegramBotConfig(env: NodeJS.ProcessEnv): TelegramBotConfig
     rateLimitWindowMs: parsed.BOT_RATE_LIMIT_WINDOW_MS,
     rateLimitMaxRequests: parsed.BOT_RATE_LIMIT_MAX_REQUESTS,
     logLevel: parsed.BOT_LOG_LEVEL,
+    sepayAccountNumber: parsed.BOT_SEPAY_ACCOUNT_NUMBER?.trim() || undefined,
+    sepayBankCode: parsed.BOT_SEPAY_BANK_CODE.trim() || "MBBank",
+    sepayTemplate: parsed.BOT_SEPAY_TEMPLATE.trim() || "compact",
+    sepayDownload: parsed.BOT_SEPAY_DOWNLOAD,
   };
 }
 

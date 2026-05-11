@@ -1,11 +1,10 @@
 services:
   responses-proxy:
     image: ${RESPONSES_PROXY_IMAGE:-ghcr.io/phamtuandat/responses-proxy:latest}
-    container_name: responses-proxy
     ports:
       - "8318:8318"
     volumes:
-      - ./logs:/app/logs
+      - ${RESPONSES_PROXY_HOST_LOGS_DIR:-./logs}:/app/logs
       - ${RESPONSES_PROXY_HOST_HOME:-${HOME}}/.hermes/config.yaml:/host-home/.hermes/config.yaml
       - ${RESPONSES_PROXY_HOST_HOME:-${HOME}}/.codex:/host-home/.codex
     environment:

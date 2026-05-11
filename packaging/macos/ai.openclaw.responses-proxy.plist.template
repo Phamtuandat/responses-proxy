@@ -9,6 +9,11 @@
     <string>/bin/zsh</string>
     <string>__ROOT_DIR__/scripts/start.sh</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RESPONSES_PROXY_ENV_PROFILE</key>
+    <string>dev-mac</string>
+  </dict>
   <key>WorkingDirectory</key>
   <string>__ROOT_DIR__</string>
   <key>RunAtLoad</key>

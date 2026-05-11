@@ -4,17 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import BetterSqlite3 from "better-sqlite3";
+import { DashboardAuthRepository } from "./dashboard-auth.js";
 
 const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-server-token-limits-"));
 const dbFile = path.join(tempDir, "app.sqlite");
 
 process.env.RESPONSES_PROXY_DISABLE_LISTEN = "true";
 process.env.APP_DB_PATH = dbFile;
+process.env.CUSTOMER_KEY_DB_PATH = dbFile;
 process.env.UPSTREAM_BASE_URL = "https://upstream.example/v1";
 process.env.UPSTREAM_API_KEY = "provider-key";
 process.env.PROVIDER_USAGE_CHECK_ENABLED = "false";
 process.env.CHATGPT_OAUTH_ENABLED = "false";
 process.env.LOG_LEVEL = "silent";
+process.env.RESPONSES_PROXY_CLIENT_API_KEY = "test-bot-api-key";
 process.env.TELEGRAM_BOT_TOKEN = "test-dashboard-bot-token";
 process.env.TELEGRAM_OWNER_USER_IDS = "1";
 process.env.TELEGRAM_ADMIN_USER_IDS = "1";
@@ -27,20 +30,27 @@ test.after(async () => {
 });
 
 async function loginDashboard(): Promise<string> {
-  const otpResponse = await app.inject({
+  const approvalResponse = await app.inject({
     method: "POST",
-    url: "/api/dashboard-auth/request-otp",
-    payload: { telegramUserId: "1" },
+    url: "/api/dashboard-auth/request-approval",
   });
-  assert.equal(otpResponse.statusCode, 200);
-  const otp = otpResponse.json().debugOtp as string;
-  const verifyResponse = await app.inject({
-    method: "POST",
-    url: "/api/dashboard-auth/verify",
-    payload: { telegramUserId: "1", otp },
+  assert.equal(approvalResponse.statusCode, 200);
+  const approval = approvalResponse.json() as { challengeId: string; pollToken: string; debugApprovalCode?: string };
+  assert.equal(typeof approval.debugApprovalCode, "string");
+  const dashboardAuth = DashboardAuthRepository.create(dbFile);
+  const resolved = dashboardAuth.resolveApprovalChoice({
+    challengeId: approval.challengeId,
+    telegramUserId: "1",
+    selectedCode: approval.debugApprovalCode as string,
   });
-  assert.equal(verifyResponse.statusCode, 200);
-  return verifyResponse.headers["set-cookie"] as string;
+  assert.equal(resolved.ok, true);
+  const statusResponse = await app.inject({
+    method: "GET",
+    url: `/api/dashboard-auth/approval-status?challengeId=${encodeURIComponent(approval.challengeId)}&pollToken=${encodeURIComponent(approval.pollToken)}`,
+  });
+  assert.equal(statusResponse.statusCode, 200);
+  assert.equal(statusResponse.json().status, "approved");
+  return statusResponse.headers["set-cookie"] as string;
 }
 
 test("client token limit admin API creates reads and resets limits", async () => {
@@ -154,4 +164,17 @@ test("client token limit enforcement rejects over-limit requests before upstream
   assert.equal(response.json().error.code, "CLIENT_TOKEN_LIMIT_EXCEEDED");
   assert.equal(response.json().error.client, "default");
   assert.equal(response.json().error.usage.blocked, true);
+});
+
+test("bot api key can reach protected admin routes without dashboard session", async () => {
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/client-configs/status",
+    headers: {
+      Authorization: "Bearer test-bot-api-key",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
 });

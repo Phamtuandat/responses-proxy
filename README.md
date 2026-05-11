@@ -48,27 +48,47 @@ For the current manual paid flow:
 
 For a real deployment, start from `.env.production.checklist` and then copy the values you need into your deployed `.env`.
 
-## App Install
+## Environments
 
-Turn this repo into a local app with one command:
+Runtime config is split by profile so Mac dev and OMV production do not share a
+Telegram bot, SQLite database, or log directory.
+
+- Mac dev uses `env/dev.mac.env`, project `responses-proxy-dev`, and `logs/dev-mac`.
+- OMV prod uses `env/prod.omv.env`, project `responses-proxy-prod`, and the persistent OMV path in `RESPONSES_PROXY_HOST_LOGS_DIR`.
+- Use different `TELEGRAM_BOT_TOKEN` values for dev and prod.
+- Do not use root `.env` as the shared runtime source.
+
+Mac dev commands:
 
 ```bash
-npm run app:install
+npm run app:dev:install
+npm run app:dev:start
+npm run app:dev:status
+npm run app:dev:logs
+npm run app:dev:stop
+```
+
+OMV prod commands:
+
+```bash
+npm run app:prod:install
+npm run app:prod:start
+npm run app:prod:status
+npm run app:prod:logs
+npm run app:prod:stop
+```
+
+The older `npm run app:start` aliases default to `dev-mac`. To target another
+profile without the npm aliases:
+
+```bash
+RESPONSES_PROXY_ENV_PROFILE=prod-omv ./scripts/start.sh
 ```
 
 Then open:
 
 ```bash
-npm run app:open
-```
-
-App management:
-
-```bash
-npm run app:start
-npm run app:stop
-npm run app:status
-npm run app:logs
+npm run app:dev:open
 ```
 
 Tailscale exposure on macOS host:

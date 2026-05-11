@@ -4,6 +4,7 @@ import type { CustomerKeyRepository } from "../../customer-keys.js";
 import type { BotIdentityRepository } from "../bot-identity-repository.js";
 import { renderCustomerActionText } from "../customer-actions.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
+import { formatField, formatSection } from "../message-format.js";
 
 export function registerMeCommand(
   bot: Bot,
@@ -41,22 +42,30 @@ export function registerMeCommand(
     await renderCustomerActionText(
       ctx,
       [
-        "Your account",
-        `telegram_user_id: ${userId ?? "unknown"}`,
-        `telegram_chat_id: ${chatId ?? "unknown"}`,
-        `role: ${user?.role ?? "unknown"}`,
-        `status: ${user?.status ?? "unknown"}`,
-        workspace ? `workspace_id: ${workspace.id}` : "workspace_id: none",
-        workspace ? `workspace_status: ${workspace.status}` : undefined,
-        workspace ? `client_route: ${workspace.defaultClientRoute}` : undefined,
-        keyRecord ? `key_status: ${keyRecord.status}` : "key_status: none",
-        keyRecord ? `key_preview: ${keyRecord.apiKeyPreview}` : undefined,
-        apiKey ? `api_key: ${apiKey}` : undefined,
-        keyRecord && canShowApiKey && !apiKey ? "full_key: unavailable_for_legacy_key" : undefined,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+        "👤 Your account",
+        formatSection("Telegram", [
+          formatField("User ID", userId ?? "unknown"),
+          formatField("Chat ID", chatId ?? "unknown"),
+          formatField("Role", user?.role ?? "unknown"),
+          formatField("Account status", formatStatus(user?.status ?? "unknown")),
+        ]),
+        formatSection("Workspace", [
+          formatField("ID", workspace?.id ?? "none"),
+          workspace ? formatField("Status", formatStatus(workspace.status)) : undefined,
+          workspace ? formatField("Client route", workspace.defaultClientRoute) : undefined,
+        ]),
+        formatSection("API key", [
+          keyRecord ? formatField("Status", formatStatus(keyRecord.status)) : formatField("Status", "none"),
+          keyRecord ? formatField("Preview", keyRecord.apiKeyPreview) : undefined,
+          apiKey ? `api_key: ${apiKey}` : undefined,
+          keyRecord && canShowApiKey && !apiKey ? "Full key: unavailable for legacy key" : undefined,
+        ]),
+      ].join("\n\n"),
       keyRecord?.status === "active",
     );
   });
+}
+
+function formatStatus(value: string): string {
+  return value.replace(/_/g, " ");
 }

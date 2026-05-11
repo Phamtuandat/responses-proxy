@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
+import { DashboardAuthRepository } from "./dashboard-auth.js";
 
 const repoRoot = process.cwd();
 const distClientIndexPath = path.join(repoRoot, "dist", "client", "index.html");
@@ -39,22 +40,33 @@ test("dashboard serving smoke coverage", { concurrency: false }, async (t) => {
       const protectedBeforeLogin = await fetchJson(`${server.baseUrl}/api/providers`);
       assert.equal(protectedBeforeLogin.response.status, 401);
 
-      const otpRequest = await fetchJson(`${server.baseUrl}/api/dashboard-auth/request-otp`, {
+      const approvalRequest = await fetchJson(`${server.baseUrl}/api/dashboard-auth/request-approval`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ telegramUserId: "1" }),
       });
-      assert.equal(otpRequest.response.status, 200);
-      assert.equal(typeof otpRequest.body.debugOtp, "string");
+      assert.equal(approvalRequest.response.status, 200);
+      assert.equal(typeof approvalRequest.body.debugApprovalCode, "string");
+      assert.match(String(approvalRequest.body.displayCode), /^\d{2}$/);
 
-      const verify = await fetchJson(`${server.baseUrl}/api/dashboard-auth/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ telegramUserId: "1", otp: otpRequest.body.debugOtp }),
+      const dashboardAuth = DashboardAuthRepository.create(server.customerDbFile);
+      const resolved = dashboardAuth.resolveApprovalChoice({
+        challengeId: approvalRequest.body.challengeId as string,
+        telegramUserId: "1",
+        selectedCode: approvalRequest.body.debugApprovalCode as string,
       });
-      assert.equal(verify.response.status, 200);
-      const sessionCookie = verify.response.headers.get("set-cookie") ?? "";
-      assert.match(sessionCookie, /responses_proxy_dashboard_session=/);
+      assert.equal(resolved.ok, true);
+
+      const poll = await fetchJson(
+        `${server.baseUrl}/api/dashboard-auth/approval-status?challengeId=${encodeURIComponent(approvalRequest.body.challengeId as string)}&pollToken=${encodeURIComponent(approvalRequest.body.pollToken as string)}`,
+      );
+      assert.equal(poll.response.status, 200);
+      assert.equal(poll.body.status, "approved");
+      const approvedSession = poll.body.session as { telegramUserId?: string } | undefined;
+      assert.equal(typeof approvedSession?.telegramUserId, "string");
+      const session = DashboardAuthRepository.create(server.customerDbFile).createSession({
+        telegramUserId: approvedSession?.telegramUserId as string,
+        ttlMs: 60_000,
+      });
+      const sessionCookie = `responses_proxy_dashboard_session=${encodeURIComponent(session.token)}`;
 
       const providers = await fetchJson(`${server.baseUrl}/api/providers`, {
         headers: { Cookie: sessionCookie },
@@ -188,6 +200,7 @@ async function startDashboardServer(extraEnv: Record<string, string> = {}) {
 
   return {
     baseUrl: `http://127.0.0.1:${port}`,
+    customerDbFile: path.join(tempDir, "customer.sqlite"),
     get output() {
       return output;
     },

@@ -101,13 +101,14 @@ export function createRateLimitMiddleware(rateLimiter: SqliteRateLimiter): Middl
     const retryAfterSeconds = Math.max(Math.ceil(result.retryAfterMs / 1000), 1);
     if (ctx.callbackQuery) {
       await ctx.answerCallbackQuery({
-        text: `Rate limit exceeded. Try again in ${retryAfterSeconds}s.`,
+        text: `⏳ Too many requests. Try again in ${retryAfterSeconds}s.`,
         show_alert: true,
       });
       return;
     }
 
-    await ctx.reply(`Rate limit exceeded. Try again in ${retryAfterSeconds}s.`);
+    await ctx.reply(`⏳ Too many requests
+Please try again in ${retryAfterSeconds}s.`);
   };
 }
 

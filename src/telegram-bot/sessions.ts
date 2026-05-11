@@ -62,6 +62,7 @@ export type TelegramBotCallbackPayload =
         | "approve"
         | "approve_rotate"
         | "approve_override"
+        | "confirm_payment"
         | "close"
         | "view_customer"
         | "show_reject_reasons"
@@ -78,7 +79,7 @@ export interface TelegramBotStateStore {
   get(sessionScope: string, nowMs?: number): TelegramBotSession | undefined;
   set(sessionScope: string, session: TelegramBotSession, nowMs?: number): void;
   clear(sessionScope: string): void;
-  issueCallbackToken(payload: TelegramBotCallbackPayload, nowMs?: number): string;
+  issueCallbackToken(payload: TelegramBotCallbackPayload, nowMs?: number, ttlMs?: number): string;
   readCallbackToken(token: string, nowMs?: number): TelegramBotCallbackPayload | undefined;
   clearCallbackToken(token: string): void;
 }
@@ -132,7 +133,7 @@ export class SqliteSessionStore implements TelegramBotStateStore {
     this.db.prepare("DELETE FROM telegram_bot_sessions WHERE session_scope = ?").run(sessionScope);
   }
 
-  issueCallbackToken(payload: TelegramBotCallbackPayload, nowMs = Date.now()): string {
+  issueCallbackToken(payload: TelegramBotCallbackPayload, nowMs = Date.now(), ttlMs = this.ttlMs): string {
     this.pruneExpired(nowMs);
     const token = randomBytes(9).toString("base64url");
     this.db
@@ -140,7 +141,7 @@ export class SqliteSessionStore implements TelegramBotStateStore {
         `INSERT INTO telegram_bot_callback_states (token, payload_json, expires_at)
          VALUES (?, ?, ?)`,
       )
-      .run(token, JSON.stringify(payload), nowMs + this.ttlMs);
+      .run(token, JSON.stringify(payload), nowMs + ttlMs);
     return token;
   }
 
@@ -233,6 +234,7 @@ function parseCallbackPayloadJson(raw: string): TelegramBotCallbackPayload | und
         parsed.action !== "approve" &&
         parsed.action !== "approve_rotate" &&
         parsed.action !== "approve_override" &&
+        parsed.action !== "confirm_payment" &&
         parsed.action !== "close" &&
         parsed.action !== "view_customer" &&
         parsed.action !== "show_reject_reasons" &&

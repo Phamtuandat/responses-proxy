@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import type { FastifyBaseLogger } from "fastify";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import readline from "node:readline";
@@ -83,6 +83,8 @@ import { resolveCustomerRoutingAccess } from "./customer-key-access.js";
 import { recordCustomerUsageFromPayload } from "./customer-usage.js";
 import { CustomerWorkspaceRepository } from "./telegram-bot/customer-workspace-repository.js";
 import { DashboardAuthRepository } from "./dashboard-auth.js";
+import { AuditLogRepository } from "./audit-log.js";
+import { processSepayWebhook, type SepayWebhookPayload } from "./sepay-webhook.js";
 
 const config = readConfig(process.env);
 const CHATGPT_OAUTH_PROVIDER_ID = "account-openai-codex";
@@ -98,6 +100,7 @@ const customerWorkspaceRepository = CustomerWorkspaceRepository.create(
 );
 const billingRepository = BillingRepository.create(path.resolve(config.CUSTOMER_KEY_DB_PATH));
 const dashboardAuthRepository = DashboardAuthRepository.create(path.resolve(config.CUSTOMER_KEY_DB_PATH));
+const auditLogRepository = AuditLogRepository.create(path.resolve(config.CUSTOMER_KEY_DB_PATH));
 const dashboardAdminUserIds = new Set([
   ...config.TELEGRAM_OWNER_USER_IDS,
   ...config.TELEGRAM_ADMIN_USER_IDS,
@@ -161,8 +164,17 @@ app.addHook("onRequest", async (request, reply) => {
     return;
   }
 
-  const session = dashboardAuthRepository.getSessionByToken(readCookie(request.headers.cookie, DASHBOARD_SESSION_COOKIE));
+  const sessionToken = readCookie(request.headers.cookie, DASHBOARD_SESSION_COOKIE);
+  const session = dashboardAuthRepository.getSessionByToken(sessionToken);
   if (session) {
+    return;
+  }
+
+  const routingApiKey = readBearerToken(request.headers.authorization);
+  if (
+    config.RESPONSES_PROXY_CLIENT_API_KEY &&
+    routingApiKey === config.RESPONSES_PROXY_CLIENT_API_KEY
+  ) {
     return;
   }
 
@@ -188,43 +200,168 @@ app.get("/api/dashboard-auth/session", async (request) => {
   };
 });
 
-app.post("/api/dashboard-auth/request-otp", async (request, reply) => {
-  const body = request.body as { telegramUserId?: unknown } | undefined;
-  const telegramUserId = typeof body?.telegramUserId === "string" ? body.telegramUserId.trim() : "";
-  if (!/^\d+$/.test(telegramUserId)) {
-    return reply.code(400).send({ error: { code: "INVALID_TELEGRAM_USER_ID", message: "Enter a numeric Telegram user id." } });
-  }
-  if (!dashboardAdminUserIds.has(telegramUserId)) {
-    return reply.code(403).send({ error: { code: "DASHBOARD_AUTH_FORBIDDEN", message: "This Telegram user is not allowed to access the dashboard." } });
+app.post("/api/dashboard-auth/request-approval", async (_request, reply) => {
+  const adminUserIds = Array.from(dashboardAdminUserIds);
+  if (adminUserIds.length === 0) {
+    return reply.code(503).send({ error: { code: "DASHBOARD_AUTH_NO_ADMINS", message: "No Telegram dashboard admins are configured." } });
   }
   if (!config.TELEGRAM_BOT_TOKEN) {
     return reply.code(503).send({ error: { code: "DASHBOARD_AUTH_BOT_DISABLED", message: "Telegram bot token is not configured for dashboard login." } });
   }
 
-  const challenge = dashboardAuthRepository.createChallenge({ telegramUserId, ttlMs: config.DASHBOARD_AUTH_OTP_TTL_MS });
-  await sendTelegramDashboardOtp({ botToken: config.TELEGRAM_BOT_TOKEN, telegramUserId, otp: challenge.otp, expiresAt: challenge.expiresAt });
+  const challenge = dashboardAuthRepository.createApprovalChallenge({
+    telegramUserIds: adminUserIds,
+    ttlMs: config.DASHBOARD_AUTH_OTP_TTL_MS,
+  });
+  const deliveries = await Promise.allSettled(
+    adminUserIds.map((telegramUserId) =>
+      sendTelegramDashboardApprovalRequest({
+        botToken: config.TELEGRAM_BOT_TOKEN as string,
+        telegramUserId,
+        challengeId: challenge.id,
+        displayCode: challenge.displayCode,
+        expiresAt: challenge.expiresAt,
+      }),
+    ),
+  );
+
+  if (!deliveries.some((delivery) => delivery.status === "fulfilled")) {
+    return reply.code(502).send({
+      error: { code: "DASHBOARD_APPROVAL_DELIVERY_FAILED", message: "Could not send approval request to any configured Telegram admin." },
+    });
+  }
+
   return {
     ok: true,
+    challengeId: challenge.id,
+    pollToken: challenge.pollToken,
+    displayCode: challenge.displayCode,
     expiresAt: challenge.expiresAt,
-    debugOtp: config.TELEGRAM_BOT_TOKEN.startsWith("test-") ? challenge.otp : undefined,
+    sentCount: deliveries.filter((delivery) => delivery.status === "fulfilled").length,
+    debugApprovalCode: config.TELEGRAM_BOT_TOKEN.startsWith("test-") ? challenge.displayCode : undefined,
+  };
+});
+
+app.post("/api/dashboard-auth/request-otp", async (_request, reply) => {
+  const adminUserIds = Array.from(dashboardAdminUserIds);
+  if (adminUserIds.length === 0) {
+    return reply.code(503).send({ error: { code: "DASHBOARD_AUTH_NO_ADMINS", message: "No Telegram dashboard admins are configured." } });
+  }
+  if (!config.TELEGRAM_BOT_TOKEN) {
+    return reply.code(503).send({ error: { code: "DASHBOARD_AUTH_BOT_DISABLED", message: "Telegram bot token is not configured for dashboard login." } });
+  }
+
+  const challenges = adminUserIds.map((telegramUserId) =>
+    dashboardAuthRepository.createChallenge({ telegramUserId, ttlMs: config.DASHBOARD_AUTH_OTP_TTL_MS }),
+  );
+  const deliveries = await Promise.allSettled(
+    challenges.map((challenge) =>
+      sendTelegramDashboardOtp({
+        botToken: config.TELEGRAM_BOT_TOKEN as string,
+        telegramUserId: challenge.telegramUserId,
+        otp: challenge.otp,
+        expiresAt: challenge.expiresAt,
+      }),
+    ),
+  );
+  if (!deliveries.some((delivery) => delivery.status === "fulfilled")) {
+    return reply.code(502).send({ error: { code: "DASHBOARD_OTP_DELIVERY_FAILED", message: "Could not send OTP to any configured Telegram admin." } });
+  }
+
+  return {
+    ok: true,
+    expiresAt: challenges[0]?.expiresAt,
+    sentCount: deliveries.filter((delivery) => delivery.status === "fulfilled").length,
+    debugOtp: config.TELEGRAM_BOT_TOKEN.startsWith("test-") ? challenges[0]?.otp : undefined,
+  };
+});
+
+app.get("/api/dashboard-auth/approval-status", async (request, reply) => {
+  const query = request.query as { challengeId?: unknown; pollToken?: unknown } | undefined;
+  const challengeId = typeof query?.challengeId === "string" ? query.challengeId.trim() : "";
+  const pollToken = typeof query?.pollToken === "string" ? query.pollToken.trim() : "";
+  if (!challengeId || !pollToken) {
+    return reply.code(400).send({
+      error: {
+        code: "INVALID_DASHBOARD_APPROVAL_STATUS_REQUEST",
+        message: "challengeId and pollToken are required.",
+      },
+    });
+  }
+
+  const status = dashboardAuthRepository.getApprovalChallengeStatus({ challengeId, pollToken });
+  if (!status.ok) {
+    return reply.code(401).send({
+      error: {
+        code: "DASHBOARD_APPROVAL_INVALID",
+        message: "Approval request not found.",
+      },
+    });
+  }
+  if (status.status !== "approved") {
+    return {
+      ok: true,
+      status: status.status,
+      challengeId: status.challengeId,
+      expiresAt: status.expiresAt,
+    };
+  }
+
+  const consumed = dashboardAuthRepository.consumeApprovedChallenge({ challengeId, pollToken });
+  if (!consumed.ok) {
+    if (consumed.reason === "consumed") {
+      return {
+        ok: true,
+        status: "approved",
+        challengeId: status.challengeId,
+        expiresAt: status.expiresAt,
+      };
+    }
+    if (consumed.reason === "pending") {
+      return {
+        ok: true,
+        status: "pending",
+        challengeId: status.challengeId,
+        expiresAt: status.expiresAt,
+      };
+    }
+    return reply.code(consumed.reason === "invalid" ? 401 : 410).send({
+      error: {
+        code: "DASHBOARD_APPROVAL_NOT_READY",
+        message: consumed.reason === "expired" ? "Approval request expired." : "Approval request is not ready yet.",
+      },
+    });
+  }
+
+  const { token, session } = dashboardAuthRepository.createSession({
+    telegramUserId: consumed.telegramUserId,
+    ttlMs: config.DASHBOARD_AUTH_SESSION_TTL_MS,
+  });
+  reply.header("Set-Cookie", serializeCookie(DASHBOARD_SESSION_COOKIE, token, { maxAgeSeconds: Math.floor(config.DASHBOARD_AUTH_SESSION_TTL_MS / 1000) }));
+  return {
+    ok: true,
+    status: "approved",
+    challengeId: status.challengeId,
+    expiresAt: status.expiresAt,
+    session: {
+      telegramUserId: session.telegramUserId,
+      role: session.role,
+      expiresAt: session.expiresAt,
+    },
   };
 });
 
 app.post("/api/dashboard-auth/verify", async (request, reply) => {
-  const body = request.body as { telegramUserId?: unknown; otp?: unknown } | undefined;
-  const telegramUserId = typeof body?.telegramUserId === "string" ? body.telegramUserId.trim() : "";
+  const body = request.body as { otp?: unknown } | undefined;
   const otp = typeof body?.otp === "string" ? body.otp.trim() : "";
-  if (!dashboardAdminUserIds.has(telegramUserId)) {
-    return reply.code(403).send({ error: { code: "DASHBOARD_AUTH_FORBIDDEN", message: "This Telegram user is not allowed to access the dashboard." } });
-  }
   if (!/^\d{6}$/.test(otp)) {
     return reply.code(400).send({ error: { code: "INVALID_DASHBOARD_OTP", message: "Enter the 6-digit OTP from Telegram." } });
   }
-  const consumed = dashboardAuthRepository.consumeChallenge({ telegramUserId, otp });
+  const consumed = dashboardAuthRepository.consumeChallengeForUsers({ telegramUserIds: Array.from(dashboardAdminUserIds), otp });
   if (!consumed.ok) {
     return reply.code(401).send({ error: { code: consumed.reason === "expired" ? "DASHBOARD_OTP_EXPIRED" : "DASHBOARD_OTP_INVALID", message: consumed.reason === "expired" ? "OTP expired. Request a new code." : "Invalid OTP." } });
   }
-  const { token, session } = dashboardAuthRepository.createSession({ telegramUserId, ttlMs: config.DASHBOARD_AUTH_SESSION_TTL_MS });
+  const { token, session } = dashboardAuthRepository.createSession({ telegramUserId: consumed.telegramUserId, ttlMs: config.DASHBOARD_AUTH_SESSION_TTL_MS });
   reply.header("Set-Cookie", serializeCookie(DASHBOARD_SESSION_COOKIE, token, { maxAgeSeconds: Math.floor(config.DASHBOARD_AUTH_SESSION_TTL_MS / 1000) }));
   return { ok: true, session: { telegramUserId: session.telegramUserId, role: session.role, expiresAt: session.expiresAt } };
 });
@@ -242,6 +379,44 @@ app.get("/health", async () => ({
   activeProviderId: providerRepository.getActiveProviderId(),
   fallback: getFallbackProviderPreset("default")?.responsesUrl ?? null,
 }));
+
+app.post("/api/sepay/webhook", async (request, reply) => {
+  if (!config.SEPAY_WEBHOOK_ENABLED) {
+    return reply.code(404).send({ error: { code: "SEPAY_WEBHOOK_DISABLED", message: "Sepay webhook is disabled." } });
+  }
+  const expectedSecret = config.SEPAY_WEBHOOK_SECRET;
+  if (!expectedSecret) {
+    return reply.code(503).send({ error: { code: "SEPAY_WEBHOOK_NOT_CONFIGURED", message: "Webhook secret is not configured." } });
+  }
+  const authHeader = request.headers["authorization"];
+  const headerValue = typeof authHeader === "string" ? authHeader.trim() : "";
+  const providedSecret = headerValue.startsWith("Apikey ")
+    ? headerValue.slice("Apikey ".length).trim()
+    : headerValue.startsWith("Bearer ")
+      ? headerValue.slice("Bearer ".length).trim()
+      : headerValue;
+  if (providedSecret !== expectedSecret) {
+    return reply.code(401).send({ error: { code: "SEPAY_WEBHOOK_UNAUTHORIZED", message: "Invalid webhook credentials." } });
+  }
+  const payload = request.body as SepayWebhookPayload | undefined;
+  if (!payload || typeof payload !== "object") {
+    return reply.code(400).send({ error: { code: "SEPAY_WEBHOOK_INVALID_BODY", message: "Body must be a JSON object." } });
+  }
+  const outcome = processSepayWebhook({
+    payload,
+    billing: billingRepository,
+    auditLog: auditLogRepository,
+  });
+  return reply.code(200).send({
+    ok: outcome.status === "confirmed" || outcome.status === "already_processed",
+    status: outcome.status,
+    requestId: "request" in outcome ? outcome.request.id : undefined,
+    requestStatus: "request" in outcome ? outcome.request.status : undefined,
+    expectedAmountVnd: outcome.status === "amount_mismatch" ? outcome.expectedAmount : undefined,
+    receivedAmountVnd: outcome.status === "amount_mismatch" ? outcome.receivedAmount : undefined,
+    reason: outcome.status === "ignored" ? outcome.reason : undefined,
+  });
+});
 
 app.get("/api/debug/prompt-cache/latest", async (request) => {
   const query = request.query as { providerId?: unknown } | undefined;
@@ -2276,7 +2451,13 @@ function isDashboardProtectedPath(url: string): boolean {
   if (!pathname.startsWith("/api/")) {
     return false;
   }
-  return !pathname.startsWith("/api/dashboard-auth/");
+  if (pathname.startsWith("/api/dashboard-auth/")) {
+    return false;
+  }
+  if (pathname === "/api/sepay/webhook") {
+    return false;
+  }
+  return true;
 }
 
 function readCookie(cookieHeader: string | undefined, name: string): string | undefined {
@@ -2334,6 +2515,53 @@ async function sendTelegramDashboardOtp(input: {
   if (!response.ok) {
     throw new Error(`Telegram sendMessage failed: ${response.status}`);
   }
+}
+
+async function sendTelegramDashboardApprovalRequest(input: {
+  botToken: string;
+  telegramUserId: string;
+  challengeId: string;
+  displayCode: string;
+  expiresAt: string;
+}): Promise<void> {
+  if (input.botToken.startsWith("test-")) {
+    return;
+  }
+
+  const choices = buildDashboardApprovalChoices(input.displayCode);
+  const response = await fetch(`https://api.telegram.org/bot${input.botToken}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: input.telegramUserId,
+      text: [
+        "Responses Proxy dashboard approval",
+        `Pick code: ${input.displayCode}`,
+        `Expires: ${input.expiresAt}`,
+        "Choose matching number to approve login.",
+      ].join("\n"),
+      reply_markup: {
+        inline_keyboard: [
+          choices.map((choice) => ({
+            text: choice,
+            callback_data: `v1:dashauth:${input.challengeId}:${choice}`,
+          })),
+        ],
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Telegram sendMessage failed: ${response.status}`);
+  }
+}
+
+function buildDashboardApprovalChoices(displayCode: string): string[] {
+  const choices = new Set<string>([displayCode]);
+  while (choices.size < 4) {
+    choices.add(randomInt(10, 100).toString().padStart(2, "0"));
+  }
+  return Array.from(choices).sort(() => Math.random() - 0.5);
 }
 
 

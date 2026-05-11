@@ -120,6 +120,18 @@ async function provisionCustomerAccess(args: {
         telegramUserId: args.telegramUserId,
       },
     });
+  } else if (existingUser.status === "pending_approval") {
+    args.auditLog?.record({
+      event: "user.approved",
+      actor: args.actor,
+      subjectType: "telegram_user",
+      subjectId: args.telegramUserId,
+      metadata: {
+        telegramUserId: args.telegramUserId,
+        priorStatus: existingUser.status,
+        reason: `${args.action}_approval`,
+      },
+    });
   }
 
   const existingWorkspace = args.workspaces.getDefaultWorkspace(args.telegramUserId);
@@ -138,6 +150,19 @@ async function provisionCustomerAccess(args: {
         workspaceId: workspace.id,
         telegramUserId: args.telegramUserId,
         clientRoute: workspace.defaultClientRoute,
+      },
+    });
+  } else if (existingWorkspace.status === "pending_approval") {
+    args.auditLog?.record({
+      event: "workspace.approved",
+      actor: args.actor,
+      subjectType: "workspace",
+      subjectId: workspace.id,
+      metadata: {
+        workspaceId: workspace.id,
+        telegramUserId: args.telegramUserId,
+        priorStatus: existingWorkspace.status,
+        reason: `${args.action}_approval`,
       },
     });
   }

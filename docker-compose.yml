@@ -2,11 +2,10 @@ services:
   responses-proxy:
     image: ${RESPONSES_PROXY_IMAGE:-ghcr.io/phamtuandat/responses-proxy:latest}
     build: .
-    container_name: responses-proxy
     ports:
       - "8318:8318"
     volumes:
-      - ./logs:/app/logs
+      - ${RESPONSES_PROXY_HOST_LOGS_DIR:-./logs}:/app/logs
       - ${RESPONSES_PROXY_HOST_HOME:-${HOME}}/.hermes/config.yaml:/host-home/.hermes/config.yaml
       - ${RESPONSES_PROXY_HOST_HOME:-${HOME}}/.codex:/host-home/.codex
     environment:
@@ -64,6 +63,7 @@ services:
       SANITIZE_REASONING_SUMMARY_FOR_PROVIDER: "${SANITIZE_REASONING_SUMMARY_FOR_PROVIDER:-false}"
       FALLBACK_ENABLED: "${FALLBACK_ENABLED:-true}"
       FALLBACK_STATUS_CODES: "${FALLBACK_STATUS_CODES:-429,500,502,503,504}"
+      RESPONSES_PROXY_CLIENT_API_KEY: "${RESPONSES_PROXY_CLIENT_API_KEY:-}"
       APP_DB_PATH: "${APP_DB_PATH:-/app/logs/app.sqlite}"
       CUSTOMER_KEY_DB_PATH: "${CUSTOMER_KEY_DB_PATH:-/app/logs/telegram-bot.sqlite}"
       SESSION_LOG_DIR: "/app/logs/sessions"
@@ -86,13 +86,12 @@ services:
   telegram-bot:
     image: ${RESPONSES_PROXY_IMAGE:-ghcr.io/phamtuandat/responses-proxy:latest}
     build: .
-    container_name: responses-proxy-telegram-bot
     command: ["node", "dist/telegram-bot/index.js"]
     depends_on:
       responses-proxy:
         condition: service_healthy
     volumes:
-      - ./logs:/app/logs
+      - ${RESPONSES_PROXY_HOST_LOGS_DIR:-./logs}:/app/logs
     environment:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_ALLOWED_USER_IDS: "${TELEGRAM_ALLOWED_USER_IDS:-}"
@@ -125,13 +124,12 @@ services:
   telegram-bot-worker:
     image: ${RESPONSES_PROXY_IMAGE:-ghcr.io/phamtuandat/responses-proxy:latest}
     build: .
-    container_name: responses-proxy-telegram-bot-worker
     command: ["node", "dist/telegram-bot/worker.js"]
     depends_on:
       responses-proxy:
         condition: service_healthy
     volumes:
-      - ./logs:/app/logs
+      - ${RESPONSES_PROXY_HOST_LOGS_DIR:-./logs}:/app/logs
     environment:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       TELEGRAM_ALLOWED_USER_IDS: "${TELEGRAM_ALLOWED_USER_IDS:-}"

@@ -172,7 +172,7 @@ function createMockProxyClient() {
   };
 }
 
-test("/start shows New button when the user has no active token", async () => {
+test("/start shows Buy button when the user has no active token", async () => {
   await withRepos(async ({ identities, workspaces, customerKeys, billing, deps }) => {
     const harness = createBotHarness();
     registerStartCommand(harness.bot as any, deps, identities, workspaces, customerKeys, billing);
@@ -184,7 +184,7 @@ test("/start shows New button when the user has no active token", async () => {
     const keyboard = JSON.parse(JSON.stringify(firstResponse?.options?.reply_markup));
     assert.equal(keyboard.inline_keyboard?.[0]?.[0]?.text, "🔐 View key");
     assert.equal(keyboard.inline_keyboard?.[0]?.[0]?.callback_data, "v1:customer:key");
-    assert.equal(keyboard.inline_keyboard?.[1]?.[1]?.text, "⏱ New 24h");
+    assert.equal(keyboard.inline_keyboard?.[1]?.[1]?.text, "💳 Buy API key");
     assert.equal(keyboard.inline_keyboard?.[1]?.[1]?.callback_data, "v1:renew:open");
   });
 });

@@ -92,3 +92,46 @@ test("SqliteSessionStore issues short callback tokens and resolves stored accoun
     accountId: "chatgpt-oauth:very.long.email.address@example.com",
   });
 });
+
+test("SqliteSessionStore resolves renewal confirm payment callback tokens", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "telegram-session-store-"));
+  tempDirs.push(directory);
+  const dbFile = path.join(directory, "bot.sqlite");
+  const store = SqliteSessionStore.create(dbFile, 60_000);
+
+  const token = store.issueCallbackToken({
+    kind: "renewal_request_action",
+    action: "confirm_payment",
+    requestId: "renewal-1",
+  });
+
+  assert.deepEqual(store.readCallbackToken(token), {
+    kind: "renewal_request_action",
+    action: "confirm_payment",
+    requestId: "renewal-1",
+  });
+});
+
+test("SqliteSessionStore supports longer callback token TTL for renewal review buttons", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "telegram-session-store-"));
+  tempDirs.push(directory);
+  const dbFile = path.join(directory, "bot.sqlite");
+  const store = SqliteSessionStore.create(dbFile, 60_000);
+
+  const token = store.issueCallbackToken(
+    {
+      kind: "renewal_request_action",
+      action: "approve",
+      requestId: "renewal-late-review",
+    },
+    1_000,
+    3_600_000,
+  );
+
+  assert.deepEqual(store.readCallbackToken(token, 62_000), {
+    kind: "renewal_request_action",
+    action: "approve",
+    requestId: "renewal-late-review",
+  });
+  assert.equal(store.readCallbackToken(token, 3_601_001), undefined);
+});

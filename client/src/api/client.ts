@@ -1,6 +1,8 @@
 import type {
   ChatGptOAuthStatusResponse,
   ChatGptOAuthStartResponse,
+  DashboardAuthApprovalStatusResponse,
+  DashboardAuthRequestApprovalResponse,
   ChatGptOAuthCallbackResponse,
   DashboardAuthRequestOtpResponse,
   DashboardAuthSessionResponse,
@@ -62,12 +64,21 @@ export function getDashboardAuthSession() {
   return apiGet<DashboardAuthSessionResponse>("/api/dashboard-auth/session");
 }
 
-export function requestDashboardOtp(telegramUserId: string) {
-  return apiSend<DashboardAuthRequestOtpResponse>("/api/dashboard-auth/request-otp", "POST", { telegramUserId });
+export function requestDashboardOtp() {
+  return apiSend<DashboardAuthRequestOtpResponse>("/api/dashboard-auth/request-otp", "POST");
 }
 
-export function verifyDashboardOtp(telegramUserId: string, otp: string) {
-  return apiSend<DashboardAuthVerifyResponse>("/api/dashboard-auth/verify", "POST", { telegramUserId, otp });
+export function verifyDashboardOtp(otp: string) {
+  return apiSend<DashboardAuthVerifyResponse>("/api/dashboard-auth/verify", "POST", { otp });
+}
+
+export function requestDashboardApproval() {
+  return apiSend<DashboardAuthRequestApprovalResponse>("/api/dashboard-auth/request-approval", "POST");
+}
+
+export function getDashboardApprovalStatus(challengeId: string, pollToken: string) {
+  const query = new URLSearchParams({ challengeId, pollToken });
+  return apiGet<DashboardAuthApprovalStatusResponse>(`/api/dashboard-auth/approval-status?${query.toString()}`);
 }
 
 export function logoutDashboard() {

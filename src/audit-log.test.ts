@@ -439,7 +439,7 @@ test("grant in admin group does not print the full key or reveal it in audit", a
     await harness.handler("grant")(ctx);
 
     assert.equal(ctx.replies[0]?.includes("api_key:"), false);
-    assert.equal(ctx.replies[0]?.includes("api_key_delivery: full key is only shown in a private admin chat."), true);
+    assert.equal(ctx.replies[0]?.includes("Full key: shown only in private admin chat"), true);
     assert.equal(auditLog.listEvents({ event: "api_key.revealed", limit: 1 }).length, 0);
   });
 });

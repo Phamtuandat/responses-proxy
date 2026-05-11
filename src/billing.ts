@@ -75,18 +75,31 @@ export type EntitlementUsageRecord = {
   updatedAt: string;
 };
 
-export type RenewalRequestStatus = "open" | "approved" | "closed";
+export type EntitlementLotUsage = {
+  entitlement: EntitlementRecord;
+  usage: EntitlementUsageRecord;
+  remainingTokens: number;
+};
+
+export type RenewalRequestKind = "renewal" | "token_topup";
+export type RenewalRequestStatus = "open" | "payment_confirmed" | "approved" | "closed";
 
 export type RenewalRequestRecord = {
   id: string;
   workspaceId: string;
   telegramUserId: string;
+  kind: RenewalRequestKind;
   requestedPlanId?: string;
   requestedDays?: number;
+  requestedTokenDelta?: number;
+  requestedTokenLotDays?: number;
+  priceVnd?: number;
   status: RenewalRequestStatus;
   resolution?: string;
   approvedPlanId?: string;
   approvedDays?: number;
+  approvedTokenDelta?: number;
+  approvedTokenLotDays?: number;
   requestedAt: string;
   closedAt?: string;
   createdAt: string;
@@ -153,12 +166,18 @@ type RenewalRequestRow = {
   id: string;
   workspace_id: string;
   telegram_user_id: string;
+  request_kind: string | null;
   requested_plan_id: string | null;
   requested_days: number | null;
+  requested_token_delta: number | null;
+  requested_token_lot_days: number | null;
+  price_vnd: number | null;
   status: string;
   resolution: string | null;
   approved_plan_id: string | null;
   approved_days: number | null;
+  approved_token_delta: number | null;
+  approved_token_lot_days: number | null;
   requested_at: string;
   closed_at: string | null;
   created_at: string;
@@ -384,6 +403,96 @@ export class BillingRepository {
     return row ? mapEntitlementRow(row) : undefined;
   }
 
+  getActiveEntitlementLotsForWorkspace(
+    workspaceId: string,
+    now: Date = new Date(),
+  ): EntitlementLotUsage[] {
+    const nowIso = now.toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM entitlements
+         WHERE workspace_id = ?
+           AND status = 'active'
+           AND valid_from <= ?
+           AND valid_until >= ?
+         ORDER BY valid_until ASC, created_at ASC`,
+      )
+      .all(workspaceId, nowIso, nowIso) as EntitlementRow[];
+    return rows.map((row) => {
+      const entitlement = mapEntitlementRow(row);
+      const usage = this.getEntitlementUsage(entitlement.id) ?? buildEmptyUsage(entitlement.id, entitlement.workspaceId);
+      return {
+        entitlement,
+        usage,
+        remainingTokens: Math.max(0, entitlement.monthlyTokenLimit - usage.totalTokens),
+      };
+    });
+  }
+
+  getUsableActiveEntitlementForWorkspace(
+    workspaceId: string,
+    now: Date = new Date(),
+  ): EntitlementRecord | undefined {
+    return this.getActiveEntitlementLotsForWorkspace(workspaceId, now)
+      .find((lot) => lot.remainingTokens > 0)
+      ?.entitlement;
+  }
+
+  consumeWorkspaceUsage(input: {
+    workspaceId: string;
+    customerApiKeyId?: string;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    now?: Date;
+  }): EntitlementUsageRecord[] {
+    const totalTokens = Math.max(0, Math.trunc(input.totalTokens));
+    if (totalTokens <= 0) {
+      return [];
+    }
+
+    const now = input.now ?? new Date();
+    let remaining = totalTokens;
+    let remainingInput = Math.max(0, Math.trunc(input.inputTokens));
+    let remainingOutput = Math.max(0, Math.trunc(input.outputTokens));
+    const updates: EntitlementUsageRecord[] = [];
+    const lots = this.getActiveEntitlementLotsForWorkspace(input.workspaceId, now)
+      .filter((lot) => lot.remainingTokens > 0)
+      .sort((left, right) => new Date(left.entitlement.validUntil).getTime() - new Date(right.entitlement.validUntil).getTime());
+
+    const available = lots.reduce((sum, lot) => sum + lot.remainingTokens, 0);
+    if (available < totalTokens) {
+      throw new Error(`Token lot quota exceeded for workspace ${input.workspaceId}.`);
+    }
+
+    for (let index = 0; index < lots.length; index += 1) {
+      const lot = lots[index];
+      if (remaining <= 0) {
+        break;
+      }
+      const consumed = Math.min(remaining, lot.remainingTokens);
+      const isLast = index === lots.length - 1 || remaining === consumed;
+      const inputTokens = isLast ? remainingInput : Math.min(remainingInput, Math.round((remainingInput * consumed) / remaining));
+      const outputTokens = isLast ? remainingOutput : Math.min(remainingOutput, Math.round((remainingOutput * consumed) / remaining));
+      remainingInput -= inputTokens;
+      remainingOutput -= outputTokens;
+      updates.push(
+        this.incrementEntitlementUsage({
+          entitlementId: lot.entitlement.id,
+          workspaceId: input.workspaceId,
+          customerApiKeyId: input.customerApiKeyId,
+          inputTokens,
+          outputTokens,
+          totalTokens: consumed,
+          now,
+        }),
+      );
+      remaining -= consumed;
+    }
+
+    return updates;
+  }
+
   getLatestEntitlementForWorkspace(workspaceId: string): EntitlementRecord | undefined {
     const row = this.db
       .prepare(
@@ -393,6 +502,70 @@ export class BillingRepository {
          LIMIT 1`,
       )
       .get(workspaceId) as EntitlementRow | undefined;
+    return row ? mapEntitlementRow(row) : undefined;
+  }
+
+  createTokenTopUpLot(input: {
+    workspaceId: string;
+    tokenDelta: number;
+    days: number;
+    allowedModels?: string[];
+    maxApiKeys?: number;
+    sourceRequestId?: string;
+    now?: Date;
+  }): EntitlementRecord {
+    const tokenDelta = Math.max(0, Math.trunc(input.tokenDelta));
+    const days = Math.max(1, Math.trunc(input.days));
+    if (tokenDelta <= 0) {
+      throw new Error("Token top-up amount must be positive.");
+    }
+
+    const now = input.now ?? new Date();
+    const validFrom = now.toISOString();
+    const validUntil = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+    const id = randomUUID();
+    const latest = this.getLatestEntitlementForWorkspace(input.workspaceId);
+    this.db
+      .prepare(
+        `INSERT INTO entitlements (
+          id,
+          workspace_id,
+          subscription_id,
+          monthly_token_limit,
+          remaining_tokens,
+          allowed_models_json,
+          max_api_keys,
+          valid_from,
+          valid_until,
+          status,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+      )
+      .run(
+        id,
+        input.workspaceId,
+        tokenDelta,
+        tokenDelta,
+        JSON.stringify(input.allowedModels ?? latest?.allowedModels ?? []),
+        input.maxApiKeys ?? latest?.maxApiKeys ?? 1,
+        validFrom,
+        validUntil,
+        validFrom,
+        validFrom,
+      );
+
+    return this.getEntitlementById(id) as EntitlementRecord;
+  }
+
+  getEntitlementById(id: string): EntitlementRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM entitlements
+         WHERE id = ?`,
+      )
+      .get(id) as EntitlementRow | undefined;
     return row ? mapEntitlementRow(row) : undefined;
   }
 
@@ -454,11 +627,16 @@ export class BillingRepository {
   createRenewalRequest(input: {
     workspaceId: string;
     telegramUserId: string;
+    kind?: RenewalRequestKind;
     requestedPlanId?: string;
     requestedDays?: number;
+    requestedTokenDelta?: number;
+    requestedTokenLotDays?: number;
+    priceVnd?: number;
     now?: Date;
   }): { request: RenewalRequestRecord; created: boolean } {
-    const existing = this.getOpenRenewalRequestForWorkspace(input.workspaceId);
+    const kind = input.kind ?? "renewal";
+    const existing = this.getOpenRenewalRequestForWorkspace(input.workspaceId, kind);
     if (existing) {
       return { request: existing, created: false };
     }
@@ -471,21 +649,29 @@ export class BillingRepository {
           id,
           workspace_id,
           telegram_user_id,
+          request_kind,
           requested_plan_id,
           requested_days,
+          requested_token_delta,
+          requested_token_lot_days,
+          price_vnd,
           status,
           requested_at,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
       )
       .run(
         id,
         input.workspaceId,
         input.telegramUserId,
+        kind,
         input.requestedPlanId ?? null,
         input.requestedDays ?? null,
+        input.requestedTokenDelta ?? null,
+        input.requestedTokenLotDays ?? null,
+        input.priceVnd ?? null,
         now,
         now,
         now,
@@ -507,16 +693,17 @@ export class BillingRepository {
     return row ? mapRenewalRequestRow(row) : undefined;
   }
 
-  getOpenRenewalRequestForWorkspace(workspaceId: string): RenewalRequestRecord | undefined {
+  getOpenRenewalRequestForWorkspace(workspaceId: string, kind: RenewalRequestKind = "renewal"): RenewalRequestRecord | undefined {
     const row = this.db
       .prepare(
         `SELECT * FROM renewal_requests
          WHERE workspace_id = ?
-           AND status = 'open'
+           AND request_kind = ?
+           AND status IN ('open', 'payment_confirmed')
          ORDER BY created_at DESC
          LIMIT 1`,
       )
-      .get(workspaceId) as RenewalRequestRow | undefined;
+      .get(workspaceId, kind) as RenewalRequestRow | undefined;
     return row ? mapRenewalRequestRow(row) : undefined;
   }
 
@@ -538,15 +725,32 @@ export class BillingRepository {
     return rows.map(mapRenewalRequestRow);
   }
 
+  confirmRenewalPayment(input: {
+    id: string;
+    resolution?: string;
+    expectedStatus?: RenewalRequestStatus;
+    now?: Date;
+  }): RenewalRequestRecord | undefined {
+    return this.setRenewalRequestStatus({
+      id: input.id,
+      status: "payment_confirmed",
+      resolution: input.resolution ?? "payment_confirmed_manual",
+      expectedStatus: input.expectedStatus ?? "open",
+      now: input.now,
+    });
+  }
+
   closeRenewalRequest(input: {
     id: string;
     resolution?: string;
+    expectedStatus?: RenewalRequestStatus;
     now?: Date;
   }): RenewalRequestRecord | undefined {
     return this.setRenewalRequestStatus({
       id: input.id,
       status: "closed",
       resolution: input.resolution,
+      expectedStatus: input.expectedStatus,
       now: input.now,
     });
   }
@@ -556,6 +760,7 @@ export class BillingRepository {
     approvedPlanId: string;
     approvedDays: number;
     resolution?: string;
+    expectedStatus?: RenewalRequestStatus;
     now?: Date;
   }): RenewalRequestRecord | undefined {
     return this.setRenewalRequestStatus({
@@ -564,8 +769,64 @@ export class BillingRepository {
       resolution: input.resolution,
       approvedPlanId: input.approvedPlanId,
       approvedDays: input.approvedDays,
+      expectedStatus: input.expectedStatus ?? "payment_confirmed",
       now: input.now,
     });
+  }
+
+  approveTokenTopUpRequest(input: {
+    id: string;
+    approvedTokenDelta: number;
+    approvedTokenLotDays: number;
+    resolution?: string;
+    expectedStatus?: RenewalRequestStatus;
+    now?: Date;
+  }): RenewalRequestRecord | undefined {
+    return this.setRenewalRequestStatus({
+      id: input.id,
+      status: "approved",
+      resolution: input.resolution,
+      approvedTokenDelta: input.approvedTokenDelta,
+      approvedTokenLotDays: input.approvedTokenLotDays,
+      expectedStatus: input.expectedStatus ?? "payment_confirmed",
+      now: input.now,
+    });
+  }
+
+  approveTokenTopUpAtomically(input: {
+    requestId: string;
+    workspaceId: string;
+    tokenDelta: number;
+    lotDays: number;
+    resolution?: string;
+    allowedModels?: string[];
+    maxApiKeys?: number;
+    now?: Date;
+  }): { request: RenewalRequestRecord; lot: EntitlementRecord } | undefined {
+    return this.db.transaction(() => {
+      const transitioned = this.setRenewalRequestStatus({
+        id: input.requestId,
+        status: "approved",
+        resolution: input.resolution,
+        approvedTokenDelta: input.tokenDelta,
+        approvedTokenLotDays: input.lotDays,
+        expectedStatus: "payment_confirmed",
+        now: input.now,
+      });
+      if (!transitioned) {
+        return undefined;
+      }
+      const lot = this.createTokenTopUpLot({
+        workspaceId: input.workspaceId,
+        tokenDelta: input.tokenDelta,
+        days: input.lotDays,
+        allowedModels: input.allowedModels,
+        maxApiKeys: input.maxApiKeys,
+        sourceRequestId: input.requestId,
+        now: input.now,
+      });
+      return { request: transitioned, lot };
+    })();
   }
 
   private setRenewalRequestStatus(input: {
@@ -574,30 +835,53 @@ export class BillingRepository {
     resolution?: string;
     approvedPlanId?: string;
     approvedDays?: number;
+    approvedTokenDelta?: number;
+    approvedTokenLotDays?: number;
+    expectedStatus?: RenewalRequestStatus;
     now?: Date;
   }): RenewalRequestRecord | undefined {
     const now = (input.now ?? new Date()).toISOString();
-    this.db
-      .prepare(
-        `UPDATE renewal_requests
+    const query = input.expectedStatus
+      ? `UPDATE renewal_requests
          SET status = ?,
              resolution = COALESCE(?, resolution),
              approved_plan_id = COALESCE(?, approved_plan_id),
              approved_days = COALESCE(?, approved_days),
-             closed_at = CASE WHEN ? = 'open' THEN closed_at ELSE ? END,
+             approved_token_delta = COALESCE(?, approved_token_delta),
+             approved_token_lot_days = COALESCE(?, approved_token_lot_days),
+             closed_at = CASE WHEN ? IN ('approved', 'closed') THEN ? ELSE closed_at END,
              updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(
-        input.status,
-        input.resolution ?? null,
-        input.approvedPlanId ?? null,
-        input.approvedDays ?? null,
-        input.status,
-        now,
-        now,
-        input.id,
-      );
+         WHERE id = ?
+           AND status = ?`
+      : `UPDATE renewal_requests
+         SET status = ?,
+             resolution = COALESCE(?, resolution),
+             approved_plan_id = COALESCE(?, approved_plan_id),
+             approved_days = COALESCE(?, approved_days),
+             approved_token_delta = COALESCE(?, approved_token_delta),
+             approved_token_lot_days = COALESCE(?, approved_token_lot_days),
+             closed_at = CASE WHEN ? IN ('approved', 'closed') THEN ? ELSE closed_at END,
+             updated_at = ?
+         WHERE id = ?`;
+    const params: unknown[] = [
+      input.status,
+      input.resolution ?? null,
+      input.approvedPlanId ?? null,
+      input.approvedDays ?? null,
+      input.approvedTokenDelta ?? null,
+      input.approvedTokenLotDays ?? null,
+      input.status,
+      now,
+      now,
+      input.id,
+    ];
+    if (input.expectedStatus) {
+      params.push(input.expectedStatus);
+    }
+    const result = this.db.prepare(query).run(...params);
+    if (result.changes === 0) {
+      return undefined;
+    }
     return this.getRenewalRequest(input.id);
   }
 
@@ -674,6 +958,9 @@ function ensureBillingSchema(db: Database): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE INDEX IF NOT EXISTS idx_entitlements_workspace_valid_until
+      ON entitlements(workspace_id, status, valid_until, created_at);
+
     CREATE TABLE IF NOT EXISTS entitlement_usage (
       entitlement_id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
@@ -690,12 +977,18 @@ function ensureBillingSchema(db: Database): void {
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
       telegram_user_id TEXT NOT NULL,
+      request_kind TEXT NOT NULL DEFAULT 'renewal',
       requested_plan_id TEXT,
       requested_days INTEGER,
+      requested_token_delta INTEGER,
+      requested_token_lot_days INTEGER,
+      price_vnd INTEGER,
       status TEXT NOT NULL DEFAULT 'open',
       resolution TEXT,
       approved_plan_id TEXT,
       approved_days INTEGER,
+      approved_token_delta INTEGER,
+      approved_token_lot_days INTEGER,
       requested_at TEXT NOT NULL,
       closed_at TEXT,
       created_at TEXT NOT NULL,
@@ -714,6 +1007,13 @@ function ensureBillingSchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_renewal_requests_workspace_status
       ON renewal_requests(workspace_id, status, created_at);
   `);
+
+  ensureBillingColumn(db, "renewal_requests", "request_kind", "TEXT NOT NULL DEFAULT 'renewal'");
+  ensureBillingColumn(db, "renewal_requests", "requested_token_delta", "INTEGER");
+  ensureBillingColumn(db, "renewal_requests", "requested_token_lot_days", "INTEGER");
+  ensureBillingColumn(db, "renewal_requests", "price_vnd", "INTEGER");
+  ensureBillingColumn(db, "renewal_requests", "approved_token_delta", "INTEGER");
+  ensureBillingColumn(db, "renewal_requests", "approved_token_lot_days", "INTEGER");
 }
 
 function mapPlanRow(row: PlanRow): PlanRecord {
@@ -795,20 +1095,50 @@ function mapRenewalRequestRow(row: RenewalRequestRow): RenewalRequestRecord {
     id: row.id,
     workspaceId: row.workspace_id,
     telegramUserId: row.telegram_user_id,
+    kind: row.request_kind === "token_topup" ? "token_topup" : "renewal",
     requestedPlanId: row.requested_plan_id ?? undefined,
     requestedDays: row.requested_days ?? undefined,
+    requestedTokenDelta: row.requested_token_delta ?? undefined,
+    requestedTokenLotDays: row.requested_token_lot_days ?? undefined,
+    priceVnd: row.price_vnd ?? undefined,
     status:
-      row.status === "approved" || row.status === "closed"
+      row.status === "payment_confirmed" || row.status === "approved" || row.status === "closed"
         ? row.status
         : "open",
     resolution: row.resolution ?? undefined,
     approvedPlanId: row.approved_plan_id ?? undefined,
     approvedDays: row.approved_days ?? undefined,
+    approvedTokenDelta: row.approved_token_delta ?? undefined,
+    approvedTokenLotDays: row.approved_token_lot_days ?? undefined,
     requestedAt: row.requested_at,
     closedAt: row.closed_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function buildEmptyUsage(
+  entitlementId: string | undefined,
+  workspaceId: string | undefined,
+): EntitlementUsageRecord {
+  const timestamp = new Date(0).toISOString();
+  return {
+    entitlementId: entitlementId ?? "none",
+    workspaceId: workspaceId ?? "none",
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function ensureBillingColumn(db: Database, tableName: string, columnName: string, columnDefinition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
 }
 
 function parseStringArray(raw: string): string[] {

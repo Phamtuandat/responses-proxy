@@ -1,5 +1,5 @@
-import { FormEvent, useState } from "react";
-import { requestDashboardOtp, verifyDashboardOtp } from "../api/client";
+import { useEffect, useState } from "react";
+import { getDashboardApprovalStatus, requestDashboardApproval } from "../api/client";
 import type { DashboardAuthSession } from "../api/types";
 import { InlineAlert } from "../components/InlineAlert";
 import { SurfaceCard } from "../components/SurfaceCard";
@@ -8,99 +8,120 @@ type LoginScreenProps = {
   onAuthenticated: (session: DashboardAuthSession) => void;
 };
 
-type LoginStep = "request" | "verify";
+type ApprovalState = {
+  challengeId: string;
+  pollToken: string;
+  displayCode: string;
+  expiresAt: string;
+};
 
 export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
-  const [telegramUserId, setTelegramUserId] = useState("");
-  const [otp, setOtp] = useState("");
-  const [step, setStep] = useState<LoginStep>("request");
+  const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: "success" | "error"; message: string } | null>(null);
+  const [status, setStatus] = useState<"idle" | "pending" | "approved" | "rejected" | "expired">("idle");
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
-  async function handleRequestOtp(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
+    if (!approval || status !== "pending") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void pollApprovalStatus();
+    }, 1500);
+    return () => window.clearInterval(interval);
+  }, [approval, status]);
+
+  useEffect(() => {
+    if (!approval) {
+      return;
+    }
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [approval]);
+
+  async function pollApprovalStatus() {
+    if (!approval) {
+      return;
+    }
+    try {
+      const result = await getDashboardApprovalStatus(approval.challengeId, approval.pollToken);
+      if (result.status === "approved" && result.session) {
+        setStatus("approved");
+        onAuthenticated(result.session);
+        return;
+      }
+      if (result.status === "rejected" || result.status === "expired") {
+        setStatus(result.status);
+        setFeedback({
+          variant: "error",
+          message: result.status === "rejected" ? "Telegram admin chose the wrong code. Request a new login." : "Approval request expired. Request a new login.",
+        });
+        return;
+      }
+      setStatus(result.status === "consumed" ? "approved" : "pending");
+    } catch (error) {
+      setStatus("idle");
+      setApproval(null);
+      setFeedback({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Could not check approval status.",
+      });
+    }
+  }
+
+  async function handleRequestApproval() {
     setPending(true);
     setFeedback(null);
     try {
-      const result = await requestDashboardOtp(telegramUserId.trim());
-      setStep("verify");
+      const result = await requestDashboardApproval();
+      setApproval({
+        challengeId: result.challengeId,
+        pollToken: result.pollToken,
+        displayCode: result.displayCode,
+        expiresAt: result.expiresAt,
+      });
+      setStatus("pending");
+      setNowMs(Date.now());
       setFeedback({
         variant: "success",
-        message: `OTP sent via Telegram. Expires at ${result.expiresAt}.`,
+        message: `Approval request sent to Telegram admin${result.sentCount && result.sentCount > 1 ? "s" : ""}.`,
       });
     } catch (error) {
-      setFeedback({ variant: "error", message: error instanceof Error ? error.message : "Could not send OTP." });
+      setFeedback({ variant: "error", message: error instanceof Error ? error.message : "Could not request Telegram approval." });
     } finally {
       setPending(false);
     }
   }
 
-  async function handleVerifyOtp(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setPending(true);
-    setFeedback(null);
-    try {
-      const result = await verifyDashboardOtp(telegramUserId.trim(), otp.trim());
-      onAuthenticated(result.session);
-    } catch (error) {
-      setFeedback({ variant: "error", message: error instanceof Error ? error.message : "Could not verify OTP." });
-    } finally {
-      setPending(false);
-    }
-  }
+  const expiresInSeconds = approval ? Math.max(0, Math.ceil((new Date(approval.expiresAt).getTime() - nowMs) / 1000)) : 0;
 
   return (
     <div className="login-page">
       <SurfaceCard className="login-card">
         <p className="eyebrow">Admin dashboard</p>
-        <h1>Login with Telegram OTP</h1>
+        <h1>Approve login in Telegram</h1>
         <p className="muted-copy">
-          Enter your admin Telegram user id. The bot will send a 6-digit OTP to your Telegram account.
+          Request approval, then choose matching number in Telegram admin chat.
         </p>
         {feedback ? <InlineAlert variant={feedback.variant} message={feedback.message} /> : null}
-        <form className="login-form" onSubmit={step === "request" ? handleRequestOtp : handleVerifyOtp}>
-          <label>
-            Telegram user id
-            <input
-              value={telegramUserId}
-              onChange={(event) => setTelegramUserId(event.target.value)}
-              placeholder="1283361952"
-              inputMode="numeric"
-              autoComplete="username"
-              disabled={pending || step === "verify"}
-            />
-          </label>
-          {step === "verify" ? (
+        <div className="login-form">
+          <button className="button-primary" type="button" disabled={pending} onClick={handleRequestApproval}>
+            {pending ? "Sending..." : approval ? "Request new approval" : "Request Telegram approval"}
+          </button>
+        </div>
+        {approval ? (
+          <div className="login-form">
             <label>
-              OTP
-              <input
-                value={otp}
-                onChange={(event) => setOtp(event.target.value)}
-                placeholder="123456"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                disabled={pending}
-              />
+              Code
+              <input value={approval.displayCode} readOnly />
             </label>
-          ) : null}
-          <button className="button-primary" type="submit" disabled={pending}>
-            {pending ? "Working…" : step === "request" ? "Send OTP" : "Verify OTP"}
-          </button>
-        </form>
-        {step === "verify" ? (
-          <button
-            className="button-link login-secondary-action"
-            type="button"
-            disabled={pending}
-            onClick={() => {
-              setStep("request");
-              setOtp("");
-              setFeedback(null);
-            }}
-          >
-            Use another Telegram id
-          </button>
+            <p className="muted-copy">
+              Status: {status === "pending" ? "Waiting for Telegram admin" : status}
+            </p>
+            <p className="muted-copy">Expires in {expiresInSeconds}s</p>
+          </div>
         ) : null}
       </SurfaceCard>
     </div>

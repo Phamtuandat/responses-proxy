@@ -1,4 +1,9 @@
-import type { BillingRepository, EntitlementRecord, EntitlementUsageRecord } from "../billing.js";
+import type {
+  BillingRepository,
+  EntitlementLotUsage,
+  EntitlementRecord,
+  EntitlementUsageRecord,
+} from "../billing.js";
 import type { CustomerKeyRepository, CustomerApiKeyRecord } from "../customer-keys.js";
 import type { CustomerWorkspaceRepository, CustomerWorkspaceRecord } from "./customer-workspace-repository.js";
 
@@ -6,6 +11,7 @@ export type CustomerBillingOverview = {
   workspace?: CustomerWorkspaceRecord;
   apiKey?: CustomerApiKeyRecord;
   entitlement?: EntitlementRecord;
+  tokenLots: EntitlementLotUsage[];
   usage: EntitlementUsageRecord;
   entitlementStatus: "active" | "expired" | "suspended" | "none";
   remainingTokens: number | null;
@@ -23,18 +29,44 @@ export function readCustomerBillingOverview(args: {
   const apiKey =
     args.customerKeys.getActiveKeyForUser(args.telegramUserId) ??
     args.customerKeys.getLatestKeyForUser(args.telegramUserId);
-  const entitlement = workspace
-    ? args.billing.getActiveEntitlementForWorkspace(workspace.id, now) ??
-      args.billing.getLatestEntitlementForWorkspace(workspace.id)
-    : undefined;
-  const usage = entitlement
-    ? args.billing.getEntitlementUsage(entitlement.id) ?? buildEmptyUsage(entitlement.id, workspace?.id)
+  const activeLots = workspace ? args.billing.getActiveEntitlementLotsForWorkspace(workspace.id, now) : [];
+  const entitlement = activeLots[0]?.entitlement ?? (workspace ? args.billing.getLatestEntitlementForWorkspace(workspace.id) : undefined);
+  const tokenLots = workspace
+    ? activeLots.length > 0
+      ? activeLots
+      : entitlement
+        ? [{
+            entitlement,
+            usage: args.billing.getEntitlementUsage(entitlement.id) ?? buildEmptyUsage(entitlement.id, workspace.id),
+            remainingTokens: entitlement.status === "active"
+              ? Math.max(
+                  0,
+                  entitlement.monthlyTokenLimit -
+                    (args.billing.getEntitlementUsage(entitlement.id)?.totalTokens ?? 0),
+                )
+              : 0,
+          }]
+        : []
+    : [];
+  const usage = tokenLots.length > 0
+    ? tokenLots.reduce(
+        (acc, lot) => ({
+          entitlementId: acc.entitlementId,
+          workspaceId: acc.workspaceId,
+          inputTokens: acc.inputTokens + lot.usage.inputTokens,
+          outputTokens: acc.outputTokens + lot.usage.outputTokens,
+          totalTokens: acc.totalTokens + lot.usage.totalTokens,
+          createdAt: acc.createdAt,
+          updatedAt: acc.updatedAt,
+        }),
+        buildEmptyUsage(tokenLots[0]?.entitlement.id, workspace?.id),
+      )
     : buildEmptyUsage(undefined, workspace?.id);
   const entitlementStatus = resolveEntitlementStatus(entitlement, now);
   const remainingTokens =
-    entitlement && entitlementStatus === "active"
-      ? Math.max(0, entitlement.monthlyTokenLimit - usage.totalTokens)
-      : entitlement
+    tokenLots.length > 0
+    ? tokenLots.reduce((sum, lot) => sum + lot.remainingTokens, 0)
+    : entitlement
         ? 0
         : null;
 
@@ -42,6 +74,7 @@ export function readCustomerBillingOverview(args: {
     workspace,
     apiKey,
     entitlement,
+    tokenLots,
     usage,
     entitlementStatus,
     remainingTokens,

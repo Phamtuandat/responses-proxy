@@ -24,6 +24,7 @@ import { answerCallbackQuerySafely } from "../callbacks.js";
 import { renderCustomerActionText } from "../customer-actions.js";
 import type { CustomerWorkspaceRepository } from "../customer-workspace-repository.js";
 import { buildAdminKeyListKeyboard } from "./apikey.js";
+import { formatDateTime, formatField, formatSection } from "../message-format.js";
 
 type AdminActionDefinition = {
   run: (ctx: Parameters<Bot["command"]>[1] extends infer _T ? any : never) => Promise<void>;
@@ -63,13 +64,16 @@ export function registerStartCommand(
     await renderCustomerActionText(
       ctx,
       [
-        "Responses Proxy bot is ready.",
-        user ? `account: ${user.status}` : undefined,
-        workspace ? `workspace: ${workspace.status}` : undefined,
+        "Responses Proxy bot is ready",
+        formatSection("Account", [
+          user ? formatField("Status", formatStatus(user.status)) : formatField("Status", "not registered"),
+          workspace ? formatField("Workspace", formatStatus(workspace.status)) : undefined,
+          workspace ? formatField("Client route", workspace.defaultClientRoute) : undefined,
+        ]),
         "Use /help to see available commands.",
       ]
         .filter(Boolean)
-        .join("\n"),
+        .join("\n\n"),
       !!activeKey,
     );
   });
@@ -185,24 +189,28 @@ export function registerStartCommand(
   });
 }
 
+function formatStatus(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
 function formatAdminStartPanel(): string {
   return [
-    "Admin panel",
+    "🛠 Admin panel",
     "role: admin",
-    "Use the buttons below to run admin actions.",
+    "Choose an action below to manage proxy, billing, and customer access.",
   ].join("\n");
 }
 
 function formatBillingPlans(billing: BillingRepository): string {
   const plans = billing.listPlans();
   if (plans.length === 0) {
-    return "No billing plans are configured.";
+    return "💳 Billing plans:\nNo billing plans are configured yet.";
   }
   return [
-    "Billing plans:",
+    "💳 Billing plans:",
     ...plans.map(
       (plan) =>
-        `- ${plan.id}: ${plan.name} | status=${plan.status} | price_cents=${plan.priceCents} | currency=${plan.currency} | billing_interval=${plan.billingInterval} | monthly_token_limit=${plan.monthlyTokenLimit} | max_api_keys=${plan.maxApiKeys}`,
+        `• ${plan.id}: ${plan.name} | status=${plan.status} | price_cents=${plan.priceCents} | currency=${plan.currency} | billing_interval=${plan.billingInterval} | monthly_token_limit=${plan.monthlyTokenLimit} | max_api_keys=${plan.maxApiKeys}`,
     ),
   ].join("\n");
 }
@@ -210,10 +218,10 @@ function formatBillingPlans(billing: BillingRepository): string {
 function formatOpenRenewalRequests(billing: BillingRepository): string {
   const openRequests = billing.listRenewalRequests("open");
   if (openRequests.length === 0) {
-    return "No open renewal requests.";
+    return "🧾 Open renewal requests:\nNo open renewal requests right now.";
   }
   return [
-    "Open renewal requests:",
+    "🧾 Open renewal requests:",
     ...openRequests.slice(0, 10).map(formatRenewalRequestLine),
   ].join("\n");
 }
@@ -221,13 +229,13 @@ function formatOpenRenewalRequests(billing: BillingRepository): string {
 function formatRecentCustomerKeys(keys: ReturnType<CustomerKeyRepository["listRecentKeys"]>): string {
   if (keys.length === 0) {
     return [
-      "Customer API keys",
+      "🔑 Customer API keys",
       "No customer API keys found.",
       "Use /grant or /apikey issue to create one.",
     ].join("\n");
   }
   return [
-    "Customer API keys",
+    "🔑 Customer API keys",
     "Recent keys. Tap a key button to copy its id, paste it back into this chat, then send to manage.",
     ...keys.map((key) =>
       [
@@ -245,11 +253,11 @@ function formatRecentCustomerKeys(keys: ReturnType<CustomerKeyRepository["listRe
 
 function formatRenewalRequestLine(request: RenewalRequestRecord): string {
   return [
-    `- ${request.id}`,
+    `• ${request.id}`,
     `telegram_user_id=${request.telegramUserId}`,
     request.requestedPlanId ? `plan_id=${request.requestedPlanId}` : undefined,
     request.requestedDays ? `days=${request.requestedDays}` : undefined,
-    `requested_at=${request.requestedAt}`,
+    `requested_at=${formatDateTime(request.requestedAt)}`,
   ]
     .filter(Boolean)
     .join(" ");

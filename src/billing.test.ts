@@ -165,6 +165,73 @@ test("BillingRepository dedupes duplicate open renewal requests", () => {
   });
 });
 
+test("BillingRepository keeps token top-up requests separate from renewals", () => {
+  withRepository((repo) => {
+    const renewal = repo.createRenewalRequest({
+      workspaceId: "workspace-kind",
+      telegramUserId: "42",
+      requestedPlanId: "basic",
+      requestedDays: 1,
+    });
+    const topup = repo.createRenewalRequest({
+      workspaceId: "workspace-kind",
+      telegramUserId: "42",
+      kind: "token_topup",
+      requestedTokenDelta: 1_000,
+      requestedTokenLotDays: 7,
+      priceVnd: 5_000,
+    });
+    const duplicateTopup = repo.createRenewalRequest({
+      workspaceId: "workspace-kind",
+      telegramUserId: "42",
+      kind: "token_topup",
+      requestedTokenDelta: 1_000,
+      requestedTokenLotDays: 7,
+      priceVnd: 5_000,
+    });
+
+    assert.equal(renewal.created, true);
+    assert.equal(topup.created, true);
+    assert.equal(duplicateTopup.created, false);
+    assert.equal(topup.request.kind, "token_topup");
+    assert.equal(topup.request.requestedTokenDelta, 1_000);
+    assert.equal(topup.request.requestedTokenLotDays, 7);
+  });
+});
+
+test("BillingRepository consumes active token lots by earliest expiry first", () => {
+  withRepository((repo) => {
+    const workspaceId = "workspace-lots";
+    const first = repo.createTokenTopUpLot({
+      workspaceId,
+      tokenDelta: 100,
+      days: 1,
+      now: new Date("2026-04-27T00:00:00.000Z"),
+    });
+    const second = repo.createTokenTopUpLot({
+      workspaceId,
+      tokenDelta: 200,
+      days: 2,
+      now: new Date("2026-04-27T00:00:00.000Z"),
+    });
+
+    repo.consumeWorkspaceUsage({
+      workspaceId,
+      customerApiKeyId: "key-1",
+      inputTokens: 60,
+      outputTokens: 90,
+      totalTokens: 150,
+      now: new Date("2026-04-27T01:00:00.000Z"),
+    });
+
+    assert.equal(repo.getEntitlementUsage(first.id)?.totalTokens, 100);
+    assert.equal(repo.getEntitlementUsage(second.id)?.totalTokens, 50);
+    assert.equal((repo.getEntitlementUsage(first.id)?.inputTokens ?? 0) + (repo.getEntitlementUsage(second.id)?.inputTokens ?? 0), 60);
+    assert.equal((repo.getEntitlementUsage(first.id)?.outputTokens ?? 0) + (repo.getEntitlementUsage(second.id)?.outputTokens ?? 0), 90);
+    assert.equal(repo.getUsableActiveEntitlementForWorkspace(workspaceId, new Date("2026-04-27T01:00:00.000Z"))?.id, second.id);
+  });
+});
+
 test("closing a renewal request does not alter entitlement", () => {
   withRepository((repo) => {
     const granted = repo.grantSubscription({

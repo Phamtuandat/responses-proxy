@@ -179,6 +179,11 @@ export class ResponsesProxyClient {
         method: options?.method ?? "GET",
         headers: {
           "content-type": "application/json",
+          ...(this.clientApiKey
+            ? {
+                Authorization: `Bearer ${this.clientApiKey}`,
+              }
+            : {}),
           ...(options?.headers ?? {}),
         },
         body: options?.body ? JSON.stringify(options.body) : undefined,

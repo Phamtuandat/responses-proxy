@@ -22,12 +22,12 @@ export function recordCustomerUsageFromPayload(args: {
     return undefined;
   }
 
-  return args.billingRepository.incrementEntitlementUsage({
-    entitlementId: args.access.entitlement.id,
+  const updates = args.billingRepository.consumeWorkspaceUsage({
     workspaceId: args.access.workspace.id,
     customerApiKeyId: args.access.customerKey.id,
     inputTokens: usage.inputTokens ?? 0,
     outputTokens: usage.outputTokens ?? 0,
     totalTokens: usage.totalTokens ?? 0,
   });
+  return updates[0];
 }

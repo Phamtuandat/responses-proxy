@@ -28,7 +28,7 @@ export function isAdmin(ctx: Context, config: TelegramBotConfig): boolean {
 export function createAllowlistMiddleware(config: TelegramBotConfig): MiddlewareFn<Context> {
   return async (ctx, next) => {
     if (!isAllowed(ctx, config)) {
-      await ctx.reply("This bot is restricted. Your user or chat is not authorized.");
+      await ctx.reply("🔒 Access restricted\nThis bot is restricted. Your user or chat is not authorized.");
       return;
     }
     await next();
@@ -50,7 +50,7 @@ export function createCustomerCommandMiddleware(config: TelegramBotConfig): Midd
       return;
     }
 
-    await ctx.reply("This command is admin-only. Use /apikey to view your Responses API key.");
+    await ctx.reply("🔒 Admin-only command\nThis command is admin-only. Use /apikey to view your Responses API key.");
   };
 }
 

@@ -8,6 +8,7 @@ import type { CustomerWorkspaceRepository } from "../customer-workspace-reposito
 import { maskApiKey } from "../format.js";
 import { renewCustomerAccess } from "../grants.js";
 import { replyWithProxyError, type BotDependencies } from "../actions.js";
+import { formatField, formatSection } from "../message-format.js";
 
 export function registerRenewUserCommand(
   bot: Bot,
@@ -64,21 +65,27 @@ export function registerRenewUserCommand(
       }
       await ctx.reply(
         [
-          "Customer access renewed.",
-          `telegram_user_id: ${parsed.telegramUserId}`,
-          `plan_id: ${parsed.planId}`,
-          `client_route: ${result.clientRoute}`,
-          `mode: ${result.mode}`,
-          `workspace_id: ${result.workspaceId}`,
-          `subscription_ends_at: ${result.subscriptionEndsAt}`,
-          `key_preview: ${result.apiKey ? maskApiKey(result.apiKey) : result.keyPreview}`,
-          canShowApiKeyToAdmin ? `api_key: ${result.apiKey}` : undefined,
-          result.apiKey && !canShowApiKeyToAdmin
-            ? "api_key_delivery: replacement key is only shown in a private chat."
-            : undefined,
+          "Customer access renewed",
+          formatSection("Customer", [
+            formatField("Telegram user ID", parsed.telegramUserId),
+            formatField("Plan", parsed.planId),
+            formatField("Client route", result.clientRoute),
+            formatField("Mode", result.mode),
+          ]),
+          formatSection("Workspace", [
+            formatField("Workspace ID", result.workspaceId),
+            formatField("Subscription ends at", result.subscriptionEndsAt),
+          ]),
+          formatSection("Key", [
+            formatField("Preview", result.apiKey ? maskApiKey(result.apiKey) : result.keyPreview),
+            canShowApiKeyToAdmin ? `api_key: ${result.apiKey}` : undefined,
+            result.apiKey && !canShowApiKeyToAdmin
+              ? "Full key: replacement key is shown only in private chat"
+              : undefined,
+          ]),
         ]
           .filter(Boolean)
-          .join("\n"),
+          .join("\n\n"),
       );
 
       await notifyCustomer(ctx, parsed.telegramUserId, parsed.planId, result);
@@ -127,14 +134,18 @@ async function notifyCustomer(
     await ctx.api.sendMessage(
       Number(telegramUserId),
       [
-        "Your Responses access has been renewed.",
-        `plan_id: ${planId}`,
-        `client_route: ${result.clientRoute}`,
-        `subscription_ends_at: ${result.subscriptionEndsAt}`,
-        result.apiKey
-          ? `api_key: ${result.apiKey}`
-          : "Run /apikey in this private chat to view your current key status.",
-      ].join("\n"),
+        "Your access has been renewed",
+        formatSection("Plan", [
+          formatField("Plan ID", planId),
+          formatField("Client route", result.clientRoute),
+          formatField("Subscription ends at", result.subscriptionEndsAt),
+        ]),
+        formatSection("API key", [
+          result.apiKey
+            ? `api_key: ${result.apiKey}`
+            : "Run /apikey in this private chat to view your current key status.",
+        ]),
+      ].join("\n\n"),
     );
   } catch {
     await ctx.reply("Customer notification could not be delivered yet. They may need to /start the bot first.");

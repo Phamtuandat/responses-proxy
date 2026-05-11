@@ -7,7 +7,9 @@ type Database = InstanceType<typeof BetterSqlite3>;
 
 export type AuditEventName =
   | "user.created"
+  | "user.approved"
   | "workspace.created"
+  | "workspace.approved"
   | "api_key.created"
   | "api_key.revealed"
   | "api_key.rotated"
@@ -17,6 +19,9 @@ export type AuditEventName =
   | "subscription.granted"
   | "subscription.renewed"
   | "renewal.requested"
+  | "payment.confirmed_manual"
+  | "payment.confirmed_sepay"
+  | "payment.amount_mismatch"
   | "renewal.approved"
   | "renewal.closed";
 
@@ -187,7 +192,9 @@ function normalizeEventName(value: string): AuditEventName {
   return (
     [
       "user.created",
+      "user.approved",
       "workspace.created",
+      "workspace.approved",
       "api_key.created",
       "api_key.revealed",
       "api_key.rotated",
@@ -197,6 +204,9 @@ function normalizeEventName(value: string): AuditEventName {
       "subscription.granted",
       "subscription.renewed",
       "renewal.requested",
+      "payment.confirmed_manual",
+      "payment.confirmed_sepay",
+      "payment.amount_mismatch",
       "renewal.approved",
       "renewal.closed",
     ] as AuditEventName[]

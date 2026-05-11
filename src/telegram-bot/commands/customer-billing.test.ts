@@ -139,8 +139,9 @@ test("usage command shows zero usage for a new entitlement", async () => {
     await harness.handler("usage")(ctx);
 
     assert.equal(ctx.replies.length, 1);
-    assert.equal(ctx.replies[0].includes("used_tokens: 0"), true);
-    assert.equal(ctx.replies[0].includes("remaining_tokens: 1000000"), true);
+    assert.equal(ctx.replies[0].includes("Tokens"), true);
+    assert.equal(ctx.replies[0].includes("• Used: 0"), true);
+    assert.equal(ctx.replies[0].includes("• Remaining: 10,000,000"), true);
   });
 });
 
@@ -175,7 +176,7 @@ test("me command shows the full customer key only in private chat", async () => 
     await harness.handler("me")(groupCtx);
 
     assert.equal(groupCtx.replies[0].includes("api_key:"), false);
-    assert.equal(groupCtx.replies[0].includes("key_preview:"), true);
+    assert.equal(groupCtx.replies[0].includes("• Preview:"), true);
   });
 });
 
@@ -214,9 +215,10 @@ test("quota command shows expired entitlement details", async () => {
     await harness.handler("quota")(ctx);
 
     assert.equal(ctx.replies.length, 1);
-    assert.equal(ctx.replies[0].includes("entitlement_status: expired"), true);
-    assert.equal(ctx.replies[0].includes("used_tokens: 11"), true);
-    assert.equal(ctx.replies[0].includes("remaining_tokens: 0"), true);
+    assert.equal(ctx.replies[0].includes("Entitlement\n"), true);
+    assert.equal(ctx.replies[0].includes("• Status: expired"), true);
+    assert.equal(ctx.replies[0].includes("• Used: 11"), true);
+    assert.equal(ctx.replies[0].includes("• Remaining: 0"), true);
   });
 });
 
@@ -293,21 +295,21 @@ test("customer action buttons load key, usage, quota, and dashboard", async () =
     const usageCtx = createContext({ userId: 46, chatId: 46, chatType: "private", command: "callback" });
     (usageCtx as any).match = usageFound.match;
     await usageFound.handler(usageCtx as any);
-    assert.equal(usageCtx.replies[0].includes("Your usage"), true);
-    assert.equal(usageCtx.replies[0].includes("used_tokens: 13"), true);
+    assert.equal(usageCtx.replies[0].includes("📊 Usage"), true);
+    assert.equal(usageCtx.replies[0].includes("• Used: 13"), true);
 
     const quotaFound = harness.callbackHandler("v1:customer:quota");
     const quotaCtx = createContext({ userId: 46, chatId: 46, chatType: "private", command: "callback" });
     (quotaCtx as any).match = quotaFound.match;
     await quotaFound.handler(quotaCtx as any);
-    assert.equal(quotaCtx.replies[0].includes("Your quota"), true);
-    assert.equal(quotaCtx.replies[0].includes("remaining_tokens: 9999987"), true);
+    assert.equal(quotaCtx.replies[0].includes("🧾 Quota"), true);
+    assert.equal(quotaCtx.replies[0].includes("• Remaining: 9,999,987"), true);
 
     const dashboardFound = harness.callbackHandler("v1:customer:dashboard");
     const dashboardCtx = createContext({ userId: 46, chatId: 46, chatType: "private", command: "callback" });
     (dashboardCtx as any).match = dashboardFound.match;
     await dashboardFound.handler(dashboardCtx as any);
     assert.equal(dashboardCtx.answeredCallbacks[0]?.text, "Refreshed");
-    assert.equal(dashboardCtx.replies[0].includes("Your dashboard"), true);
+    assert.equal(dashboardCtx.replies[0].includes("🏠 Dashboard"), true);
   });
 });

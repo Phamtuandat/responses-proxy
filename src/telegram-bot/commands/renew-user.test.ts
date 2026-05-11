@@ -214,10 +214,7 @@ test("renewuser replace-key does not print the new key into a group chat", async
 
     assert.equal(ctx.replies.length >= 1, true);
     assert.equal(ctx.replies[0].includes("api_key:"), false);
-    assert.equal(
-      ctx.replies[0].includes("api_key_delivery: replacement key is only shown in a private chat."),
-      true,
-    );
+    assert.equal(ctx.replies[0].includes("Full key: replacement key is shown only in private chat"), true);
     assert.equal(ctx.sentMessages.length, 1);
     assert.equal(ctx.sentMessages[0]?.chatId, 1283361952);
     assert.equal(ctx.sentMessages[0]?.text.includes("api_key:"), true);

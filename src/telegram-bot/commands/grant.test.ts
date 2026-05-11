@@ -149,7 +149,7 @@ test("plans lists available seeded plan ids for admins", async () => {
     await harness.handler("plans")(ctx);
 
     assert.equal(ctx.replies.length, 1);
-    assert.equal(ctx.replies[0].includes("- basic:"), true);
+    assert.equal(ctx.replies[0].includes("• basic:"), true);
     assert.equal(ctx.replies[0].includes("price_cents="), true);
   });
 });

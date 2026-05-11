@@ -29,6 +29,8 @@ import { registerUsageCommand } from "./commands/usage.js";
 import { createRateLimitMiddleware, SqliteRateLimiter } from "./rate-limit.js";
 import { SqliteSessionStore } from "./sessions.js";
 import { createCustomerMessageCleanupMiddleware } from "./message-cleanup.js";
+import { DashboardAuthRepository } from "../dashboard-auth.js";
+import { registerDashboardLoginCallbacks } from "./dashboard-login.js";
 
 export function createTelegramBot(deps: BotDependencies): Bot {
   const bot = new Bot(deps.config.telegramBotToken);
@@ -38,6 +40,7 @@ export function createTelegramBot(deps: BotDependencies): Bot {
   const customerKeys = CustomerKeyRepository.create(deps.config.sessionDbPath);
   const billing = BillingRepository.create(deps.config.sessionDbPath);
   const auditLog = AuditLogRepository.create(deps.config.sessionDbPath);
+  const dashboardAuth = DashboardAuthRepository.create(deps.config.sessionDbPath);
   const rateLimiter = SqliteRateLimiter.create(deps.config.sessionDbPath, {
     windowMs: deps.config.rateLimitWindowMs,
     maxRequests: deps.config.rateLimitMaxRequests,
@@ -97,6 +100,7 @@ export function createTelegramBot(deps: BotDependencies): Bot {
   registerOauthCommand(bot, deps, sessions);
   registerAccountsCommand(bot, deps, sessions);
   registerTestCommand(bot, deps, sessions);
+  registerDashboardLoginCallbacks(bot, deps.config, dashboardAuth);
 
   bot.catch((error) => {
     const ctx = error.ctx;

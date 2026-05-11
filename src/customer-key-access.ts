@@ -106,15 +106,18 @@ export function resolveCustomerRoutingAccess(args: {
   }
 
   const entitlement = args.billingRepository.getActiveEntitlementForWorkspace(workspace.id);
-  if (!entitlement) {
+  const usableEntitlement = args.billingRepository.getUsableActiveEntitlementForWorkspace(workspace.id);
+  if (!entitlement || !usableEntitlement) {
     return {
       error: {
         statusCode: 403,
         body: {
           error: {
             type: "billing_error",
-            code: "SUBSCRIPTION_REQUIRED",
-            message: "No active entitlement was found for this customer API key.",
+            code: entitlement ? "TOKEN_LOT_QUOTA_EXHAUSTED" : "SUBSCRIPTION_REQUIRED",
+            message: entitlement
+              ? "No active token lot with remaining quota was found for this customer API key."
+              : "No active entitlement was found for this customer API key.",
             retryable: false,
           },
         },
@@ -144,7 +147,7 @@ export function resolveCustomerRoutingAccess(args: {
     kind: "customer",
     customerKey,
     workspace,
-    entitlement,
+    entitlement: usableEntitlement,
     clientRoute,
     providers: [provider],
   };

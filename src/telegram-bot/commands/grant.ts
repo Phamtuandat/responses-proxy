@@ -8,6 +8,7 @@ import type { CustomerWorkspaceRepository } from "../customer-workspace-reposito
 import { maskApiKey } from "../format.js";
 import { grantCustomerAccess } from "../grants.js";
 import { replyWithProxyError, type BotDependencies } from "../actions.js";
+import { formatDateTime, formatField, formatSection } from "../message-format.js";
 
 function formatGrantUsage(billing: BillingRepository): string {
   const planIds = billing.listPlans().map((plan) => plan.id);
@@ -86,35 +87,45 @@ export function registerGrantCommand(
 
       await ctx.reply(
         [
-          "Customer access granted.",
-          `telegram_user_id: ${telegramUserId}`,
-          `plan_id: ${planId}`,
-          `client_route: ${result.clientRoute}`,
-          `mode: ${result.mode}`,
-          `workspace_id: ${result.workspaceId}`,
-          `subscription_ends_at: ${result.subscriptionEndsAt}`,
-          `key_preview: ${result.apiKey ? maskApiKey(result.apiKey) : result.keyPreview}`,
-          canShowApiKeyToAdmin ? `api_key: ${result.apiKey}` : undefined,
-          result.apiKey && !canShowApiKeyToAdmin
-            ? "api_key_delivery: full key is only shown in a private admin chat."
-            : undefined,
+          "Customer access granted",
+          formatSection("Customer", [
+            formatField("Telegram user ID", telegramUserId),
+            formatField("Plan", planId),
+            formatField("Client route", result.clientRoute),
+            formatField("Mode", result.mode),
+          ]),
+          formatSection("Workspace", [
+            formatField("Workspace ID", result.workspaceId),
+            formatField("Subscription ends at", formatDateTime(result.subscriptionEndsAt)),
+          ]),
+          formatSection("Key", [
+            formatField("Preview", result.apiKey ? maskApiKey(result.apiKey) : result.keyPreview),
+            canShowApiKeyToAdmin ? `api_key: ${result.apiKey}` : undefined,
+            result.apiKey && !canShowApiKeyToAdmin
+              ? "Full key: shown only in private admin chat"
+              : undefined,
+          ]),
         ]
           .filter(Boolean)
-          .join("\n"),
+          .join("\n\n"),
       );
 
       try {
         await ctx.api.sendMessage(
           Number(telegramUserId),
           [
-            "Your Responses access is active.",
-            `plan_id: ${planId}`,
-            `client_route: ${result.clientRoute}`,
-            `subscription_ends_at: ${result.subscriptionEndsAt}`,
-            result.apiKey
-              ? `api_key: ${result.apiKey}`
-              : "Run /apikey in this private chat to view your current key status.",
-          ].join("\n"),
+            "Your access is active",
+            formatSection("Plan", [
+              formatField("Plan ID", planId),
+              formatField("Client route", result.clientRoute),
+              formatField("Subscription ends at", formatDateTime(result.subscriptionEndsAt)),
+            ]),
+            formatSection("API key", [
+              result.apiKey
+                ? `api_key: ${result.apiKey}`
+                : "Run /apikey in this private chat to view your current key status.",
+            ]),
+          ].join("\n\n"),
         );
       } catch {
         await ctx.reply("Customer notification could not be delivered yet. They may need to /start the bot first.");

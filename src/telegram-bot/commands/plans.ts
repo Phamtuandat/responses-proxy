@@ -5,20 +5,21 @@ import type { BotDependencies } from "../actions.js";
 
 function formatPlans(plans: ReturnType<BillingRepository["listPlans"]>): string {
   if (plans.length === 0) {
-    return "No billing plans are configured.";
+    return "💳 Billing plans:\nNo billing plans are configured yet.";
   }
 
   return [
-    "Billing plans:",
+    "💳 Billing plans:",
     ...plans.map(
       (plan) =>
-        `- ${plan.id}: ${plan.name} | status=${plan.status} | monthly_token_limit=${plan.monthlyTokenLimit} | max_api_keys=${plan.maxApiKeys} | price_cents=${plan.priceCents} | billing_interval=${plan.billingInterval}`,
+        `• ${plan.id}: ${plan.name} | status=${plan.status} | monthly_token_limit=${plan.monthlyTokenLimit} | max_api_keys=${plan.maxApiKeys} | price_cents=${plan.priceCents} | billing_interval=${plan.billingInterval}`,
     ),
   ].join("\n");
 }
 
 function formatCreatePlanUsage(): string {
   return [
+    "💳 Plan commands",
     "Usage: /plans create <planId> <name> <monthlyTokenLimit> <maxApiKeys> [priceCents] [currency] [billingInterval]",
     "Example: /plans create pro Pro 5000000 3 4900 USD month",
   ].join("\n");

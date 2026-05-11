@@ -171,6 +171,7 @@ const envSchema = z.object({
     .string()
     .default("429,500,502,503,504")
     .transform(parseFallbackStatusCodes),
+  RESPONSES_PROXY_CLIENT_API_KEY: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_OWNER_USER_IDS: z.string().optional().transform(parseIdList),
   TELEGRAM_ADMIN_USER_IDS: z.string().optional().transform(parseIdList),
@@ -180,6 +181,14 @@ const envSchema = z.object({
   CUSTOMER_KEY_DB_PATH: z.string().min(1).default("./logs/telegram-bot.sqlite"),
   SESSION_LOG_DIR: z.string().min(1).default("./logs/sessions"),
   SESSION_LOG_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(14),
+  SEPAY_WEBHOOK_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => {
+      const normalized = value?.trim().toLowerCase();
+      return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+    }),
+  SEPAY_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

@@ -12,11 +12,29 @@ export type DashboardAuthSessionResponse = {
 export type DashboardAuthRequestOtpResponse = {
   ok: true;
   expiresAt: string;
+  sentCount?: number;
 };
 
 export type DashboardAuthVerifyResponse = {
   ok: true;
   session: DashboardAuthSession;
+};
+
+export type DashboardAuthRequestApprovalResponse = {
+  ok: true;
+  challengeId: string;
+  pollToken: string;
+  displayCode: string;
+  expiresAt: string;
+  sentCount?: number;
+};
+
+export type DashboardAuthApprovalStatusResponse = {
+  ok: true;
+  status: "pending" | "approved" | "rejected" | "expired" | "consumed";
+  challengeId: string;
+  expiresAt: string;
+  session?: DashboardAuthSession;
 };
 
 export type HealthResponse = {
