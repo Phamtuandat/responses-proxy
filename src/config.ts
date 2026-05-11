@@ -40,6 +40,24 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => value === "true"),
+  MODEL_ROUTING_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  MODEL_ROUTING_CHEAP_MODEL: z.string().optional().default("gpt-4o-mini"),
+  MODEL_ROUTING_INPUT_TOKEN_THRESHOLD: z.coerce.number().int().positive().default(2000),
+  MODEL_ROUTING_SKIP_IF_TOOLS: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  MODEL_ROUTING_SKIP_IF_IMAGES: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  MODEL_ROUTING_SKIP_IF_REASONING: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
   CHATGPT_OAUTH_CLIENT_ID: z.string().min(1).default("app_EMoamEEZ73f0CkXaXp7hrann"),
   CHATGPT_OAUTH_REDIRECT_URI: z
     .string()
@@ -105,6 +123,12 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value !== "false"),
   OPENCLAW_PROMPT_CACHE_RETENTION: z.string().min(1).default("24h"),
+  RESPONSE_CACHE_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  RESPONSE_CACHE_TTL_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
+  RESPONSE_CACHE_MAX_PAYLOAD_BYTES: z.coerce.number().int().positive().default(512 * 1024),
   PROVIDER_PROMPT_CACHE_REDESIGN_ENABLED: z
     .string()
     .optional()

@@ -71,6 +71,9 @@ import {
   PromptCacheStateStore,
   type PromptCacheObservation,
 } from "./prompt-cache-state.js";
+import { ResponseCacheStore } from "./response-cache.js";
+import { buildCostSummary } from "./cost-analytics.js";
+import { resolveModelRouting } from "./model-routing.js";
 import { applyRtkLayer, parseRtkLayerPolicyInput, resolveRtkLayerPolicy } from "./rtk-layer.js";
 import {
   buildClientTokenLimitError,
@@ -107,6 +110,8 @@ const dashboardAdminUserIds = new Set([
 ]);
 const chatGptOAuthStore = ChatGptOAuthStore.create(path.resolve(config.APP_DB_PATH));
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
+const responseCacheStore = ResponseCacheStore.create(path.resolve(config.APP_DB_PATH));
+setInterval(() => responseCacheStore.prune(), 10 * 60 * 1000).unref();
 const reactClientDir = path.resolve(process.cwd(), "dist", "client");
 const reactRootStaticAssetFiles = ["favicon.svg", "app-icon.svg"] as const;
 const dashboardEntryPaths = [
@@ -431,6 +436,37 @@ app.get("/api/debug/prompt-cache/latest", async (request) => {
       ? latestPromptCacheObservationByProvider.get(providerId) ?? null
       : latestPromptCacheObservation ?? null,
   };
+});
+
+app.get("/api/analytics/cost-summary", async (request, reply) => {
+  if (!isOperatorRequest(request)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+
+  const { latest, byProvider } = promptCacheStateStore.loadLatestObservations();
+  const observations = Array.from(
+    new Map(
+      [latest, ...byProvider.values()]
+        .filter((observation): observation is PromptCacheObservation => Boolean(observation))
+        .map((observation) => [observation.requestId, observation] as const),
+    ).values(),
+  );
+
+  return reply.send({
+    summary: buildCostSummary(observations),
+    latestObservation: latest ?? null,
+    byProvider: Object.fromEntries(byProvider),
+    responseCacheStats: config.RESPONSE_CACHE_ENABLED ? responseCacheStore.stats() : null,
+  });
+});
+
+app.post("/api/analytics/response-cache/flush", async (request, reply) => {
+  if (!isOperatorRequest(request)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+
+  const deleted = responseCacheStore.flush();
+  return reply.send({ deleted });
 });
 
 app.get("/api/stats/usage", async (_request, reply) => {
@@ -1721,10 +1757,37 @@ async function handleResponsesRequest(
         clientRouteRtkPolicy,
       );
   const rtkLayerResult = applyRtkLayer(requestBody, resolvedRtkPolicy);
-  const effectiveRequestBody = rtkLayerResult.body;
+  let effectiveRequestBody = rtkLayerResult.body as Record<string, unknown>;
+  const modelRoutingDecision = resolveModelRouting(effectiveRequestBody, {
+    enabled: config.MODEL_ROUTING_ENABLED ?? false,
+    inputTokenThreshold: config.MODEL_ROUTING_INPUT_TOKEN_THRESHOLD,
+    cheapModel: config.MODEL_ROUTING_CHEAP_MODEL ?? "gpt-4o-mini",
+    skipIfTools: config.MODEL_ROUTING_SKIP_IF_TOOLS,
+    skipIfImages: config.MODEL_ROUTING_SKIP_IF_IMAGES,
+    skipIfReasoning: config.MODEL_ROUTING_SKIP_IF_REASONING,
+  });
+  if (modelRoutingDecision.downgraded) {
+    effectiveRequestBody = {
+      ...effectiveRequestBody,
+      model: modelRoutingDecision.resolvedModel,
+    };
+    request.log.info(
+      {
+        requestId,
+        clientRoute,
+        originalModel: modelRoutingDecision.originalModel,
+        resolvedModel: modelRoutingDecision.resolvedModel,
+        reason: modelRoutingDecision.reason,
+      },
+      "model downgraded by routing policy",
+    );
+    reply.header("x-proxy-model-routing", modelRoutingDecision.resolvedModel);
+  }
   const normalizedResult = preserveRawRequestBody
-    ? { request: effectiveRequestBody as Record<string, unknown>, cacheLayout: {} }
-    : normalizeResponsesRequestWithCache(effectiveRequestBody, {
+    ? { request: effectiveRequestBody, cacheLayout: {} }
+    : normalizeResponsesRequestWithCache(effectiveRequestBody as Parameters<
+        typeof normalizeResponsesRequestWithCache
+      >[0], {
         openClawTokenOptimizationEnabled: config.OPENCLAW_TOKEN_OPTIMIZATION_ENABLED,
         defaultReasoningEffort: config.OPENCLAW_DEFAULT_REASONING_EFFORT,
         defaultReasoningSummary: config.OPENCLAW_DEFAULT_REASONING_SUMMARY,
@@ -1907,6 +1970,31 @@ async function handleResponsesRequest(
       return reply;
     }
 
+    if (config.RESPONSE_CACHE_ENABLED && traceContext.requestKey && !isStream) {
+      const cachedPayload = responseCacheStore.get(String(traceContext.requestKey), activeProviderId);
+      if (cachedPayload) {
+        request.log.info(
+          { requestId, requestKey: traceContext.requestKey },
+          "response cache hit",
+        );
+        await sessionLog.write({
+          event: "response_cache_hit",
+          requestId,
+          clientRoute,
+          providerId: activeProviderId,
+          ...traceContext,
+        });
+        reply.header("x-proxy-response-cache", "hit");
+        reply.header("x-proxy-request-id", requestId);
+        reply.header("x-proxy-provider-id", activeProviderId);
+        reply.header("x-proxy-family-id", stringOrUndefined(traceContext.familyId) ?? "");
+        reply.header("x-proxy-static-key", stringOrUndefined(traceContext.staticKey) ?? "");
+        reply.header("x-proxy-request-key", stringOrUndefined(traceContext.requestKey) ?? "");
+        reply.header("x-proxy-prompt-cache-key", stringOrUndefined(traceContext.promptCacheKey) ?? "");
+        return reply.send(cachedPayload);
+      }
+    }
+
     const dedupeKey = buildInflightDedupeKey(activeProviderId, normalized, traceContext);
     const dedupeEnabled =
       config.PROVIDER_PROMPT_CACHE_INFLIGHT_DEDUPE_ENABLED && typeof dedupeKey === "string";
@@ -1934,6 +2022,23 @@ async function handleResponsesRequest(
       },
       dedupeEnabled,
     );
+    if (
+      config.RESPONSE_CACHE_ENABLED &&
+      traceContext.requestKey &&
+      !isStream &&
+      upstreamStatus === 200 &&
+      payload !== undefined
+    ) {
+      const payloadStr = JSON.stringify(payload);
+      if (payloadStr.length <= config.RESPONSE_CACHE_MAX_PAYLOAD_BYTES) {
+        responseCacheStore.set(
+          String(traceContext.requestKey),
+          activeProviderId,
+          payload,
+          config.RESPONSE_CACHE_TTL_MS,
+        );
+      }
+    }
     latestPromptCacheObservation = {
       ...(latestPromptCacheObservation ?? {
         requestId,
@@ -2656,6 +2761,19 @@ function readBearerToken(value: unknown): string | undefined {
   }
   const match = /^Bearer\s+(.+)$/i.exec(header);
   return match?.[1]?.trim() || undefined;
+}
+
+function isOperatorRequest(request: { headers: Record<string, unknown> }): boolean {
+  const sessionToken = readCookie(readHeaderString(request.headers.cookie), DASHBOARD_SESSION_COOKIE);
+  if (dashboardAuthRepository.getSessionByToken(sessionToken)) {
+    return true;
+  }
+
+  const routingApiKey = readBearerToken(request.headers.authorization);
+  return Boolean(
+    config.RESPONSES_PROXY_CLIENT_API_KEY &&
+      routingApiKey === config.RESPONSES_PROXY_CLIENT_API_KEY,
+  );
 }
 
 type ForwardTarget = {
