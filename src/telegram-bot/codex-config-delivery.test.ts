@@ -53,3 +53,31 @@ test("sendCustomerCodexSetup includes Mac and Windows paste locations", async ()
   assert.deepEqual(sentDocuments.map((document) => document.filename), ["config.toml", "auth.json"]);
   assert.match(sentDocuments[0]?.content ?? "", /base_url = "https:\/\/proxy\.example\.com\/v1"/);
 });
+
+test("sendCustomerCodexSetup includes curl patch command for customer machine", async () => {
+  const sentMessages: string[] = [];
+  const ctx = {
+    api: {
+      async sendMessage(_chatId: number, text: string) {
+        sentMessages.push(text);
+        return {} as any;
+      },
+      async sendDocument() {
+        return {} as any;
+      },
+    },
+  } as any;
+
+  const ok = await sendCustomerCodexSetup(ctx, {
+    telegramUserId: "42",
+    baseUrl: "https://proxy.example.com/v1",
+    apiKey: "sk-customer-secret",
+    title: "Your access is active",
+    details: [],
+  });
+
+  assert.equal(ok, true);
+  assert.equal(sentMessages[0]?.includes("curl -fsSL"), true);
+  assert.equal(sentMessages[0]?.includes("https://proxy.example.com/api/customer/codex/setup.sh"), true);
+  assert.equal(sentMessages[0]?.includes("Authorization: Bearer sk-customer-secret"), true);
+});

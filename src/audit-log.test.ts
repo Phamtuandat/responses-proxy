@@ -126,6 +126,7 @@ function createContext(input: {
   const replies: string[] = [];
   const replyMarkups: unknown[] = [];
   const answeredCallbacks: Array<{ text?: string; show_alert?: boolean }> = [];
+  const sentMessages: string[] = [];
   const sentDocuments: Array<{ chatId: number; filename?: string; content: string }> = [];
   return ({
     from: { id: input.fromId, is_bot: false, first_name: "User" },
@@ -152,6 +153,7 @@ function createContext(input: {
     replies,
     replyMarkups,
     answeredCallbacks,
+    sentMessages,
     sentDocuments,
     reply(text: string, options?: { reply_markup?: unknown }) {
       replies.push(text);
@@ -163,7 +165,8 @@ function createContext(input: {
       return Promise.resolve(true);
     },
     api: {
-      async sendMessage() {
+      async sendMessage(_chatId: number, text: string) {
+        sentMessages.push(text);
         return {} as any;
       },
       async sendDocument(chatId: number, document: { filename?: string; fileData?: Uint8Array }) {
@@ -180,6 +183,7 @@ function createContext(input: {
     replies: string[];
     replyMarkups: unknown[];
     answeredCallbacks: Array<{ text?: string; show_alert?: boolean }>;
+    sentMessages: string[];
     sentDocuments: Array<{ chatId: number; filename?: string; content: string }>;
   };
 }
@@ -304,11 +308,12 @@ test("apikey issue writes redacted reveal audit metadata", async () => {
     });
     await harness.handler("apikey")(customerCtx);
 
-    assert.equal(customerCtx.replies[0]?.includes("api_key:"), false);
+    assert.equal(customerCtx.sentMessages[0]?.includes("api_key:"), false);
+    assert.equal(customerCtx.sentMessages[0]?.includes("curl -fsSL"), true);
     assert.deepEqual(customerCtx.sentDocuments.map((document) => document.filename), ["config.toml", "auth.json"]);
     assert.match(customerCtx.sentDocuments[0]?.content ?? "", /base_url = "http:\/\/127\.0\.0\.1:8318\/v1"/);
     assert.match(customerCtx.sentDocuments[0]?.content ?? "", /api_key = "sk-/);
-    assert.equal(customerCtx.replies[0]?.includes("full_key: unavailable_for_legacy_key"), false);
+    assert.equal(customerCtx.sentMessages[0]?.includes("full_key: unavailable_for_legacy_key"), false);
   });
 });
 

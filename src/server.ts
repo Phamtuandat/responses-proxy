@@ -33,6 +33,10 @@ import {
   writeQuickConfigFile,
   type QuickApplyClient,
 } from "./client-config-apply.js";
+import {
+  buildCodexConfigFiles,
+  buildCodexConfigSetupScript,
+} from "./codex-setup.js";
 import { buildUpstreamError, forwardJson, forwardSse } from "./forward.js";
 import {
   OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL,
@@ -1110,6 +1114,70 @@ app.post("/api/client-configs/apply", async (request, reply) => {
     status: buildQuickApplyClientStatus(client, requestedBaseUrl),
     clientRoutes: providerRepository.getClientRoutesForUi(),
   });
+});
+
+app.get("/api/customer/codex/setup.sh", async (request, reply) => {
+  const routingApiKey = readBearerToken(request.headers.authorization);
+  if (!routingApiKey) {
+    return reply.code(401).send({
+      error: {
+        type: "authentication_error",
+        code: "CUSTOMER_API_KEY_REQUIRED",
+        message: "Customer API key is required to download the Codex setup script.",
+        retryable: false,
+      },
+    });
+  }
+
+  const routingAccess = resolveCustomerRoutingAccess({
+    routingApiKey,
+    resolvedClientRoute: "default",
+    providerRepository,
+    customerKeyRepository,
+    workspaceRepository: customerWorkspaceRepository,
+    billingRepository,
+  });
+  if ("error" in routingAccess) {
+    return reply.code(routingAccess.error.statusCode).send(routingAccess.error.body);
+  }
+  if (routingAccess.kind !== "customer") {
+    return reply.code(403).send({
+      error: {
+        type: "authentication_error",
+        code: "CUSTOMER_API_KEY_REQUIRED",
+        message: "Use a customer API key to download the Codex setup script.",
+        retryable: false,
+      },
+    });
+  }
+
+  const apiKey = customerKeyRepository.getApiKeySecret(routingAccess.customerKey.id);
+  if (!apiKey) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "CUSTOMER_API_KEY_SECRET_UNAVAILABLE",
+        message: "This customer API key does not have a retrievable secret.",
+        retryable: false,
+      },
+    });
+  }
+
+  const query = request.query as { model?: unknown } | undefined;
+  const model =
+    typeof query?.model === "string" && query.model.trim()
+      ? query.model.trim()
+      : config.RESPONSES_PROXY_DEFAULT_MODEL.trim();
+  const files = buildCodexConfigFiles({
+    baseUrl: config.publicResponsesBaseUrl,
+    apiKey,
+    model,
+  });
+  const script = buildCodexConfigSetupScript(files);
+
+  reply.header("cache-control", "no-store");
+  reply.header("content-disposition", 'attachment; filename="responses-proxy-codex-setup.sh"');
+  return reply.type("text/x-shellscript; charset=utf-8").send(script);
 });
 
 app.post("/api/provider-routes", async (request, reply) => {
@@ -2611,6 +2679,9 @@ function isDashboardProtectedPath(url: string): boolean {
     return false;
   }
   if (pathname === "/api/sepay/webhook") {
+    return false;
+  }
+  if (pathname === "/api/customer/codex/setup.sh") {
     return false;
   }
   return true;

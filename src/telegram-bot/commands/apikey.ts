@@ -10,7 +10,7 @@ import type { CustomerWorkspaceRepository } from "../customer-workspace-reposito
 import { maskApiKey } from "../format.js";
 import { getProxyErrorMessage, replyWithProxyError, type BotDependencies } from "../actions.js";
 import { assertWorkspaceApiKeyCapacity } from "../grants.js";
-import { buildCodexConfigFiles, sendCodexConfigFiles } from "../codex-config-delivery.js";
+import { sendCustomerCodexSetup } from "../codex-config-delivery.js";
 
 type AdminKeyAction = "show" | "suspend" | "activate" | "revoke" | "rotate";
 
@@ -46,6 +46,41 @@ export function registerApiKeyCommand(
     }
     const apiKey = customerKeys.getApiKeySecret(record.id);
 
+    if (apiKey && userId) {
+      const delivered = await sendCustomerCodexSetup(ctx, {
+        telegramUserId: userId,
+        baseUrl: deps.config.publicResponsesBaseUrl,
+        apiKey,
+        model: deps.config.defaultModel,
+        title: "Your Responses API key",
+        details: [
+          `base_url: ${deps.config.publicResponsesBaseUrl}`,
+          `client_route: ${record.clientRoute}`,
+          `key_status: ${record.status}`,
+          `key_preview: ${record.apiKeyPreview}`,
+          "codex_config_files: attached_below",
+        ],
+      });
+      if (!delivered) {
+        await ctx.reply("Codex config files could not be delivered. Try /apikey again.");
+        return;
+      }
+      auditLog.record({
+        event: "api_key.revealed",
+        actor: { type: "customer", id: userId },
+        subjectType: "customer_api_key",
+        subjectId: record.id,
+        metadata: {
+          telegramUserId: userId,
+          workspaceId: record.workspaceId,
+          keyPreview: record.apiKeyPreview,
+          audience: "customer_private_chat",
+          apiKey,
+        },
+      });
+      return;
+    }
+
     await renderCustomerActionText(
       ctx,
       [
@@ -54,41 +89,12 @@ export function registerApiKeyCommand(
         `client_route: ${record.clientRoute}`,
         `key_status: ${record.status}`,
         `key_preview: ${record.apiKeyPreview}`,
-        apiKey ? "codex_config_files: attached_below" : "full_key: unavailable_for_legacy_key",
+        "full_key: unavailable_for_legacy_key",
       ]
         .filter(Boolean)
         .join("\n"),
       record.status === "active",
     );
-
-    if (apiKey && userId) {
-      try {
-        await sendCodexConfigFiles(
-          ctx,
-          userId,
-          buildCodexConfigFiles({
-            baseUrl: deps.config.publicResponsesBaseUrl,
-            apiKey,
-            model: deps.config.defaultModel,
-          }),
-        );
-        auditLog.record({
-          event: "api_key.revealed",
-          actor: { type: "customer", id: userId },
-          subjectType: "customer_api_key",
-          subjectId: record.id,
-          metadata: {
-            telegramUserId: userId,
-            workspaceId: record.workspaceId,
-            keyPreview: record.apiKeyPreview,
-            audience: "customer_private_chat",
-            apiKey,
-          },
-        });
-      } catch {
-        await ctx.reply("Codex config files could not be delivered. Try /apikey again.");
-      }
-    }
   });
 
   const adminKeyActions: Record<AdminKeyAction, (ctx: Context, record: CustomerApiKeyRecord) => Promise<void>> = {

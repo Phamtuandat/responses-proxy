@@ -294,6 +294,14 @@ The dashboard now includes a Quick Apply panel for both Hermes and Codex:
 - it ensures the client has a dedicated route API key
 - it lets you enter an optional model before patching
 - it writes a timestamped backup beside the original config before every patch
+- customer Codex setup also works over curl:
+
+```bash
+curl -fsSL \
+  -H 'Authorization: Bearer sk-customer-...' \
+  https://YOUR_PUBLIC_PROXY_HOST/api/customer/codex/setup.sh \
+  | sh
+```
 
 Current config files:
 

@@ -115,6 +115,8 @@ const envSchema = z.object({
     .min(1)
     .default("https://chatgpt.com/backend-api/codex")
     .pipe(z.url()),
+  RESPONSES_PROXY_DEFAULT_MODEL: z.string().default("gpt-5.5"),
+  BOT_PUBLIC_RESPONSES_BASE_URL: z.string().optional(),
   CHATGPT_OAUTH_REFRESH_LEAD_DAYS: z.coerce.number().positive().default(5),
   OPENCLAW_TOKEN_OPTIMIZATION_ENABLED: z
     .string()
@@ -239,16 +241,21 @@ const envSchema = z.object({
 
 export type AppConfig = z.infer<typeof envSchema> & {
   upstreamResponsesUrl: string;
+  publicResponsesBaseUrl: string;
   PROVIDER_USAGE_CHECK_URL?: string;
 };
 
 export function readConfig(env: NodeJS.ProcessEnv): AppConfig {
   const parsed = envSchema.parse(env);
   const base = parsed.UPSTREAM_BASE_URL.replace(/\/+$/, "");
+  const publicResponsesBaseUrl =
+    parsed.BOT_PUBLIC_RESPONSES_BASE_URL?.trim().replace(/\/+$/, "") ||
+    `http://127.0.0.1:${parsed.PORT}/v1`;
 
   return {
     ...parsed,
     upstreamResponsesUrl: `${base}/responses`,
+    publicResponsesBaseUrl,
   };
 }
 

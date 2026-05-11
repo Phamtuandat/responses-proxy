@@ -1,42 +1,11 @@
 import { InputFile, type Context } from "grammy";
+import {
+  buildCodexConfigFiles,
+  buildCodexSetupCurlCommand,
+  type CodexConfigFiles,
+} from "../codex-setup.js";
 
-export type CodexConfigFiles = {
-  configToml: string;
-  authJson: string;
-};
-
-export function buildCodexConfigFiles(input: {
-  baseUrl: string;
-  apiKey: string;
-  model?: string;
-}): CodexConfigFiles {
-  const model = input.model?.trim() || "gpt-5.5";
-  const baseUrl = input.baseUrl.trim();
-  const apiKey = input.apiKey.trim();
-
-  return {
-    configToml: [
-      `model = ${tomlString(model)}`,
-      `model_provider = "resproxy"`,
-      `model_reasoning_effort = "medium"`,
-      "",
-      `[model_providers.resproxy]`,
-      `name = "resproxy"`,
-      `base_url = ${tomlString(baseUrl)}`,
-      `api_key = ${tomlString(apiKey)}`,
-      `wire_api = "responses"`,
-      "",
-    ].join("\n"),
-    authJson: `${JSON.stringify(
-      {
-        auth_mode: "apikey",
-        OPENAI_API_KEY: apiKey,
-      },
-      null,
-      2,
-    )}\n`,
-  };
-}
+export { buildCodexConfigFiles, type CodexConfigFiles } from "../codex-setup.js";
 
 export async function sendCodexConfigFiles(
   ctx: Context,
@@ -70,6 +39,15 @@ export async function sendCustomerCodexSetup(ctx: Context, input: {
       [
         input.title,
         ...input.details,
+        "",
+        "Run this on machine that should hold Codex config:",
+        buildCodexSetupCurlCommand({
+          publicResponsesBaseUrl: input.baseUrl,
+          apiKey: input.apiKey,
+        }),
+        "",
+        "It patches ~/.codex/config.toml and ~/.codex/auth.json in place.",
+        "If you want manual paste instead, files are attached below.",
         "Paste both files into your Codex config folder:",
         "Mac: ~/.codex/",
         "Windows: %USERPROFILE%\\.codex\\",
@@ -89,8 +67,4 @@ export async function sendCustomerCodexSetup(ctx: Context, input: {
   } catch {
     return false;
   }
-}
-
-function tomlString(value: string): string {
-  return JSON.stringify(value);
 }
