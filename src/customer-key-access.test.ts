@@ -64,7 +64,7 @@ test("customer key resolves to its bound client route provider", async () => {
       workspaceId: workspace.id,
       planId: "basic",
       days: 30,
-      now: new Date("2026-04-27T00:00:00.000Z"),
+      now: new Date(),
     });
 
     const result = resolveCustomerRoutingAccess({

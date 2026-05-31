@@ -33,7 +33,7 @@ test("recordCustomerUsageFromPayload increments customer entitlement usage after
       workspaceId: "workspace-1",
       planId: "basic",
       days: 30,
-      now: new Date("2026-04-27T00:00:00.000Z"),
+      now: new Date(),
     });
 
     const usage = recordCustomerUsageFromPayload({

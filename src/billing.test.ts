@@ -256,6 +256,9 @@ test("closing a renewal request does not alter entitlement", () => {
 
     assert.equal(closed?.status, "closed");
     assert.equal(closed?.resolution, "manual-close");
-    assert.equal(repo.getActiveEntitlementForWorkspace("workspace-close")?.id, granted.entitlement.id);
+    assert.equal(
+      repo.getActiveEntitlementForWorkspace("workspace-close", new Date("2026-04-27T02:00:00.000Z"))?.id,
+      granted.entitlement.id,
+    );
   });
 });

@@ -188,7 +188,7 @@ function renderScreen(routeState: RouteState) {
       return <CacheScreen />;
     case "dashboard":
     default:
-      return <EnhancedDashboardScreen />;
+      return <DashboardScreen />;
   }
 }
 
