@@ -2,7 +2,18 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import type { DashboardAuthSession } from "../api/types";
 import type { NavRoute, Theme } from "../App";
-import { flatNavItems, getActiveTab, getTabById, tabNavigation } from "../navigation/FunctionalNavigation";
+import {
+  flatNavItems,
+  routerFlatNavItems,
+  getActiveTab,
+  getRouterActiveTab,
+  getTabById,
+  getRouterTabById,
+  tabNavigation,
+  routerNavigation,
+  getCurrentNavigation,
+  getNavigationMode
+} from "../navigation/FunctionalNavigation";
 import { Sidebar } from "./Sidebar";
 import { TopToolbar } from "./TopToolbar";
 import { TabNavigation } from "./TabNavigation";
@@ -17,6 +28,7 @@ type AppShellProps = {
   onNavigate: (route: NavRoute) => void;
   children: ReactNode;
   useTabLayout?: boolean; // Feature flag for gradual rollout
+  forceRouterMode?: boolean; // Force router-focused navigation
 };
 
 export function AppShell({
@@ -28,14 +40,20 @@ export function AppShell({
   onNavigate,
   children,
   useTabLayout = true, // Default to new layout
+  forceRouterMode = true, // Default to router mode
 }: AppShellProps) {
   const [contextualPanelVisible, setContextualPanelVisible] = useState(false);
 
-  const currentLabel = flatNavItems.find((item) => item.route === currentRoute)?.label ?? "Dashboard";
-  const activeTabId = getActiveTab(currentRoute);
+  // Determine navigation mode
+  const isRouterMode = forceRouterMode || getNavigationMode() === "router";
+  const currentNavigation = getCurrentNavigation();
+  const currentFlatNavItems = isRouterMode ? routerFlatNavItems : flatNavItems;
+
+  const currentLabel = currentFlatNavItems.find((item) => item.route === currentRoute)?.label ?? "Dashboard";
+  const activeTabId = isRouterMode ? getRouterActiveTab(currentRoute) : getActiveTab(currentRoute);
 
   const handleTabChange = (tabId: string) => {
-    const tab = getTabById(tabId);
+    const tab = isRouterMode ? getRouterTabById(tabId) : getTabById(tabId);
     if (!tab) return;
 
     // Navigate to the tab's primary route
@@ -56,14 +74,14 @@ export function AppShell({
     onNavigate(itemRoute);
   };
 
-  // Legacy layout for backward compatibility
-  if (!useTabLayout) {
+  // Router-focused sidebar layout (new default)
+  if (!useTabLayout || isRouterMode) {
     return (
       <div className="app-page">
         <main className="app-panel">
           <div className="app-shell">
             <Sidebar currentRoute={currentRoute} />
-            <section className="content-area" aria-label="Dashboard content">
+            <section className="content-area" aria-label="Main content">
               <TopToolbar
                 currentLabel={currentLabel}
                 theme={theme}
@@ -79,7 +97,7 @@ export function AppShell({
     );
   }
 
-  // New tab-based layout
+  // Legacy tab-based layout for backward compatibility
   return (
     <div className="app-page">
       <main className="app-panel">

@@ -10,14 +10,16 @@ import { AccountManagementScreen } from "./screens/AccountManagementScreen";
 import { AuthScreen } from "./screens/AuthScreen";
 import { CacheScreen } from "./screens/CacheScreen";
 import { ClientsScreen } from "./screens/ClientsScreen";
+import { CombosScreen } from "./screens/CombosScreen";
 import { ConfigHelperScreen } from "./screens/ConfigHelperScreen";
 import { DashboardScreen } from "./screens/DashboardScreen";
 import { EnhancedDashboardScreen } from "./screens/EnhancedDashboardScreen";
+import { EndpointScreen } from "./screens/EndpointScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
 import { RtkScreen } from "./screens/RtkScreen";
 import { UsageScreen } from "./screens/UsageScreen";
-import { flatNavItems } from "./navigation/FunctionalNavigation";
+import { flatNavItems, routerFlatNavItems, routeAliases, resolveRouteAlias } from "./navigation/FunctionalNavigation";
 
 export type AppRoute =
   | "dashboard"
@@ -33,7 +35,18 @@ export type AppRoute =
   | "config-helper"
   | "usage"
   | "rtk"
-  | "cache";
+  | "cache"
+  // New router-focused routes
+  | "endpoint"
+  | "combos"
+  | "quota-tracker"
+  | "mitm"
+  | "cli-tools"
+  | "media-providers"
+  | "proxy-pools"
+  | "skills"
+  | "console-log"
+  | "settings";
 
 export type NavRoute =
   | "dashboard"
@@ -45,7 +58,18 @@ export type NavRoute =
   | "config-helper"
   | "usage"
   | "rtk"
-  | "cache";
+  | "cache"
+  // New router-focused routes
+  | "endpoint"
+  | "combos"
+  | "quota-tracker"
+  | "mitm"
+  | "cli-tools"
+  | "media-providers"
+  | "proxy-pools"
+  | "skills"
+  | "console-log"
+  | "settings";
 
 export type Theme = "light" | "dark";
 
@@ -62,10 +86,19 @@ type AuthState =
   | { status: "anonymous" };
 
 const THEME_STORAGE_KEY = "responses-proxy-theme";
-const DEFAULT_ROUTE: NavRoute = "dashboard";
+const DEFAULT_ROUTE: NavRoute = "endpoint"; // Default to endpoint for router-focused UI
 
-// Create navRouteSet from functional navigation
-const navRouteSet = new Set<NavRoute>(flatNavItems.map((item) => item.route));
+// Create navRouteSet from both functional navigation and router navigation
+const allNavItems = [...flatNavItems, ...routerFlatNavItems];
+const navRouteSet = new Set<NavRoute>(allNavItems.map((item) => item.route));
+
+// Add route aliases to the set
+Object.keys(routeAliases).forEach(alias => {
+  const resolvedRoute = resolveRouteAlias(alias);
+  if (resolvedRoute) {
+    navRouteSet.add(resolvedRoute);
+  }
+});
 
 function decodeRouteParam(value: string): string {
   try {
@@ -78,10 +111,16 @@ function decodeRouteParam(value: string): string {
 function readRouteFromHash(): RouteState {
   const raw = window.location.hash.replace(/^#\/?/, "").trim();
   const segments = raw.split("/").filter(Boolean);
-  const baseRoute = segments[0];
+  let baseRoute = segments[0];
 
   if (!baseRoute) {
     return { route: DEFAULT_ROUTE, baseRoute: DEFAULT_ROUTE, params: {}, isUnknown: false };
+  }
+
+  // Try to resolve route alias first
+  const resolvedRoute = resolveRouteAlias(baseRoute);
+  if (resolvedRoute) {
+    baseRoute = resolvedRoute;
   }
 
   if (!navRouteSet.has(baseRoute as NavRoute)) {
@@ -154,14 +193,93 @@ function renderScreen(routeState: RouteState) {
     return (
       <EmptyState
         title="Route not found"
-        description="This dashboard uses the current React route map. Return to Dashboard to continue."
-        actionHref="#/dashboard"
-        actionLabel="Go to Dashboard"
+        description="This dashboard uses the current React route map. Return to Endpoint to continue."
+        actionHref="#/endpoint"
+        actionLabel="Go to Endpoint"
       />
     );
   }
 
   switch (routeState.route) {
+    // Router-focused routes
+    case "endpoint":
+      return <EndpointScreen />;
+    case "combos":
+      return <CombosScreen />;
+    case "quota-tracker":
+      return (
+        <EmptyState
+          title="Quota Tracker"
+          description="Provider quota monitoring and reset tracking will be available here."
+          actionHref="#/usage"
+          actionLabel="View Usage"
+        />
+      );
+    case "mitm":
+      return (
+        <EmptyState
+          title="MITM"
+          description="Request inspection and proxy debugging tools will be available here."
+          actionHref="#/endpoint"
+          actionLabel="Back to Endpoint"
+        />
+      );
+    case "cli-tools":
+      return (
+        <EmptyState
+          title="CLI Tools"
+          description="Setup commands for Claude Code, Codex, Cursor, Cline, and other tools will be available here."
+          actionHref="#/config-helper"
+          actionLabel="Config Helper"
+        />
+      );
+    case "media-providers":
+      return (
+        <EmptyState
+          title="Media Providers"
+          description="Image, audio, video, and multimodal provider configuration will be available here."
+          actionHref="#/providers"
+          actionLabel="Manage Providers"
+        />
+      );
+    case "proxy-pools":
+      return (
+        <EmptyState
+          title="Proxy Pools"
+          description="Network proxy pool management will be available here."
+          actionHref="#/endpoint"
+          actionLabel="Back to Endpoint"
+        />
+      );
+    case "skills":
+      return (
+        <EmptyState
+          title="Skills"
+          description="Installed tools, extensions, and router skills will be available here."
+          actionHref="#/endpoint"
+          actionLabel="Back to Endpoint"
+        />
+      );
+    case "console-log":
+      return (
+        <EmptyState
+          title="Console Log"
+          description="Runtime logs, provider errors, and request traces will be available here."
+          actionHref="#/endpoint"
+          actionLabel="Back to Endpoint"
+        />
+      );
+    case "settings":
+      return (
+        <EmptyState
+          title="Settings"
+          description="App settings, auth, theme, and security configuration will be available here."
+          actionHref="#/auth-management"
+          actionLabel="Auth Management"
+        />
+      );
+
+    // Legacy routes
     case "providers":
       return <ProvidersScreen />;
     case "provider-detail":
@@ -187,8 +305,11 @@ function renderScreen(routeState: RouteState) {
     case "cache":
       return <CacheScreen />;
     case "dashboard":
+      // Redirect dashboard to endpoint for router-focused UI
+      window.location.hash = "#/endpoint";
+      return <EndpointScreen />;
     default:
-      return <DashboardScreen />;
+      return <EndpointScreen />;
   }
 }
 

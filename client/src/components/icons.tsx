@@ -173,3 +173,109 @@ export function LogoutIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function EndpointIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+      <path d="M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
+    </svg>
+  );
+}
+
+export function CombosIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+      <circle cx="12" cy="12" r="2" />
+    </svg>
+  );
+}
+
+export function QuotaIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 3" />
+      <path d="M9 2h6M9 22h6" />
+    </svg>
+  );
+}
+
+export function MitmIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 2L2 7l10 5 10-5-10-5z" />
+      <path d="M2 17l10 5 10-5" />
+      <path d="M2 12l10 5 10-5" />
+    </svg>
+  );
+}
+
+export function CliIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M7 10l2 2-2 2M13 14h4" />
+    </svg>
+  );
+}
+
+export function MediaIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="9" cy="9" r="2" />
+      <path d="M21 15l-3.1-3.1a2 2 0 0 0-2.8 0L9 18" />
+    </svg>
+  );
+}
+
+export function ProxyPoolIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 2L2 7l10 5 10-5-10-5z" />
+      <path d="M2 17l10 5 10-5" />
+      <path d="M2 12l10 5 10-5" />
+      <circle cx="12" cy="12" r="1" />
+    </svg>
+  );
+}
+
+export function SkillsIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+    </svg>
+  );
+}
+
+export function ConsoleIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+      <path d="M6 8l2 2-2 2M10 12h4" />
+    </svg>
+  );
+}
+
+export function SettingsIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
+    </svg>
+  );
+}
+
+export function PowerIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+      <line x1="12" y1="2" x2="12" y2="12" />
+    </svg>
+  );
+}

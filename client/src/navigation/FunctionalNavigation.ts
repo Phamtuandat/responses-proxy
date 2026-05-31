@@ -4,10 +4,21 @@ import {
   AuthIcon,
   CacheIcon,
   ClientsIcon,
+  CliIcon,
+  CombosIcon,
   ConfigIcon,
+  ConsoleIcon,
   DashboardIcon,
+  EndpointIcon,
+  MediaIcon,
+  MitmIcon,
+  PowerIcon,
   ProvidersIcon,
+  ProxyPoolIcon,
+  QuotaIcon,
   RtkIcon,
+  SettingsIcon,
+  SkillsIcon,
   UsageIcon,
 } from "../components/icons";
 
@@ -68,9 +79,234 @@ export type NavRoute =
   | "config-helper"
   | "usage"
   | "cache"
-  | "rtk";
+  | "rtk"
+  // New router-focused routes
+  | "endpoint"
+  | "combos"
+  | "quota-tracker"
+  | "mitm"
+  | "cli-tools"
+  | "media-providers"
+  | "proxy-pools"
+  | "skills"
+  | "console-log"
+  | "settings";
 
-// Tab-based navigation structure
+// Router-focused navigation structure
+export const routerNavigation: TabNavigation[] = [
+  {
+    id: "main",
+    label: "MAIN",
+    icon: EndpointIcon,
+    sections: [
+      {
+        id: "endpoint",
+        label: "Endpoint",
+        icon: EndpointIcon,
+        statusIndicator: "healthy",
+        collapsible: false,
+        items: [
+          {
+            route: "endpoint",
+            label: "Endpoint",
+            icon: EndpointIcon,
+            description: "Local OpenAI-compatible endpoint and client setup",
+            statusIndicator: "healthy"
+          }
+        ]
+      },
+      {
+        id: "providers",
+        label: "Providers",
+        icon: ProvidersIcon,
+        badge: "3 Active",
+        statusIndicator: "healthy",
+        collapsible: false,
+        items: [
+          {
+            route: "providers",
+            label: "Providers",
+            icon: ProvidersIcon,
+            description: "Manage AI provider connections",
+            statusIndicator: "healthy"
+          }
+        ]
+      },
+      {
+        id: "combos",
+        label: "Combos",
+        icon: CombosIcon,
+        badge: "12 Routes",
+        statusIndicator: "healthy",
+        collapsible: false,
+        items: [
+          {
+            route: "combos",
+            label: "Combos",
+            icon: CombosIcon,
+            description: "Routing combinations and fallback chains",
+            statusIndicator: "healthy"
+          }
+        ]
+      },
+      {
+        id: "usage",
+        label: "Usage",
+        icon: UsageIcon,
+        badge: "Live",
+        statusIndicator: "healthy",
+        collapsible: false,
+        items: [
+          {
+            route: "usage",
+            label: "Usage",
+            icon: UsageIcon,
+            description: "Request and token usage analytics",
+            statusIndicator: "healthy"
+          }
+        ]
+      },
+      {
+        id: "quota-tracker",
+        label: "Quota Tracker",
+        icon: QuotaIcon,
+        badge: "85% Avg",
+        statusIndicator: "warning",
+        collapsible: false,
+        items: [
+          {
+            route: "quota-tracker",
+            label: "Quota Tracker",
+            icon: QuotaIcon,
+            description: "Provider quota, reset time, and exhaustion status",
+            statusIndicator: "warning"
+          }
+        ]
+      },
+      {
+        id: "mitm",
+        label: "MITM",
+        icon: MitmIcon,
+        statusIndicator: "unknown",
+        collapsible: false,
+        items: [
+          {
+            route: "mitm",
+            label: "MITM",
+            icon: MitmIcon,
+            description: "Request inspection and proxy debugging",
+            statusIndicator: "unknown"
+          }
+        ]
+      },
+      {
+        id: "cli-tools",
+        label: "CLI Tools",
+        icon: CliIcon,
+        statusIndicator: "healthy",
+        collapsible: false,
+        items: [
+          {
+            route: "cli-tools",
+            label: "CLI Tools",
+            icon: CliIcon,
+            description: "Setup commands for Claude Code, Codex, Cursor, Cline, and other tools",
+            statusIndicator: "healthy"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: "system",
+    label: "SYSTEM",
+    icon: SettingsIcon,
+    sections: [
+      {
+        id: "media-providers",
+        label: "Media Providers",
+        icon: MediaIcon,
+        statusIndicator: "unknown",
+        collapsible: false,
+        items: [
+          {
+            route: "media-providers",
+            label: "Media Providers",
+            icon: MediaIcon,
+            description: "Image, audio, video, and multimodal provider config",
+            statusIndicator: "unknown"
+          }
+        ]
+      },
+      {
+        id: "proxy-pools",
+        label: "Proxy Pools",
+        icon: ProxyPoolIcon,
+        statusIndicator: "unknown",
+        collapsible: false,
+        items: [
+          {
+            route: "proxy-pools",
+            label: "Proxy Pools",
+            icon: ProxyPoolIcon,
+            description: "Network proxy pool management",
+            statusIndicator: "unknown"
+          }
+        ]
+      },
+      {
+        id: "skills",
+        label: "Skills",
+        icon: SkillsIcon,
+        statusIndicator: "unknown",
+        collapsible: false,
+        items: [
+          {
+            route: "skills",
+            label: "Skills",
+            icon: SkillsIcon,
+            description: "Installed tools, extensions, and router skills",
+            statusIndicator: "unknown"
+          }
+        ]
+      },
+      {
+        id: "console-log",
+        label: "Console Log",
+        icon: ConsoleIcon,
+        statusIndicator: "healthy",
+        collapsible: false,
+        items: [
+          {
+            route: "console-log",
+            label: "Console Log",
+            icon: ConsoleIcon,
+            description: "Runtime logs, provider errors, and request traces",
+            statusIndicator: "healthy"
+          }
+        ]
+      },
+      {
+        id: "settings",
+        label: "Settings",
+        icon: SettingsIcon,
+        statusIndicator: "healthy",
+        collapsible: false,
+        items: [
+          {
+            route: "settings",
+            label: "Settings",
+            icon: SettingsIcon,
+            description: "App settings, auth, theme, and security",
+            statusIndicator: "healthy"
+          }
+        ]
+      }
+    ]
+  }
+];
+
+// Legacy tab navigation for backward compatibility
 export const tabNavigation: TabNavigation[] = [
   {
     id: "overview",
@@ -243,6 +479,98 @@ export const tabNavigation: TabNavigation[] = [
   }
 ];
 
+// Router-focused functional navigation structure
+export const routerFunctionalNavGroups: FunctionalNavGroup[] = [
+  {
+    id: "main",
+    label: "MAIN",
+    icon: EndpointIcon,
+    collapsible: false,
+    items: [
+      {
+        route: "endpoint",
+        label: "Endpoint",
+        icon: EndpointIcon,
+        description: "Local OpenAI-compatible endpoint and client setup"
+      },
+      {
+        route: "providers",
+        label: "Providers",
+        icon: ProvidersIcon,
+        description: "Manage AI provider connections"
+      },
+      {
+        route: "combos",
+        label: "Combos",
+        icon: CombosIcon,
+        description: "Routing combinations and fallback chains"
+      },
+      {
+        route: "usage",
+        label: "Usage",
+        icon: UsageIcon,
+        description: "Request and token usage analytics"
+      },
+      {
+        route: "quota-tracker",
+        label: "Quota Tracker",
+        icon: QuotaIcon,
+        description: "Provider quota, reset time, and exhaustion status"
+      },
+      {
+        route: "mitm",
+        label: "MITM",
+        icon: MitmIcon,
+        description: "Request inspection and proxy debugging"
+      },
+      {
+        route: "cli-tools",
+        label: "CLI Tools",
+        icon: CliIcon,
+        description: "Setup commands for Claude Code, Codex, Cursor, Cline, and other tools"
+      }
+    ]
+  },
+  {
+    id: "system",
+    label: "SYSTEM",
+    icon: SettingsIcon,
+    collapsible: true,
+    items: [
+      {
+        route: "media-providers",
+        label: "Media Providers",
+        icon: MediaIcon,
+        description: "Image, audio, video, and multimodal provider config"
+      },
+      {
+        route: "proxy-pools",
+        label: "Proxy Pools",
+        icon: ProxyPoolIcon,
+        description: "Network proxy pool management"
+      },
+      {
+        route: "skills",
+        label: "Skills",
+        icon: SkillsIcon,
+        description: "Installed tools, extensions, and router skills"
+      },
+      {
+        route: "console-log",
+        label: "Console Log",
+        icon: ConsoleIcon,
+        description: "Runtime logs, provider errors, and request traces"
+      },
+      {
+        route: "settings",
+        label: "Settings",
+        icon: SettingsIcon,
+        description: "App settings, auth, theme, and security"
+      }
+    ]
+  }
+];
+
 // Legacy functional navigation structure (for backward compatibility)
 export const functionalNavGroups: FunctionalNavGroup[] = [
   {
@@ -342,10 +670,100 @@ export const functionalNavGroups: FunctionalNavGroup[] = [
   }
 ];
 
+// Route aliases for backward compatibility
+export const routeAliases: Record<string, NavRoute> = {
+  // Router-focused aliases
+  "endpoint": "endpoint",
+  "combos": "combos",
+  "quota-tracker": "quota-tracker",
+  "mitm": "mitm",
+  "cli-tools": "cli-tools",
+  "media-providers": "media-providers",
+  "proxy-pools": "proxy-pools",
+  "skills": "skills",
+  "console-log": "console-log",
+  "settings": "settings",
+
+  // Legacy aliases
+  "dashboard": "dashboard",
+  "providers": "providers",
+  "clients": "clients",
+  "oauth": "oauth",
+  "auth-management": "auth-management",
+  "config-helper": "config-helper",
+  "usage": "usage",
+  "cache": "cache",
+  "rtk": "rtk",
+
+  // Additional aliases for convenience
+  "routing": "combos",
+  "fallback": "combos",
+  "quota": "quota-tracker",
+  "logs": "console-log",
+  "debug": "mitm",
+  "setup": "cli-tools",
+  "config": "settings"
+};
+
 // Flat navigation for backward compatibility
 export const flatNavItems = functionalNavGroups.flatMap(group => group.items);
+export const routerFlatNavItems = routerFunctionalNavGroups.flatMap(group => group.items);
 
-// Helper functions for tab navigation
+// Helper functions for router navigation
+export function getRouterTabById(tabId: string): TabNavigation | undefined {
+  return routerNavigation.find(tab => tab.id === tabId);
+}
+
+export function getRouterSectionById(tabId: string, sectionId: string): NavSection | undefined {
+  const tab = getRouterTabById(tabId);
+  return tab?.sections.find(section => section.id === sectionId);
+}
+
+export function getRouterNavItemByRoute(route: NavRoute): NavItem | undefined {
+  for (const tab of routerNavigation) {
+    if (tab.route === route) {
+      // Single-section tab
+      return {
+        route: tab.route,
+        label: tab.label,
+        icon: tab.icon,
+        description: `${tab.label} section`
+      };
+    }
+
+    for (const section of tab.sections) {
+      const item = section.items.find(item => item.route === route);
+      if (item) return item;
+    }
+  }
+  return undefined;
+}
+
+export function getRouterActiveTab(route: NavRoute): string | undefined {
+  for (const tab of routerNavigation) {
+    if (tab.route === route) return tab.id;
+
+    for (const section of tab.sections) {
+      if (section.items.some(item => item.route === route)) {
+        return tab.id;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function getRouterActiveSection(route: NavRoute): string | undefined {
+  for (const tab of routerNavigation) {
+    for (const section of tab.sections) {
+      if (section.items.some(item => item.route === route)) {
+        return section.id;
+      }
+    }
+  }
+  return undefined;
+}
+
+// Helper functions for tab navigation (legacy)
 export function getTabById(tabId: string): TabNavigation | undefined {
   return tabNavigation.find(tab => tab.id === tabId);
 }
@@ -397,4 +815,31 @@ export function getActiveSection(route: NavRoute): string | undefined {
     }
   }
   return undefined;
+}
+
+// Utility functions
+export function resolveRouteAlias(routeOrAlias: string): NavRoute | undefined {
+  return routeAliases[routeOrAlias] as NavRoute;
+}
+
+export function isRouterFocusedRoute(route: NavRoute): boolean {
+  const routerRoutes: NavRoute[] = [
+    "endpoint", "combos", "quota-tracker", "mitm", "cli-tools",
+    "media-providers", "proxy-pools", "skills", "console-log", "settings"
+  ];
+  return routerRoutes.includes(route);
+}
+
+export function getNavigationMode(): "router" | "legacy" {
+  // This can be controlled by a feature flag or user preference
+  // For now, default to router mode
+  return "router";
+}
+
+export function getCurrentNavigation(): TabNavigation[] {
+  return getNavigationMode() === "router" ? routerNavigation : tabNavigation;
+}
+
+export function getCurrentFunctionalNavGroups(): FunctionalNavGroup[] {
+  return getNavigationMode() === "router" ? routerFunctionalNavGroups : functionalNavGroups;
 }
