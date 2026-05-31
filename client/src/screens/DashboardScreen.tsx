@@ -2,6 +2,13 @@ import { useCallback } from "react";
 import { getHealth, getPromptCacheLatest, getProviders, getUsageStats } from "../api/client";
 import type { HealthResponse, PromptCacheLatestResponse, ProvidersResponse, UsageStatsResponse } from "../api/types";
 import { ErrorState } from "../components/ErrorState";
+import {
+  AccountsIcon,
+  CacheIcon,
+  ProvidersIcon,
+  RtkIcon,
+  UsageIcon,
+} from "../components/icons";
 import { LoadingState } from "../components/LoadingState";
 import { PageHeader } from "../components/PageHeader";
 import { StatCard } from "../components/StatCard";
@@ -105,23 +112,27 @@ export function DashboardScreen() {
       </SurfaceCard>
 
       <div className="stat-grid">
-        <StatCard label="Active provider" value={formatUnknown(health.activeProviderId)} />
-        <StatCard label="Provider count" value={formatNumber(providerList.length)} />
-        <StatCard label="Client routes" value={formatNumber(clientRoutes.length)} />
+        <StatCard label="Active provider" value={formatUnknown(health.activeProviderId)} icon={ProvidersIcon} />
+        <StatCard label="Provider count" value={formatNumber(providerList.length)} icon={ProvidersIcon} />
+        <StatCard label="Client routes" value={formatNumber(clientRoutes.length)} icon={AccountsIcon} />
         <StatCard
           label="Cache status"
           value={cacheStatus}
           caption={cacheCaption}
+          icon={CacheIcon}
+          tone={cache ? (latest?.cacheHit ? "success" : "warning") : "danger"}
         />
         <StatCard
           label="Today requests"
           value={usage ? formatNumber(today.requests) : "Unavailable"}
           caption={usage ? `Hit rate ${formatPercent(today.hitRate)}` : "Optional endpoint unavailable"}
+          icon={UsageIcon}
         />
         <StatCard
           label="Month requests"
           value={usage ? formatNumber(month.requests) : "Unavailable"}
           caption={usage ? `Saved ${formatPercent(month.avgCacheSavedPercent)}` : "Optional endpoint unavailable"}
+          icon={RtkIcon}
         />
       </div>
 

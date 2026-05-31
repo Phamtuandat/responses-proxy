@@ -1,3 +1,5 @@
+import { InboxIcon } from "./icons";
+
 type EmptyStateProps = {
   title: string;
   description: string;
@@ -13,6 +15,9 @@ export function EmptyState({
 }: EmptyStateProps) {
   return (
     <section className="empty-state">
+      <span className="state-icon" aria-hidden="true">
+        <InboxIcon />
+      </span>
       <p className="eyebrow">Workspace</p>
       <h2>{title}</h2>
       <p>{description}</p>

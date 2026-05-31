@@ -147,6 +147,73 @@ export class KiroTokenStore {
     return ok ? this.getAccount(id) : undefined;
   }
 
+  /**
+   * Updates account properties (name, priority, isActive). Only works when write-back is enabled.
+   */
+  updateAccount(id: string, updates: { name?: string; priority?: number; isActive?: boolean }, now: Date = new Date()): KiroAccount | undefined {
+    if (!this.writeBackEnabled) {
+      throw new KiroTokenStoreError("Cannot update account: write-back is disabled");
+    }
+
+    const updateTransaction = this.db.transaction((accountId: string, patch: typeof updates) => {
+      const row = this.db
+        .prepare(`SELECT name, priority, isActive, data FROM providerConnections WHERE provider = 'kiro' AND id = ?`)
+        .get(accountId) as { name: string | null; priority: number | null; isActive: number | null; data: string } | undefined;
+
+      if (!row) {
+        return false;
+      }
+
+      const updateFields: string[] = [];
+      const updateValues: unknown[] = [];
+
+      if (patch.name !== undefined) {
+        updateFields.push("name = ?");
+        updateValues.push(patch.name);
+      }
+
+      if (patch.priority !== undefined) {
+        updateFields.push("priority = ?");
+        updateValues.push(patch.priority);
+      }
+
+      if (patch.isActive !== undefined) {
+        updateFields.push("isActive = ?");
+        updateValues.push(patch.isActive ? 1 : 0);
+      }
+
+      if (updateFields.length === 0) {
+        return true; // No updates needed
+      }
+
+      updateFields.push("updatedAt = ?");
+      updateValues.push(now.toISOString());
+      updateValues.push(accountId);
+
+      const sql = `UPDATE providerConnections SET ${updateFields.join(", ")} WHERE provider = 'kiro' AND id = ?`;
+      this.db.prepare(sql).run(...updateValues);
+      return true;
+    });
+
+    const ok = updateTransaction(id, updates);
+    return ok ? this.getAccount(id) : undefined;
+  }
+
+  /**
+   * Deletes a Kiro account. Only works when write-back is enabled.
+   */
+  deleteAccount(id: string): boolean {
+    if (!this.writeBackEnabled) {
+      throw new KiroTokenStoreError("Cannot delete account: write-back is disabled");
+    }
+
+    const result = this.db
+      .prepare(`DELETE FROM providerConnections WHERE provider = 'kiro' AND id = ?`)
+      .run(id);
+
+    return result.changes > 0;
+  }
+
   close(): void {
     this.db.close();
   }

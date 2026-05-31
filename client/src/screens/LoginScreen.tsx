@@ -21,6 +21,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
   const [feedback, setFeedback] = useState<{ variant: "success" | "error"; message: string } | null>(null);
   const [status, setStatus] = useState<"idle" | "pending" | "approved" | "rejected" | "expired">("idle");
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [windowSeconds, setWindowSeconds] = useState(0);
 
   useEffect(() => {
     if (!approval || status !== "pending") {
@@ -84,6 +85,9 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
       });
       setStatus("pending");
       setNowMs(Date.now());
+      setWindowSeconds(
+        Math.max(1, Math.ceil((new Date(result.expiresAt).getTime() - Date.now()) / 1000)),
+      );
       setFeedback({
         variant: "success",
         message: `Approval request sent to Telegram admin${result.sentCount && result.sentCount > 1 ? "s" : ""}.`,
@@ -96,31 +100,40 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
   }
 
   const expiresInSeconds = approval ? Math.max(0, Math.ceil((new Date(approval.expiresAt).getTime() - nowMs) / 1000)) : 0;
+  const countdownPercent = windowSeconds > 0 ? Math.min(100, Math.max(0, (expiresInSeconds / windowSeconds) * 100)) : 0;
+  const isWaiting = status === "pending";
 
   return (
     <div className="login-page">
       <SurfaceCard className="login-card">
+        <span className="login-mark" aria-hidden="true">RP</span>
         <p className="eyebrow">Admin dashboard</p>
         <h1>Approve login in Telegram</h1>
         <p className="muted-copy">
-          Request approval, then choose matching number in Telegram admin chat.
+          Request approval, then choose the matching number in your Telegram admin chat.
         </p>
         {feedback ? <InlineAlert variant={feedback.variant} message={feedback.message} /> : null}
         <div className="login-form">
           <button className="button-primary" type="button" disabled={pending} onClick={handleRequestApproval}>
-            {pending ? "Sending..." : approval ? "Request new approval" : "Request Telegram approval"}
+            {pending ? "Sending…" : approval ? "Request new approval" : "Request Telegram approval"}
           </button>
         </div>
         {approval ? (
           <div className="login-form">
-            <label>
-              Code
-              <input value={approval.displayCode} readOnly />
-            </label>
-            <p className="muted-copy">
-              Status: {status === "pending" ? "Waiting for Telegram admin" : status}
-            </p>
-            <p className="muted-copy">Expires in {expiresInSeconds}s</p>
+            <div className="login-code-display" aria-label="Approval code">
+              {approval.displayCode}
+            </div>
+            <div className="login-countdown">
+              <div className="login-countdown-track" role="progressbar" aria-valuemin={0} aria-valuemax={windowSeconds} aria-valuenow={expiresInSeconds}>
+                <div className="login-countdown-fill" style={{ width: `${countdownPercent}%` }} />
+              </div>
+              <div className="login-status-row">
+                {isWaiting ? <span className="login-spinner" aria-hidden="true" /> : null}
+                <span>
+                  {isWaiting ? "Waiting for Telegram admin" : `Status: ${status}`} · expires in {expiresInSeconds}s
+                </span>
+              </div>
+            </div>
           </div>
         ) : null}
       </SurfaceCard>

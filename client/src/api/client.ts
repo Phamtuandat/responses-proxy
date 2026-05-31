@@ -15,6 +15,13 @@ import type {
   ClientTokenLimitResponse,
   ClientTokenLimitsResponse,
   HealthResponse,
+  KiroAccountsResponse,
+  KiroAccountResponse,
+  KiroAccountUpdateInput,
+  KiroAccountDeleteResponse,
+  KiroImportInput,
+  KiroImportResponse,
+  KiroStatus,
   LiveUsageResponse,
   ProviderDeleteResponse,
   ProviderModelsResponse,
@@ -209,4 +216,43 @@ export function applyClientConfig(input: ClientConfigApplyInput) {
 
 export function getProviderModels(providerId: string) {
   return apiGet<ProviderModelsResponse>(`/api/provider-models?providerId=${encodeURIComponent(providerId)}`);
+}
+
+// Kiro API functions
+export function getKiroStatus() {
+  return apiGet<KiroStatus>("/api/kiro/status");
+}
+
+export function getKiroAccounts() {
+  return apiGet<KiroAccountsResponse>("/api/kiro/accounts");
+}
+
+export function getKiroAccount(accountId: string) {
+  return apiGet<KiroAccountResponse>(`/api/kiro/accounts/${encodeURIComponent(accountId)}`);
+}
+
+export function refreshKiroAccount(accountId: string) {
+  return apiSend<KiroAccountResponse>(
+    `/api/kiro/accounts/${encodeURIComponent(accountId)}/refresh`,
+    "POST",
+  );
+}
+
+export function updateKiroAccount(accountId: string, updates: KiroAccountUpdateInput) {
+  return apiSend<KiroAccountResponse>(
+    `/api/kiro/accounts/${encodeURIComponent(accountId)}`,
+    "PATCH",
+    updates,
+  );
+}
+
+export function deleteKiroAccount(accountId: string) {
+  return apiSend<KiroAccountDeleteResponse>(
+    `/api/kiro/accounts/${encodeURIComponent(accountId)}`,
+    "DELETE",
+  );
+}
+
+export function importKiroAccounts(input?: KiroImportInput) {
+  return apiSend<KiroImportResponse>("/api/kiro/import", "POST", input);
 }

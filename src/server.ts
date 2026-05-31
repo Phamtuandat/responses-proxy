@@ -1007,6 +1007,545 @@ app.delete("/api/chatgpt-oauth/accounts/:accountId", async (request, reply) => {
   });
 });
 
+// Kiro account management API endpoints
+app.get("/api/kiro/status", async (_request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.send({
+      ok: true,
+      enabled: false,
+      message: "Kiro is disabled. Set KIRO_ENABLED=true to use it.",
+    });
+  }
+
+  if (!kiroTokenStore) {
+    return reply.send({
+      ok: true,
+      enabled: true,
+      available: false,
+      message: `Kiro database not found at ${config.KIRO_DB_PATH}`,
+    });
+  }
+
+  const accounts = kiroTokenStore.listAccounts();
+  const activeAccounts = accounts.filter(acc => acc.isActive);
+  const now = new Date();
+  const healthyAccounts = activeAccounts.filter(acc => {
+    if (!acc.expiresAt) return false;
+    const expiresAt = new Date(acc.expiresAt);
+    return expiresAt > now;
+  });
+
+  return reply.send({
+    ok: true,
+    enabled: true,
+    available: true,
+    totalAccounts: accounts.length,
+    activeAccounts: activeAccounts.length,
+    healthyAccounts: healthyAccounts.length,
+    refreshLeadSeconds: config.KIRO_REFRESH_LEAD_SECONDS,
+    writeBackEnabled: config.KIRO_WRITE_BACK_ENABLED,
+    dbPath: config.KIRO_DB_PATH,
+    defaultRegion: config.KIRO_DEFAULT_REGION,
+  });
+});
+
+app.get("/api/kiro/accounts", async (_request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DISABLED",
+        message: "Kiro is disabled. Set KIRO_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  if (!kiroTokenStore) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DATABASE_NOT_FOUND",
+        message: `Kiro database not found at ${config.KIRO_DB_PATH}`,
+      },
+    });
+  }
+
+  const accounts = kiroTokenStore.listAccounts();
+  const now = new Date();
+
+  const accountsForUi = accounts.map(account => {
+    const expiresAt = account.expiresAt ? new Date(account.expiresAt) : null;
+    const expiresIn = expiresAt ? Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000)) : null;
+
+    let tokenStatus: 'valid' | 'expired' | 'expiring' | 'missing';
+    if (!account.accessToken || account.accessToken === '') {
+      tokenStatus = 'missing';
+    } else if (!expiresAt) {
+      tokenStatus = 'missing';
+    } else if (expiresAt <= now) {
+      tokenStatus = 'expired';
+    } else if (expiresIn !== null && expiresIn < 600) { // Less than 10 minutes
+      tokenStatus = 'expiring';
+    } else {
+      tokenStatus = 'valid';
+    }
+
+    return {
+      id: account.id,
+      name: account.name || account.id,
+      priority: account.priority,
+      isActive: account.isActive,
+      tokenStatus,
+      expiresAt: account.expiresAt,
+      expiresIn,
+      region: account.providerSpecificData?.region || config.KIRO_DEFAULT_REGION,
+      authMethod: account.providerSpecificData?.authMethod || 'unknown',
+      createdAt: account.createdAt,
+      updatedAt: account.updatedAt,
+      hasRefreshToken: !!(account.refreshToken && account.refreshToken !== ''),
+    };
+  });
+
+  return reply.send({
+    ok: true,
+    accounts: accountsForUi,
+  });
+});
+
+app.get("/api/kiro/accounts/:accountId", async (request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DISABLED",
+        message: "Kiro is disabled. Set KIRO_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  if (!kiroTokenStore) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DATABASE_NOT_FOUND",
+        message: `Kiro database not found at ${config.KIRO_DB_PATH}`,
+      },
+    });
+  }
+
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const account = kiroTokenStore.getAccount(accountId);
+
+  if (!account) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "KIRO_ACCOUNT_NOT_FOUND",
+        message: "Kiro account was not found",
+      },
+    });
+  }
+
+  const now = new Date();
+  const expiresAt = account.expiresAt ? new Date(account.expiresAt) : null;
+  const expiresIn = expiresAt ? Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000)) : null;
+
+  let tokenStatus: 'valid' | 'expired' | 'expiring' | 'missing';
+  if (!account.accessToken || account.accessToken === '') {
+    tokenStatus = 'missing';
+  } else if (!expiresAt) {
+    tokenStatus = 'missing';
+  } else if (expiresAt <= now) {
+    tokenStatus = 'expired';
+  } else if (expiresIn !== null && expiresIn < 600) {
+    tokenStatus = 'expiring';
+  } else {
+    tokenStatus = 'valid';
+  }
+
+  // Redact sensitive data for UI
+  const accountForUi = {
+    id: account.id,
+    name: account.name || account.id,
+    priority: account.priority,
+    isActive: account.isActive,
+    tokenStatus,
+    expiresAt: account.expiresAt,
+    expiresIn,
+    region: account.providerSpecificData?.region || config.KIRO_DEFAULT_REGION,
+    authMethod: account.providerSpecificData?.authMethod || 'unknown',
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt,
+    hasRefreshToken: !!(account.refreshToken && account.refreshToken !== ''),
+    hasAccessToken: !!(account.accessToken && account.accessToken !== ''),
+    profileArn: account.providerSpecificData?.profileArn || null,
+    startUrl: account.providerSpecificData?.startUrl || null,
+    // Include raw data but redact sensitive fields
+    raw: {
+      ...account.raw,
+      accessToken: account.raw.accessToken ? '[REDACTED]' : undefined,
+      refreshToken: account.raw.refreshToken ? '[REDACTED]' : undefined,
+      clientSecret: account.raw.clientSecret ? '[REDACTED]' : undefined,
+    },
+  };
+
+  return reply.send({
+    ok: true,
+    account: accountForUi,
+  });
+});
+
+app.post("/api/kiro/accounts/:accountId/refresh", async (request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DISABLED",
+        message: "Kiro is disabled. Set KIRO_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  if (!kiroTokenStore) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DATABASE_NOT_FOUND",
+        message: `Kiro database not found at ${config.KIRO_DB_PATH}`,
+      },
+    });
+  }
+
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const account = kiroTokenStore.getAccount(accountId);
+
+  if (!account) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "KIRO_ACCOUNT_NOT_FOUND",
+        message: "Kiro account was not found",
+      },
+    });
+  }
+
+  try {
+    const { refreshKiroToken } = await import("./kiro-auth.js");
+    const refreshResult = await refreshKiroToken(account);
+
+    if (config.KIRO_WRITE_BACK_ENABLED) {
+      kiroTokenStore.updateTokens(account.id, refreshResult);
+    }
+
+    // Get updated account
+    const updatedAccount = kiroTokenStore.getAccount(accountId);
+    if (!updatedAccount) {
+      throw new Error("Account not found after refresh");
+    }
+
+    const now = new Date();
+    const expiresAt = updatedAccount.expiresAt ? new Date(updatedAccount.expiresAt) : null;
+    const expiresIn = expiresAt ? Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000)) : null;
+
+    return reply.send({
+      ok: true,
+      account: {
+        id: updatedAccount.id,
+        name: updatedAccount.name || updatedAccount.id,
+        priority: updatedAccount.priority,
+        isActive: updatedAccount.isActive,
+        tokenStatus: 'valid',
+        expiresAt: updatedAccount.expiresAt,
+        expiresIn,
+        region: updatedAccount.providerSpecificData?.region || config.KIRO_DEFAULT_REGION,
+        authMethod: updatedAccount.providerSpecificData?.authMethod || 'unknown',
+        createdAt: updatedAccount.createdAt,
+        updatedAt: updatedAccount.updatedAt,
+        hasRefreshToken: !!(updatedAccount.refreshToken && updatedAccount.refreshToken !== ''),
+      },
+    });
+  } catch (error) {
+    return reply.code(500).send({
+      error: {
+        type: "refresh_error",
+        code: "KIRO_TOKEN_REFRESH_FAILED",
+        message: error instanceof Error ? error.message : "Token refresh failed",
+      },
+    });
+  }
+});
+
+app.patch("/api/kiro/accounts/:accountId", async (request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DISABLED",
+        message: "Kiro is disabled. Set KIRO_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  if (!kiroTokenStore) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DATABASE_NOT_FOUND",
+        message: `Kiro database not found at ${config.KIRO_DB_PATH}`,
+      },
+    });
+  }
+
+  if (!config.KIRO_WRITE_BACK_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_WRITE_BACK_DISABLED",
+        message: "Kiro write-back is disabled. Cannot update accounts.",
+      },
+    });
+  }
+
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const account = kiroTokenStore.getAccount(accountId);
+
+  if (!account) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "KIRO_ACCOUNT_NOT_FOUND",
+        message: "Kiro account was not found",
+      },
+    });
+  }
+
+  const body = request.body as {
+    name?: string;
+    priority?: number;
+    isActive?: boolean;
+  } | undefined;
+
+  try {
+    // Validate inputs
+    const updates: { name?: string; priority?: number; isActive?: boolean } = {};
+
+    if (body?.name !== undefined) {
+      if (typeof body.name !== 'string') {
+        return reply.code(400).send({
+          error: {
+            type: "validation_error",
+            code: "INVALID_NAME",
+            message: "Name must be a string",
+          },
+        });
+      }
+      updates.name = body.name;
+    }
+
+    if (body?.priority !== undefined) {
+      if (typeof body.priority !== 'number' || body.priority < 0) {
+        return reply.code(400).send({
+          error: {
+            type: "validation_error",
+            code: "INVALID_PRIORITY",
+            message: "Priority must be a non-negative number",
+          },
+        });
+      }
+      updates.priority = body.priority;
+    }
+
+    if (body?.isActive !== undefined) {
+      if (typeof body.isActive !== 'boolean') {
+        return reply.code(400).send({
+          error: {
+            type: "validation_error",
+            code: "INVALID_IS_ACTIVE",
+            message: "isActive must be a boolean",
+          },
+        });
+      }
+      updates.isActive = body.isActive;
+    }
+
+    // Apply updates
+    const updatedAccount = kiroTokenStore.updateAccount(accountId, updates);
+    if (!updatedAccount) {
+      return reply.code(404).send({
+        error: {
+          type: "not_found",
+          code: "KIRO_ACCOUNT_NOT_FOUND",
+          message: "Kiro account was not found after update",
+        },
+      });
+    }
+
+    const now = new Date();
+    const expiresAt = updatedAccount.expiresAt ? new Date(updatedAccount.expiresAt) : null;
+    const expiresIn = expiresAt ? Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000)) : null;
+
+    let tokenStatus: 'valid' | 'expired' | 'expiring' | 'missing';
+    if (!updatedAccount.accessToken || updatedAccount.accessToken === '') {
+      tokenStatus = 'missing';
+    } else if (!expiresAt) {
+      tokenStatus = 'missing';
+    } else if (expiresAt <= now) {
+      tokenStatus = 'expired';
+    } else if (expiresIn !== null && expiresIn < 600) {
+      tokenStatus = 'expiring';
+    } else {
+      tokenStatus = 'valid';
+    }
+
+    return reply.send({
+      ok: true,
+      account: {
+        id: updatedAccount.id,
+        name: updatedAccount.name || updatedAccount.id,
+        priority: updatedAccount.priority,
+        isActive: updatedAccount.isActive,
+        tokenStatus,
+        expiresAt: updatedAccount.expiresAt,
+        expiresIn,
+        region: updatedAccount.providerSpecificData?.region || config.KIRO_DEFAULT_REGION,
+        authMethod: updatedAccount.providerSpecificData?.authMethod || 'unknown',
+        createdAt: updatedAccount.createdAt,
+        updatedAt: updatedAccount.updatedAt,
+        hasRefreshToken: !!(updatedAccount.refreshToken && updatedAccount.refreshToken !== ''),
+      },
+    });
+  } catch (error) {
+    return reply.code(500).send({
+      error: {
+        type: "update_error",
+        code: "KIRO_ACCOUNT_UPDATE_FAILED",
+        message: error instanceof Error ? error.message : "Account update failed",
+      },
+    });
+  }
+});
+
+app.delete("/api/kiro/accounts/:accountId", async (request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DISABLED",
+        message: "Kiro is disabled. Set KIRO_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  if (!kiroTokenStore) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DATABASE_NOT_FOUND",
+        message: `Kiro database not found at ${config.KIRO_DB_PATH}`,
+      },
+    });
+  }
+
+  if (!config.KIRO_WRITE_BACK_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_WRITE_BACK_DISABLED",
+        message: "Kiro write-back is disabled. Cannot delete accounts.",
+      },
+    });
+  }
+
+  const params = request.params as { accountId?: string };
+  const accountId = params.accountId ? decodeURIComponent(params.accountId) : "";
+  const account = kiroTokenStore.getAccount(accountId);
+
+  if (!account) {
+    return reply.code(404).send({
+      error: {
+        type: "not_found",
+        code: "KIRO_ACCOUNT_NOT_FOUND",
+        message: "Kiro account was not found",
+      },
+    });
+  }
+
+  try {
+    // Delete the account
+    const deleted = kiroTokenStore.deleteAccount(accountId);
+
+    if (!deleted) {
+      return reply.code(404).send({
+        error: {
+          type: "not_found",
+          code: "KIRO_ACCOUNT_NOT_FOUND",
+          message: "Kiro account was not found or could not be deleted",
+        },
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      deleted: true,
+      accountId,
+    });
+  } catch (error) {
+    return reply.code(500).send({
+      error: {
+        type: "delete_error",
+        code: "KIRO_ACCOUNT_DELETE_FAILED",
+        message: error instanceof Error ? error.message : "Account deletion failed",
+      },
+    });
+  }
+});
+
+app.post("/api/kiro/import", async (request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DISABLED",
+        message: "Kiro is disabled. Set KIRO_ENABLED=true to use it.",
+      },
+    });
+  }
+
+  const body = request.body as {
+    sourcePath?: string;
+  } | undefined;
+
+  try {
+    const { importKiroAccounts } = await import("./kiro-import.js");
+    const sourcePath = body?.sourcePath || process.env.KIRO_SOURCE_DB_PATH || `${process.env.HOME}/.9router/db/data.sqlite`;
+    const destPath = config.KIRO_DB_PATH;
+
+    const result = await importKiroAccounts({
+      sourceDbPath: sourcePath,
+      destDbPath: destPath,
+      provider: 'kiro',
+    });
+
+    return reply.send({
+      ok: true,
+      imported: result.imported,
+      sourcePath: result.source,
+      destPath: result.dest,
+    });
+  } catch (error) {
+    return reply.code(500).send({
+      error: {
+        type: "import_error",
+        code: "KIRO_IMPORT_FAILED",
+        message: error instanceof Error ? error.message : "Import failed",
+      },
+    });
+  }
+});
+
 app.get("/api/client-configs/status", async (_request, reply) => {
   ensureAccountBackedProvidersForExistingAccounts();
   return reply.send({

@@ -257,7 +257,7 @@ function LiveUsagePanel({
       }.`}
     >
       <div className="table-actions">
-        <RefreshButton label={isRefreshing ? "Refreshing…" : "Refresh live"} onClick={onRefresh} />
+        <RefreshButton label="Refresh live" isRefreshing={isRefreshing} onClick={onRefresh} />
       </div>
 
       <DataTable

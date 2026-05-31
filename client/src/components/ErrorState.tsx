@@ -1,3 +1,5 @@
+import { AlertIcon } from "./icons";
+
 type ErrorStateProps = {
   title: string;
   description: string;
@@ -7,6 +9,9 @@ type ErrorStateProps = {
 export function ErrorState({ title, description, onRetry }: ErrorStateProps) {
   return (
     <section className="error-state">
+      <span className="state-icon" aria-hidden="true">
+        <AlertIcon />
+      </span>
       <p className="eyebrow">Service status</p>
       <h2>{title}</h2>
       <p>{description}</p>

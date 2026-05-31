@@ -1,19 +1,23 @@
+import type { ComponentType, SVGProps } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getDashboardAuthSession, logoutDashboard } from "./api/client";
 import type { DashboardAuthSession } from "./api/types";
 import { AppShell } from "./components/AppShell";
 import { EmptyState } from "./components/EmptyState";
 import { LoadingState } from "./components/LoadingState";
-import { AccountsScreen } from "./screens/AccountsScreen";
+import { NotificationProvider } from "./components/feedback/NotificationProvider";
+import { AccountManagementScreen } from "./screens/AccountManagementScreen";
 import { AuthScreen } from "./screens/AuthScreen";
 import { CacheScreen } from "./screens/CacheScreen";
 import { ClientsScreen } from "./screens/ClientsScreen";
 import { ConfigHelperScreen } from "./screens/ConfigHelperScreen";
 import { DashboardScreen } from "./screens/DashboardScreen";
+import { EnhancedDashboardScreen } from "./screens/EnhancedDashboardScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
 import { RtkScreen } from "./screens/RtkScreen";
 import { UsageScreen } from "./screens/UsageScreen";
+import { flatNavItems } from "./navigation/FunctionalNavigation";
 
 export type AppRoute =
   | "dashboard"
@@ -23,6 +27,8 @@ export type AppRoute =
   | "client-detail"
   | "oauth"
   | "account-detail"
+  | "kiro"
+  | "kiro-detail"
   | "auth-management"
   | "config-helper"
   | "usage"
@@ -34,6 +40,7 @@ export type NavRoute =
   | "providers"
   | "clients"
   | "oauth"
+  | "kiro"
   | "auth-management"
   | "config-helper"
   | "usage"
@@ -41,11 +48,6 @@ export type NavRoute =
   | "cache";
 
 export type Theme = "light" | "dark";
-
-export type NavItem = {
-  route: NavRoute;
-  label: string;
-};
 
 type RouteState = {
   route: AppRoute;
@@ -62,19 +64,8 @@ type AuthState =
 const THEME_STORAGE_KEY = "responses-proxy-theme";
 const DEFAULT_ROUTE: NavRoute = "dashboard";
 
-const navItems: NavItem[] = [
-  { route: "dashboard", label: "Dashboard" },
-  { route: "providers", label: "Providers" },
-  { route: "clients", label: "Clients" },
-  { route: "oauth", label: "Accounts" },
-  { route: "auth-management", label: "Auth" },
-  { route: "config-helper", label: "Config" },
-  { route: "usage", label: "Usage" },
-  { route: "rtk", label: "RTK" },
-  { route: "cache", label: "Cache" },
-];
-
-const navRouteSet = new Set<NavRoute>(navItems.map((item) => item.route));
+// Create navRouteSet from functional navigation
+const navRouteSet = new Set<NavRoute>(flatNavItems.map((item) => item.route));
 
 function decodeRouteParam(value: string): string {
   try {
@@ -127,6 +118,16 @@ function readRouteFromHash(): RouteState {
     };
   }
 
+  if (resolvedBaseRoute === "kiro") {
+    // Redirect kiro routes to oauth with kiro tab
+    return {
+      route: detailId ? "account-detail" : "oauth",
+      baseRoute: "oauth" as NavRoute,
+      params: detailId ? { accountId: detailId } : {},
+      isUnknown: segments.length > 2,
+    };
+  }
+
   return {
     route: resolvedBaseRoute,
     baseRoute: resolvedBaseRoute,
@@ -170,9 +171,11 @@ function renderScreen(routeState: RouteState) {
     case "client-detail":
       return <ClientsScreen clientKey={routeState.params.clientKey} />;
     case "oauth":
-      return <AccountsScreen />;
+      // Determine initial tab based on current hash
+      const initialTab = window.location.hash.includes('/kiro') ? 'kiro' : 'oauth';
+      return <AccountManagementScreen initialTab={initialTab} />;
     case "account-detail":
-      return <AccountsScreen accountId={routeState.params.accountId} />;
+      return <AccountManagementScreen accountId={routeState.params.accountId} />;
     case "auth-management":
       return <AuthScreen />;
     case "config-helper":
@@ -185,7 +188,7 @@ function renderScreen(routeState: RouteState) {
       return <CacheScreen />;
     case "dashboard":
     default:
-      return <DashboardScreen />;
+      return <EnhancedDashboardScreen />;
   }
 }
 
@@ -242,6 +245,11 @@ export function App() {
     setAuthState({ status: "anonymous" });
   }, []);
 
+  const handleNavigate = useCallback((route: NavRoute) => {
+    // Update the URL hash to trigger navigation
+    window.location.hash = `#/${route}`;
+  }, []);
+
   const screen = useMemo(() => renderScreen(routeState), [routeState]);
 
   if (authState.status === "loading") {
@@ -259,15 +267,17 @@ export function App() {
   }
 
   return (
-    <AppShell
-      currentRoute={routeState.baseRoute}
-      navItems={navItems}
-      theme={theme}
-      session={authState.session}
-      onToggleTheme={toggleTheme}
-      onLogout={handleLogout}
-    >
-      {screen}
-    </AppShell>
+    <NotificationProvider>
+      <AppShell
+        currentRoute={routeState.baseRoute}
+        theme={theme}
+        session={authState.session}
+        onToggleTheme={toggleTheme}
+        onLogout={handleLogout}
+        onNavigate={handleNavigate}
+      >
+        {screen}
+      </AppShell>
+    </NotificationProvider>
   );
 }

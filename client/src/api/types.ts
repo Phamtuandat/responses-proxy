@@ -429,3 +429,70 @@ export type ProviderModelsResponse = {
   models?: string[];
   [key: string]: unknown;
 };
+
+// Kiro types
+export type KiroAccount = {
+  id: string;
+  name: string;
+  priority: number;
+  isActive: boolean;
+  tokenStatus: 'valid' | 'expired' | 'expiring' | 'missing';
+  expiresAt: string | null;
+  expiresIn: number | null;
+  region: string;
+  authMethod: string;
+  createdAt: string;
+  updatedAt: string;
+  hasRefreshToken: boolean;
+  hasAccessToken?: boolean;
+  profileArn?: string | null;
+  startUrl?: string | null;
+  raw?: Record<string, unknown>;
+};
+
+export type KiroStatus = {
+  ok: true;
+  enabled: boolean;
+  available?: boolean;
+  message?: string;
+  totalAccounts?: number;
+  activeAccounts?: number;
+  healthyAccounts?: number;
+  refreshLeadSeconds?: number;
+  writeBackEnabled?: boolean;
+  dbPath?: string;
+  defaultRegion?: string;
+};
+
+export type KiroAccountsResponse = {
+  ok: true;
+  accounts: KiroAccount[];
+};
+
+export type KiroAccountResponse = {
+  ok: true;
+  account: KiroAccount;
+};
+
+export type KiroAccountUpdateInput = {
+  name?: string;
+  priority?: number;
+  isActive?: boolean;
+};
+
+export type KiroAccountDeleteResponse = {
+  ok: true;
+  deleted: true;
+  accountId: string;
+};
+
+export type KiroImportInput = {
+  sourcePath?: string;
+};
+
+export type KiroImportResponse = {
+  ok: true;
+  imported: number;
+  sourcePath: string;
+  destPath: string;
+};

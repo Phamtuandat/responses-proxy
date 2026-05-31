@@ -1,4 +1,5 @@
 import type { Theme } from "../App";
+import { MoonIcon, SunIcon } from "./icons";
 
 type ThemeToggleProps = {
   theme: Theme;
@@ -17,7 +18,9 @@ export function ThemeToggle({ theme, onToggle }: ThemeToggleProps) {
       type="button"
     >
       <span className="theme-toggle-track" aria-hidden="true">
-        <span className="theme-toggle-thumb" />
+        <span className="theme-toggle-thumb">
+          {isDark ? <MoonIcon width={11} height={11} /> : <SunIcon width={11} height={11} />}
+        </span>
       </span>
       <span>{isDark ? "Dark" : "Light"}</span>
     </button>
