@@ -496,3 +496,94 @@ export type KiroImportResponse = {
   sourcePath: string;
   destPath: string;
 };
+
+// Enhanced Provider Domain Model - 9Router-inspired types
+
+export type ProviderTier = "subscription" | "cheap" | "free" | "custom";
+
+export type ProviderAuthType = "oauth" | "api_key" | "browser_cookie" | "local_cli" | "none";
+
+export type ProviderHealthStatus =
+  | "healthy"
+  | "degraded"
+  | "quota_exhausted"
+  | "auth_expired"
+  | "rate_limited"
+  | "disabled"
+  | "not_configured"
+  | "unknown";
+
+export type ProviderServiceKind =
+  | "chat"
+  | "embedding"
+  | "tts"
+  | "stt"
+  | "image"
+  | "vision"
+  | "video"
+  | "web_search"
+  | "web_fetch";
+
+export interface ProviderMetadata {
+  tier: ProviderTier;
+  serviceKinds: ProviderServiceKind[];
+  priority: number;
+  vendor: string;
+  costLevel: "high" | "medium" | "low";
+  reliability: "high" | "medium" | "low";
+  features: string[];
+  description?: string;
+}
+
+export interface ProviderHealth {
+  status: ProviderHealthStatus;
+  lastChecked: string;
+  responseTimeMs?: number;
+  errorRate?: number;
+  quotaUsed?: number;
+  quotaLimit?: number;
+  message?: string;
+  nextCheck?: string;
+}
+
+// Enhanced provider summary with tier and health information
+export interface EnhancedProviderSummary extends ProviderSummary {
+  metadata?: ProviderMetadata;
+  health?: ProviderHealth;
+}
+
+// Provider health check response
+export type ProviderHealthResponse = {
+  ok: boolean;
+  providerId: string;
+  health: ProviderHealth;
+  timestamp: string;
+};
+
+// All providers health response
+export type ProvidersHealthResponse = {
+  ok: boolean;
+  providers: Record<string, ProviderHealth>;
+  timestamp: string;
+};
+
+// Provider connection test response
+export type ProviderTestResponse = {
+  ok: boolean;
+  providerId: string;
+  status: ProviderHealthStatus;
+  responseTimeMs?: number;
+  message?: string;
+  timestamp: string;
+};
+
+// Enhanced client route with tier-based fallback
+export interface EnhancedClientRoute {
+  route: string;
+  primaryTier: ProviderTier;
+  fallbackTiers: ProviderTier[];
+  healthThreshold: ProviderHealthStatus[];
+  budgetLimit?: number;
+  preferredProviders?: string[];
+  excludedProviders?: string[];
+}
