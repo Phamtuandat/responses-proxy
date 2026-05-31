@@ -71,6 +71,32 @@ export type CodeWhispererRequest = {
   };
 };
 
+/** A tool definition exposed to CodeWhisperer (mirrors Anthropic/OpenAI tool specs). */
+export type CodeWhispererToolSpec = {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+};
+
+/** A prior tool execution result fed back into the conversation context. */
+export type CodeWhispererToolResultInput = {
+  toolUseId: string;
+  content: string;
+  status?: "success" | "error";
+};
+
+/** A completed assistant tool call parsed from the response stream. */
+export type CodeWhispererToolUse = {
+  toolUseId: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+
+/** A structured conversation turn that may carry tool calls / tool results. */
+export type StructuredTurn =
+  | { role: "user"; content: string; toolResults?: CodeWhispererToolResultInput[] }
+  | { role: "assistant"; content: string; toolUses?: CodeWhispererToolUse[] };
+
 function readNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -99,10 +125,21 @@ export function mapModelToCodeWhisperer(
       return modelId;
     }
   }
+  // Claude Code / the Anthropic SDK send date-suffixed ids (e.g.
+  // `claude-sonnet-4-20250514`). CodeWhisperer expects the bare lowercase id, so
+  // strip a trailing `-YYYYMMDD` and re-check aliases before falling through.
+  const deDated = lower.replace(/-\d{8}$/, "");
+  if (deDated !== lower) {
+    if (aliases[deDated]) {
+      return aliases[deDated];
+    }
+    if (deDated === "auto" || deDated.startsWith("claude-")) {
+      return deDated;
+    }
+  }
   // Pass a recognized Kiro model id straight through (lowercase `auto`/`claude-*`).
-  const lowered = normalized.toLowerCase();
-  if (lowered === "auto" || lowered.startsWith("claude-")) {
-    return lowered;
+  if (lower === "auto" || lower.startsWith("claude-")) {
+    return lower;
   }
   return defaultModelId;
 }
@@ -204,7 +241,60 @@ export function buildCodeWhispererRequest(args: {
   conversationId?: string;
   now?: Date;
 }): CodeWhispererRequest {
-  const turns = flattenResponsesConversation(args.body);
+  const turns = flattenResponsesConversation(args.body).map(
+    (turn): StructuredTurn => ({ role: turn.role, content: turn.content }),
+  );
+  return buildCodeWhispererRequestFromTurns({
+    turns,
+    modelId: args.modelId,
+    profileArn: args.profileArn,
+    conversationId: args.conversationId,
+    now: args.now,
+    maxTokens: readNumber(args.body.max_output_tokens),
+    temperature: readNumber(args.body.temperature),
+    topP: readNumber(args.body.top_p),
+  });
+}
+
+function normalizeToolSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!schema || Object.keys(schema).length === 0) {
+    return { type: "object", properties: {}, required: [] };
+  }
+  return {
+    ...schema,
+    required: Array.isArray(schema.required) ? schema.required : [],
+  };
+}
+
+function toolResultContext(results: CodeWhispererToolResultInput[]): Record<string, unknown> {
+  return {
+    toolResults: results.map((result) => ({
+      toolUseId: result.toolUseId,
+      status: result.status ?? "success",
+      content: [{ text: result.content }],
+    })),
+  };
+}
+
+/**
+ * Lower-level builder shared by the Responses and Anthropic Messages paths. Takes
+ * already-structured turns (optionally carrying tool calls / tool results), splits
+ * out the final user turn as the current message, and assembles the CodeWhisperer
+ * request. Available `tools` and the current turn's `toolResults` are placed in the
+ * current message's `userInputMessageContext`, matching 9router's wire format.
+ */
+export function buildCodeWhispererRequestFromTurns(args: {
+  turns: StructuredTurn[];
+  modelId: string;
+  tools?: CodeWhispererToolSpec[];
+  profileArn?: string | null;
+  conversationId?: string;
+  now?: Date;
+  maxTokens?: number;
+  temperature?: number;
+  topP?: number;
+}): CodeWhispererRequest {
+  const { turns } = args;
 
   // The final user turn is the "current" message; everything before is history.
   let lastUserIndex = -1;
@@ -215,37 +305,59 @@ export function buildCodeWhispererRequest(args: {
     }
   }
 
-  const rawCurrentContent = lastUserIndex >= 0 ? turns[lastUserIndex].content : "";
+  const currentTurn = lastUserIndex >= 0 ? turns[lastUserIndex] : undefined;
   const historyTurns = lastUserIndex >= 0 ? turns.slice(0, lastUserIndex) : turns;
 
+  const rawCurrentContent = currentTurn ? currentTurn.content : "";
   // 9router prepends a context block to the current message; match it so behavior
   // is consistent with the proven client.
   const nowIso = (args.now ?? new Date()).toISOString();
   const currentContent = `[Context: Current time is ${nowIso}]\n\n${rawCurrentContent}`;
 
+  // Current message context: available tool specs + any tool results answering a
+  // previous assistant tool call.
+  const currentContext: Record<string, unknown> = {};
+  if (args.tools && args.tools.length > 0) {
+    currentContext.tools = args.tools.map((tool) => ({
+      toolSpecification: {
+        name: tool.name,
+        ...(tool.description ? { description: tool.description } : {}),
+        inputSchema: { json: normalizeToolSchema(tool.inputSchema) },
+      },
+    }));
+  }
+  const currentToolResults =
+    currentTurn && currentTurn.role === "user" ? currentTurn.toolResults : undefined;
+  if (currentToolResults && currentToolResults.length > 0) {
+    Object.assign(currentContext, toolResultContext(currentToolResults));
+  }
+
   const history: Array<Record<string, unknown>> = [];
   for (const turn of historyTurns) {
     if (turn.role === "user") {
-      history.push({
-        userInputMessage: {
-          content: turn.content,
-          modelId: args.modelId,
-          origin: MESSAGE_ORIGIN,
-        },
-      });
+      const userMessage: Record<string, unknown> = {
+        content: turn.content,
+        modelId: args.modelId,
+        origin: MESSAGE_ORIGIN,
+      };
+      if (turn.toolResults && turn.toolResults.length > 0) {
+        userMessage.userInputMessageContext = toolResultContext(turn.toolResults);
+      }
+      history.push({ userInputMessage: userMessage });
     } else {
-      history.push({
-        assistantResponseMessage: {
-          content: turn.content,
-        },
-      });
+      const assistantMessage: Record<string, unknown> = { content: turn.content };
+      if (turn.toolUses && turn.toolUses.length > 0) {
+        assistantMessage.toolUses = turn.toolUses.map((toolUse) => ({
+          toolUseId: toolUse.toolUseId,
+          name: toolUse.name,
+          input: toolUse.input,
+        }));
+      }
+      history.push({ assistantResponseMessage: assistantMessage });
     }
   }
 
-  const maxTokens = readNumber(args.body.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const temperature = readNumber(args.body.temperature);
-  const topP = readNumber(args.body.top_p);
-
+  const maxTokens = args.maxTokens ?? DEFAULT_MAX_TOKENS;
   const request: CodeWhispererRequest = {
     conversationState: {
       chatTriggerType: CHAT_TRIGGER_TYPE,
@@ -255,15 +367,15 @@ export function buildCodeWhispererRequest(args: {
           content: currentContent,
           modelId: args.modelId,
           origin: MESSAGE_ORIGIN,
-          userInputMessageContext: {},
+          userInputMessageContext: currentContext,
         },
       },
       history,
     },
     inferenceConfig: {
       maxTokens,
-      ...(temperature !== undefined ? { temperature } : {}),
-      ...(topP !== undefined ? { topP } : {}),
+      ...(args.temperature !== undefined ? { temperature: args.temperature } : {}),
+      ...(args.topP !== undefined ? { topP: args.topP } : {}),
     },
     ...(args.profileArn ? { profileArn: args.profileArn } : {}),
   };
@@ -329,6 +441,106 @@ export function collectAssistantText(buffer: Buffer): {
     text += extractAssistantDelta(message);
   }
   return { text, error };
+}
+
+/** A partial tool-use signal parsed from a single `toolUseEvent` frame. */
+export type ToolUseDelta = {
+  toolUseId: string;
+  name?: string;
+  inputDelta?: string;
+  stop?: boolean;
+};
+
+/** Parse a `toolUseEvent` frame into a partial tool-use delta, if present. */
+export function extractToolUseDelta(message: EventStreamMessage): ToolUseDelta | undefined {
+  if (eventType(message) !== "toolUseEvent") {
+    return undefined;
+  }
+  const payload = decodeJsonPayload(message);
+  if (!payload) {
+    return undefined;
+  }
+  const toolUseId = typeof payload.toolUseId === "string" ? payload.toolUseId : "";
+  if (!toolUseId) {
+    return undefined;
+  }
+  return {
+    toolUseId,
+    name: typeof payload.name === "string" ? payload.name : undefined,
+    inputDelta: typeof payload.input === "string" ? payload.input : undefined,
+    stop: payload.stop === true,
+  };
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> {
+  if (!raw.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Accumulates assistant text and tool-use calls across CodeWhisperer event frames.
+ * A tool call's `input` arrives as a partial JSON string spread over multiple
+ * `toolUseEvent` frames keyed by `toolUseId`, so we concatenate per id and parse
+ * once the stream completes. `push` returns the per-frame delta so the streaming
+ * path can forward incremental text / tool-input deltas to the client.
+ */
+export class KiroResponseAccumulator {
+  text = "";
+  error?: string;
+  private readonly toolOrder: string[] = [];
+  private readonly toolNames = new Map<string, string>();
+  private readonly toolInputs = new Map<string, string>();
+
+  push(message: EventStreamMessage): { textDelta?: string; toolUse?: ToolUseDelta } {
+    const errText = extractCodeWhispererError(message);
+    if (errText) {
+      this.error = errText;
+      return {};
+    }
+    const toolDelta = extractToolUseDelta(message);
+    if (toolDelta) {
+      if (!this.toolNames.has(toolDelta.toolUseId)) {
+        this.toolOrder.push(toolDelta.toolUseId);
+        this.toolNames.set(toolDelta.toolUseId, toolDelta.name ?? "");
+      } else if (toolDelta.name) {
+        this.toolNames.set(toolDelta.toolUseId, toolDelta.name);
+      }
+      if (toolDelta.inputDelta) {
+        this.toolInputs.set(
+          toolDelta.toolUseId,
+          (this.toolInputs.get(toolDelta.toolUseId) ?? "") + toolDelta.inputDelta,
+        );
+      }
+      return { toolUse: toolDelta };
+    }
+    const delta = extractAssistantDelta(message);
+    if (delta) {
+      this.text += delta;
+      return { textDelta: delta };
+    }
+    return {};
+  }
+
+  hasToolUses(): boolean {
+    return this.toolOrder.length > 0;
+  }
+
+  toolUses(): CodeWhispererToolUse[] {
+    return this.toolOrder.map((id) => ({
+      toolUseId: id,
+      name: this.toolNames.get(id) ?? "",
+      input: parseJsonObject(this.toolInputs.get(id) ?? ""),
+    }));
+  }
 }
 
 /** Rough token estimate (~4 chars/token) used for usage accounting; CW omits usage. */

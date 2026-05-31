@@ -232,11 +232,45 @@ Notes:
   real incremental `response.output_text.delta` frames as text arrives.
 - Usage is estimated (~4 chars/token) since CodeWhisperer does not report token
   counts; it is still recorded for client and customer accounting on both paths.
-- v1 is text in / text out. Tool calls and reasoning summaries are not yet
-  translated to the CodeWhisperer protocol.
+- v1 Responses path is text in / text out. Tool calls are supported on the
+  Anthropic Messages path (see "Claude Code" below). Reasoning summaries are not
+  yet translated.
 - If `KIRO_ENABLED` is set but the 9router DB is missing, the provider is
   skipped with a warning so non-Kiro deployments are unaffected.
 - Multiple Kiro accounts are rotated round-robin across requests.
+
+## Claude Code (Anthropic Messages API → Kiro)
+
+Claude Code speaks the Anthropic Messages API, so the proxy exposes an
+Anthropic-compatible surface backed by the same Kiro pipeline:
+
+- `POST /v1/messages` — JSON and streaming (Anthropic SSE), with **tool calling**
+  (`tools`, `tool_use`, `tool_result`).
+- `POST /v1/messages/count_tokens` — estimated token count.
+
+These routes require the resolved provider to be the Kiro provider
+(`authMode: "kiro"`); a non-Kiro routing key returns a clear error.
+
+Point Claude Code at the proxy (see [claude-code-env.example](claude-code-env.example)):
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8318
+export ANTHROPIC_AUTH_TOKEN=sk-kiro-route      # a client route key bound to account-kiro
+export ANTHROPIC_MODEL=claude-sonnet-4
+export ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4.5
+```
+
+Auth accepts either `Authorization: Bearer <key>` (`ANTHROPIC_AUTH_TOKEN`) or
+`x-api-key` (`ANTHROPIC_API_KEY`); both resolve against the same client-route keys
+used by `/v1/responses`. The requested model is mapped through the Kiro alias map
+(falling back to `auto`); a client-route model override takes precedence if set.
+
+Notes:
+
+- Usage (and `count_tokens`) are estimates — CodeWhisperer does not report token
+  counts.
+- Image/vision blocks are not translated in v1; they are dropped rather than
+  failing the request.
 
 ## Client token limits
 

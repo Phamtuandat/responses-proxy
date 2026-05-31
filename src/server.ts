@@ -100,7 +100,15 @@ import {
   KiroUpstreamError,
   forwardKiroJson,
   forwardKiroSse,
+  forwardKiroAnthropicJson,
+  forwardKiroAnthropicSse,
 } from "./kiro-forward.js";
+import {
+  buildAnthropicError,
+  buildAnthropicModelsList,
+  buildCountTokensResponse,
+  parseAnthropicRequest,
+} from "./anthropic-messages.js";
 
 const config = readConfig(process.env);
 const CHATGPT_OAUTH_PROVIDER_ID = "account-openai-codex";
@@ -1754,6 +1762,25 @@ app.get("/v1/models", async (request, reply) => {
   }
   const selectedProvider = providerResolution.provider;
 
+  // Kiro provider speaks the Anthropic Messages API for Claude Code, which does a
+  // preflight `GET /v1/models` to validate the configured model. Return an
+  // Anthropic-format listing of the Kiro aliases + the date-suffixed Anthropic ids
+  // Claude Code defaults to, rather than forwarding to the (OpenAI) upstream.
+  if (selectedProvider.authMode === "kiro") {
+    const aliasMap = selectedProvider.capabilities.modelAliases ?? {};
+    const modelIds = [
+      ...Object.keys(aliasMap),
+      ...Object.values(aliasMap),
+      // Well-known Anthropic model ids Claude Code may request by default.
+      "claude-sonnet-4-20250514",
+      "claude-sonnet-4-5-20250929",
+      "claude-3-7-sonnet-20250219",
+      "claude-3-5-haiku-20241022",
+      "claude-haiku-4-5-20251001",
+    ];
+    return reply.send(buildAnthropicModelsList(modelIds));
+  }
+
   const target = await buildForwardTarget(selectedProvider);
   const response = await fetch(`${selectedProvider.baseUrl.replace(/\/+$/, "")}/models`, {
     headers:
@@ -2337,6 +2364,221 @@ async function handleResponsesRequest(
 app.post("/v1/responses", async (request, reply) =>
   handleResponsesRequest(request, reply, "/v1/responses"),
 );
+
+app.post("/v1/messages", async (request, reply) =>
+  handleAnthropicMessagesRequest(request, reply, false),
+);
+
+app.post("/v1/messages/count_tokens", async (request, reply) =>
+  handleAnthropicMessagesRequest(request, reply, true),
+);
+
+/**
+ * Anthropic Messages API surface so Claude Code can use the Kiro/Claude models.
+ * Reuses the routing-key model (accepts `Authorization: Bearer` or `x-api-key`),
+ * requires the resolved provider to be a Kiro provider, and dispatches to the
+ * Anthropic forward paths. `countOnly` serves `/v1/messages/count_tokens`.
+ */
+async function handleAnthropicMessagesRequest(
+  request: { body: unknown; headers: Record<string, unknown>; log: FastifyBaseLogger },
+  reply: {
+    code(statusCode: number): { send(payload: Record<string, unknown>): unknown };
+    header(name: string, value: string): unknown;
+    send(payload: unknown): unknown;
+    hijack(): void;
+    raw: NodeJS.WritableStream & {
+      headersSent?: boolean;
+      setHeader(name: string, value: string): void;
+      flushHeaders?: () => void;
+      end(chunk?: unknown): void;
+      destroy(error?: Error): void;
+    };
+  },
+  countOnly: boolean,
+): Promise<unknown> {
+  const requestId = randomUUID();
+  const startedAt = Date.now();
+
+  if (typeof request.body !== "object" || request.body === null) {
+    reply.header("x-proxy-request-id", requestId);
+    return reply
+      .code(400)
+      .send(buildAnthropicError("invalid_request_error", "Request body must be a JSON object"));
+  }
+  const body = request.body as Record<string, unknown>;
+  if (!Array.isArray(body.messages)) {
+    reply.header("x-proxy-request-id", requestId);
+    return reply
+      .code(400)
+      .send(buildAnthropicError("invalid_request_error", "`messages` must be an array"));
+  }
+
+  // Auth: Claude Code sends Authorization: Bearer (ANTHROPIC_AUTH_TOKEN) or
+  // x-api-key (ANTHROPIC_API_KEY). Resolve either against the routing-key model.
+  const routingApiKey =
+    readBearerToken(request.headers.authorization) ?? readHeaderString(request.headers["x-api-key"]);
+  const resolvedClientRoute = resolveClientRoute(request.headers, body, routingApiKey);
+  const routingAccess = resolveCustomerRoutingAccess({
+    routingApiKey,
+    resolvedClientRoute,
+    providerRepository,
+    customerKeyRepository,
+    workspaceRepository: customerWorkspaceRepository,
+    billingRepository,
+  });
+  if ("error" in routingAccess) {
+    reply.header("x-proxy-request-id", requestId);
+    return reply
+      .code(routingAccess.error.statusCode)
+      .send(buildAnthropicError("authentication_error", routingAccess.error.body.error.message));
+  }
+  const clientRoute = routingAccess.clientRoute;
+  const customerUsageAccess =
+    routingAccess.kind === "customer"
+      ? {
+          kind: "customer" as const,
+          workspace: { id: routingAccess.workspace.id },
+          entitlement: { id: routingAccess.entitlement.id },
+          customerKey: { id: routingAccess.customerKey.id },
+        }
+      : { kind: "operator" as const };
+
+  const providerHint = readRequestProviderHint(request.headers, undefined);
+  const providerResolution = resolveProviderForRequest({
+    providers: routingAccess.providers,
+    explicitProviderId: providerHint.providerId,
+    explicitProviderName: providerHint.providerName,
+  });
+  if ("error" in providerResolution) {
+    reply.header("x-proxy-request-id", requestId);
+    return reply
+      .code(providerResolution.error.statusCode)
+      .send(buildAnthropicError("authentication_error", providerResolution.error.message));
+  }
+  const provider = providerResolution.provider;
+  if (provider.authMode !== "kiro") {
+    reply.header("x-proxy-request-id", requestId);
+    return reply
+      .code(400)
+      .send(
+        buildAnthropicError(
+          "invalid_request_error",
+          "The /v1/messages endpoint is only available for the Kiro provider.",
+        ),
+      );
+  }
+
+  const modelOverride = providerRepository.getModelOverride(clientRoute);
+  const parsed = parseAnthropicRequest(modelOverride ? { ...body, model: modelOverride } : body);
+
+  if (countOnly) {
+    reply.header("x-proxy-request-id", requestId);
+    return reply.send(buildCountTokensResponse(parsed.inputText));
+  }
+
+  if (!kiroTokenStore) {
+    reply.header("x-proxy-request-id", requestId);
+    return reply
+      .code(503)
+      .send(
+        buildAnthropicError(
+          "api_error",
+          "Kiro provider is not available. Set KIRO_ENABLED=true and point KIRO_DB_PATH at a 9router database.",
+        ),
+      );
+  }
+
+  const isStream = parsed.stream;
+  try {
+    if (isStream) {
+      reply.hijack();
+      const usage = await forwardKiroAnthropicSse({
+        store: kiroTokenStore,
+        provider,
+        config,
+        requestId,
+        parsed,
+        logger: request.log,
+        responseRaw: reply.raw,
+      });
+      recordClientTokenUsageFromPayload(clientRoute, usage);
+      recordCustomerUsageFromPayload({
+        billingRepository,
+        usagePayload: usage,
+        access: customerUsageAccess,
+      });
+      request.log.info(
+        { requestId, clientRoute, provider: provider.id, totalMs: Date.now() - startedAt },
+        "kiro anthropic messages stream completed",
+      );
+      return reply;
+    }
+
+    const { payload, usage } = await forwardKiroAnthropicJson({
+      store: kiroTokenStore,
+      provider,
+      config,
+      requestId,
+      parsed,
+      logger: request.log,
+    });
+    recordClientTokenUsageFromPayload(clientRoute, usage);
+    recordCustomerUsageFromPayload({
+      billingRepository,
+      usagePayload: usage,
+      access: customerUsageAccess,
+    });
+    request.log.info(
+      { requestId, clientRoute, provider: provider.id, totalMs: Date.now() - startedAt },
+      "kiro anthropic messages JSON completed",
+    );
+    reply.header("x-proxy-request-id", requestId);
+    reply.header("x-proxy-provider-id", provider.id);
+    reply.header("x-proxy-upstream-target", provider.id);
+    return reply.send(payload);
+  } catch (error) {
+    const statusCode =
+      error instanceof KiroAuthError
+        ? error.statusCode
+        : error instanceof KiroUpstreamError
+          ? error.statusCode
+          : 502;
+    const errorType =
+      statusCode === 401 || statusCode === 403
+        ? "authentication_error"
+        : statusCode >= 500
+          ? "api_error"
+          : "invalid_request_error";
+    const message = error instanceof Error ? error.message : "Unknown Kiro proxy error";
+    request.log.error(
+      { err: error, requestId, clientRoute, provider: provider.id, totalMs: Date.now() - startedAt },
+      "kiro anthropic messages request failed",
+    );
+
+    if (isStream) {
+      // Headers may already be sent; emit an Anthropic SSE error frame then end.
+      const raw = reply.raw as NodeJS.WritableStream & {
+        headersSent?: boolean;
+        writableEnded?: boolean;
+        setHeader(name: string, value: string): void;
+      };
+      if (!raw.writableEnded) {
+        if (!raw.headersSent) {
+          raw.setHeader("Content-Type", "text/event-stream");
+          raw.setHeader("Cache-Control", "no-cache, no-transform");
+        }
+        raw.write(
+          `event: error\ndata: ${JSON.stringify(buildAnthropicError(errorType, message))}\n\n`,
+        );
+        raw.end();
+      }
+      return reply;
+    }
+
+    reply.header("x-proxy-request-id", requestId);
+    return reply.code(statusCode).send(buildAnthropicError(errorType, message));
+  }
+}
 
 /**
  * Serves a `/v1/responses` request through a Kiro (AWS CodeWhisperer) account from
@@ -3098,7 +3340,7 @@ function resolveHttpRateLimitPolicy(
   authorizationHeader: unknown,
 ): { scope: string; maxRequests: number } | undefined {
   const pathname = url.split("?", 1)[0] || "/";
-  if (pathname === "/v1/responses") {
+  if (pathname === "/v1/responses" || pathname.startsWith("/v1/messages")) {
     return {
       scope: "responses",
       maxRequests: readBearerToken(authorizationHeader)

@@ -1,0 +1,33 @@
+# Claude Code → responses-proxy (Kiro / Claude via AWS CodeWhisperer)
+#
+# 1. Make sure the proxy is running with the Kiro provider enabled and a client
+#    route bound to it, e.g.:
+#      curl -X POST http://127.0.0.1:8318/api/clients \
+#        -H "Authorization: Bearer <operator-or-bootstrap-key>" \
+#        -H "Content-Type: application/json" \
+#        -d '{"client":"kiro","providerId":"account-kiro","apiKeys":["sk-kiro-route"]}'
+#
+# 2. Export these before launching `claude`, or add them to your shell profile.
+
+# Point Claude Code's Anthropic client at the proxy.
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8318
+
+# The client route API key you bound above. Claude Code sends this as the
+# Authorization: Bearer token; the proxy also accepts it via x-api-key.
+export ANTHROPIC_AUTH_TOKEN=sk-kiro-route
+
+# Models served by Kiro (lowercase CodeWhisperer ids). `auto` lets the upstream pick.
+export ANTHROPIC_MODEL=claude-sonnet-4
+export ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4.5
+
+# Optional: skip the onboarding traffic that pings the real api.anthropic.com.
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+# GOTCHA: an `env` block in ~/.claude/settings.json OVERRIDES these shell vars, so
+# Claude Code may silently talk to a different endpoint. Check with `/status`, or
+# isolate this setup with its own config dir:
+#   CLAUDE_CONFIG_DIR=/path/to/kiro-config claude -p "..."
+# (put a settings.json with the same env block inside that dir).
+#
+# Also unset ANTHROPIC_API_KEY (export ANTHROPIC_API_KEY=) so Claude Code uses the
+# auth token above instead of trying to authenticate against api.anthropic.com.

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DEFAULT_KIRO_MODEL_ID,
+  KiroResponseAccumulator,
   buildCodeWhispererRequest,
+  buildCodeWhispererRequestFromTurns,
   buildResponsesJson,
   buildResponsesSseFrames,
   collectAssistantText,
@@ -12,6 +14,13 @@ import {
   mapModelToCodeWhisperer,
 } from "./kiro-codewhisperer.js";
 import { encodeEventStreamMessage, parseEventStream } from "./kiro-eventstream.js";
+
+function toolUseFrame(payload: Record<string, unknown>): Buffer {
+  return encodeEventStreamMessage(
+    { ":event-type": "toolUseEvent", ":content-type": "application/json" },
+    Buffer.from(JSON.stringify(payload), "utf8"),
+  );
+}
 
 function assistantFrame(content: string): Buffer {
   return encodeEventStreamMessage(
@@ -33,6 +42,11 @@ test("mapModelToCodeWhisperer falls back to the default for unknown aliases", ()
 test("mapModelToCodeWhisperer passes through recognized lowercase Kiro ids", () => {
   assert.equal(mapModelToCodeWhisperer("auto"), "auto");
   assert.equal(mapModelToCodeWhisperer("claude-sonnet-4.5"), "claude-sonnet-4.5");
+});
+
+test("mapModelToCodeWhisperer strips Anthropic date suffixes (Claude Code ids)", () => {
+  assert.equal(mapModelToCodeWhisperer("claude-sonnet-4-20250514"), "claude-sonnet-4");
+  assert.equal(mapModelToCodeWhisperer("claude-3-5-haiku-20241022"), "claude-3-5-haiku");
 });
 
 test("flattenResponsesConversation folds instructions into the first user turn", () => {
@@ -175,4 +189,81 @@ test("collectInputText joins all turns for token estimation", () => {
   assert.match(text, /sys/);
   assert.match(text, /a/);
   assert.match(text, /b/);
+});
+
+test("buildCodeWhispererRequestFromTurns puts tool specs in current message context", () => {
+  const request = buildCodeWhispererRequestFromTurns({
+    turns: [{ role: "user", content: "weather?" }],
+    modelId: "claude-sonnet-4",
+    tools: [
+      { name: "get_weather", description: "Get it", inputSchema: { type: "object", properties: {} } },
+    ],
+  });
+  const context = request.conversationState.currentMessage.userInputMessage
+    .userInputMessageContext as Record<string, unknown>;
+  const tools = context.tools as Array<Record<string, unknown>>;
+  assert.equal(tools.length, 1);
+  const spec = tools[0].toolSpecification as Record<string, unknown>;
+  assert.equal(spec.name, "get_weather");
+  assert.deepEqual(spec.inputSchema, { json: { type: "object", properties: {}, required: [] } });
+});
+
+test("buildCodeWhispererRequestFromTurns maps tool results on the current user turn", () => {
+  const request = buildCodeWhispererRequestFromTurns({
+    turns: [
+      { role: "user", content: "weather?" },
+      { role: "assistant", content: "", toolUses: [{ toolUseId: "tu_1", name: "get_weather", input: { city: "NYC" } }] },
+      { role: "user", content: "", toolResults: [{ toolUseId: "tu_1", content: "Sunny" }] },
+    ],
+    modelId: "claude-sonnet-4",
+  });
+  const context = request.conversationState.currentMessage.userInputMessage
+    .userInputMessageContext as Record<string, unknown>;
+  const toolResults = context.toolResults as Array<Record<string, unknown>>;
+  assert.equal(toolResults.length, 1);
+  assert.equal(toolResults[0].toolUseId, "tu_1");
+  assert.equal(toolResults[0].status, "success");
+  assert.deepEqual(toolResults[0].content, [{ text: "Sunny" }]);
+
+  // The assistant tool call is preserved in history.
+  const history = request.conversationState.history;
+  const assistantEntry = history.find((h) => "assistantResponseMessage" in h);
+  assert.ok(assistantEntry);
+});
+
+test("KiroResponseAccumulator accumulates a tool call across frames", () => {
+  const accumulator = new KiroResponseAccumulator();
+  const frames = [
+    toolUseFrame({ toolUseId: "tu_1", name: "get_weather", input: '{"ci' }),
+    toolUseFrame({ toolUseId: "tu_1", input: 'ty":"NYC"}', stop: true }),
+  ];
+  for (const frame of frames) {
+    for (const message of parseEventStream(frame)) {
+      accumulator.push(message);
+    }
+  }
+  assert.ok(accumulator.hasToolUses());
+  const toolUses = accumulator.toolUses();
+  assert.equal(toolUses.length, 1);
+  assert.equal(toolUses[0].toolUseId, "tu_1");
+  assert.equal(toolUses[0].name, "get_weather");
+  assert.deepEqual(toolUses[0].input, { city: "NYC" });
+});
+
+test("KiroResponseAccumulator collects text and reports per-frame deltas", () => {
+  const accumulator = new KiroResponseAccumulator();
+  const frame = encodeEventStreamMessage(
+    { ":event-type": "assistantResponseEvent", ":content-type": "application/json" },
+    Buffer.from(JSON.stringify({ content: "hello" }), "utf8"),
+  );
+  let textDelta = "";
+  for (const message of parseEventStream(frame)) {
+    const result = accumulator.push(message);
+    if (result.textDelta) {
+      textDelta += result.textDelta;
+    }
+  }
+  assert.equal(textDelta, "hello");
+  assert.equal(accumulator.text, "hello");
+  assert.equal(accumulator.hasToolUses(), false);
 });

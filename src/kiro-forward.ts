@@ -5,7 +5,10 @@ import { KiroAuthError, resolveKiroCredentials } from "./kiro-auth.js";
 import type { KiroTokenStore } from "./kiro-token-store.js";
 import {
   CODEWHISPERER_GENERATE_PATH,
+  type CodeWhispererRequest,
+  KiroResponseAccumulator,
   buildCodeWhispererRequest,
+  buildCodeWhispererRequestFromTurns,
   buildResponsesJson,
   buildSseDeltaFrame,
   buildSseFinaleFrames,
@@ -17,6 +20,11 @@ import {
   mapModelToCodeWhisperer,
   newSseStreamIds,
 } from "./kiro-codewhisperer.js";
+import {
+  AnthropicSseEmitter,
+  type ParsedAnthropicRequest,
+  buildAnthropicMessage,
+} from "./anthropic-messages.js";
 import { EventStreamParser } from "./kiro-eventstream.js";
 import type { RuntimeProviderPreset } from "./runtime-provider-repository.js";
 
@@ -84,14 +92,21 @@ type OpenedKiroStream = {
 };
 
 /**
- * Resolve a Kiro credential, translate the Responses body to a CodeWhisperer
- * request, and open the `generateAssistantResponse` connection with an overall
- * timeout. The caller is responsible for consuming `response.body` and invoking
+ * Resolve a Kiro credential and open the `generateAssistantResponse` connection
+ * with an overall timeout. The CodeWhisperer request is produced by `buildRequest`
+ * once credentials are known (so the resolved `profileArn` and mapped `modelId` can
+ * be injected), letting the Responses and Anthropic paths share all auth/rotation/
+ * timeout/connection logic. The caller consumes `response.body` and invokes
  * `cleanup()` (clears the abort timer) when finished.
  */
-async function openKiroStream(args: RunKiroArgs): Promise<OpenedKiroStream> {
+async function openKiroStream(
+  args: RunKiroArgs & {
+    model: string;
+    inputText: string;
+    buildRequest: (ctx: { profileArn?: string | null; modelId: string }) => CodeWhispererRequest;
+  },
+): Promise<OpenedKiroStream> {
   const fetchImpl = args.fetchImpl ?? fetch;
-  const model = typeof args.body.model === "string" ? args.body.model : "";
 
   const credentials = await resolveKiroCredentials({
     store: args.store,
@@ -102,13 +117,9 @@ async function openKiroStream(args: RunKiroArgs): Promise<OpenedKiroStream> {
     fetchImpl,
   });
 
-  const modelId = mapModelToCodeWhisperer(model, args.provider.capabilities.modelAliases);
-  const cwRequest = buildCodeWhispererRequest({
-    body: args.body,
-    modelId,
-    profileArn: credentials.profileArn,
-  });
-  const inputText = collectInputText(args.body);
+  const modelId = mapModelToCodeWhisperer(args.model, args.provider.capabilities.modelAliases);
+  const cwRequest = args.buildRequest({ profileArn: credentials.profileArn, modelId });
+  const inputText = args.inputText;
 
   const url = `https://codewhisperer.${credentials.region}.amazonaws.com${CODEWHISPERER_GENERATE_PATH}`;
   const controller = new AbortController();
@@ -160,14 +171,20 @@ async function openKiroStream(args: RunKiroArgs): Promise<OpenedKiroStream> {
     throw new KiroUpstreamError(args.requestId, response.status, errorBody);
   }
 
-  return { response, model: model || modelId, inputText, cleanup };
+  return { response, model: args.model || modelId, inputText, cleanup };
 }
 
 /** Non-streaming Kiro path: buffers the stream, returns a Responses JSON payload + usage. */
 export async function forwardKiroJson(
   args: RunKiroArgs,
 ): Promise<{ payload: Record<string, unknown>; usage: KiroUsage }> {
-  const opened = await openKiroStream(args);
+  const opened = await openKiroStream({
+    ...args,
+    model: typeof args.body.model === "string" ? args.body.model : "",
+    inputText: collectInputText(args.body),
+    buildRequest: ({ profileArn, modelId }) =>
+      buildCodeWhispererRequest({ body: args.body, modelId, profileArn }),
+  });
   try {
     const buffer = Buffer.from(await opened.response.arrayBuffer());
     const parser = new EventStreamParser();
@@ -200,7 +217,13 @@ export async function forwardKiroJson(
 export async function forwardKiroSse(
   args: RunKiroArgs & { responseRaw: ResponseRaw },
 ): Promise<KiroUsage> {
-  const opened = await openKiroStream(args);
+  const opened = await openKiroStream({
+    ...args,
+    model: typeof args.body.model === "string" ? args.body.model : "",
+    inputText: collectInputText(args.body),
+    buildRequest: ({ profileArn, modelId }) =>
+      buildCodeWhispererRequest({ body: args.body, modelId, profileArn }),
+  });
   const { response } = opened;
 
   if (!response.body) {
@@ -315,3 +338,192 @@ export async function forwardKiroSse(
 }
 
 export { KiroAuthError };
+
+/** Args for the Anthropic Messages forward paths (parsed request instead of raw body). */
+type RunKiroAnthropicArgs = {
+  store: KiroTokenStore;
+  provider: RuntimeProviderPreset;
+  config: AppConfig;
+  requestId: string;
+  parsed: ParsedAnthropicRequest;
+  logger: FastifyBaseLogger;
+  fetchImpl?: FetchLike;
+};
+
+function anthropicUsage(parsed: ParsedAnthropicRequest, outputText: string): KiroUsage {
+  return buildUsage(parsed.inputText, outputText);
+}
+
+function openAnthropicStream(args: RunKiroAnthropicArgs): Promise<OpenedKiroStream> {
+  return openKiroStream({
+    store: args.store,
+    provider: args.provider,
+    config: args.config,
+    requestId: args.requestId,
+    body: {},
+    logger: args.logger,
+    fetchImpl: args.fetchImpl,
+    model: args.parsed.model,
+    inputText: args.parsed.inputText,
+    buildRequest: ({ profileArn, modelId }) =>
+      buildCodeWhispererRequestFromTurns({
+        turns: args.parsed.turns,
+        modelId,
+        tools: args.parsed.tools,
+        profileArn,
+        maxTokens: args.parsed.maxTokens,
+        temperature: args.parsed.temperature,
+        topP: args.parsed.topP,
+      }),
+  });
+}
+
+/** Non-streaming Anthropic path: buffers the stream, returns an Anthropic message + usage. */
+export async function forwardKiroAnthropicJson(
+  args: RunKiroAnthropicArgs,
+): Promise<{ payload: Record<string, unknown>; usage: KiroUsage }> {
+  const opened = await openAnthropicStream(args);
+  try {
+    const buffer = Buffer.from(await opened.response.arrayBuffer());
+    const parser = new EventStreamParser();
+    const accumulator = new KiroResponseAccumulator();
+    for (const message of parser.push(buffer)) {
+      accumulator.push(message);
+    }
+    if (accumulator.error) {
+      throw new KiroUpstreamError(args.requestId, 502, accumulator.error);
+    }
+    const toolUses = accumulator.toolUses();
+    const outputText = accumulator.text + toolUses.map((t) => JSON.stringify(t.input)).join("");
+    const usage = anthropicUsage(args.parsed, outputText);
+    const payload = buildAnthropicMessage({
+      text: accumulator.text,
+      toolUses,
+      model: opened.model,
+      inputTokens: usage.usage.input_tokens,
+      outputTokens: usage.usage.output_tokens,
+    });
+    return { payload, usage };
+  } finally {
+    opened.cleanup();
+  }
+}
+
+/**
+ * Streaming Anthropic path: reads the CodeWhisperer event-stream incrementally and
+ * writes the Anthropic Messages SSE sequence (message_start → content_block_* →
+ * message_delta → message_stop) as text and tool-use deltas arrive.
+ */
+export async function forwardKiroAnthropicSse(
+  args: RunKiroAnthropicArgs & { responseRaw: ResponseRaw },
+): Promise<KiroUsage> {
+  const opened = await openAnthropicStream(args);
+  const { response } = opened;
+
+  if (!response.body) {
+    opened.cleanup();
+    throw new KiroUpstreamError(args.requestId, 502, "Kiro upstream returned an empty body");
+  }
+
+  const inputTokens = estimateTokens(args.parsed.inputText);
+  const emitter = new AnthropicSseEmitter({ model: opened.model, inputTokens });
+  const parser = new EventStreamParser();
+  const accumulator = new KiroResponseAccumulator();
+  const reader = response.body.getReader();
+
+  let headersSent = false;
+  const ensureHeaders = () => {
+    if (headersSent) {
+      return;
+    }
+    args.responseRaw.setHeader("Content-Type", "text/event-stream");
+    args.responseRaw.setHeader("Cache-Control", "no-cache, no-transform");
+    args.responseRaw.setHeader("Connection", "keep-alive");
+    args.responseRaw.setHeader("X-Accel-Buffering", "no");
+    args.responseRaw.flushHeaders?.();
+    for (const frame of emitter.start()) {
+      args.responseRaw.write(frame);
+    }
+    headersSent = true;
+  };
+
+  let idleTimer: NodeJS.Timeout | undefined;
+  const resetIdleTimer = () => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+    }
+    idleTimer = setTimeout(() => {
+      args.logger.warn({ requestId: args.requestId }, "kiro upstream stream idle timeout reached");
+      void reader.cancel().catch(() => undefined);
+    }, args.config.STREAM_IDLE_TIMEOUT_MS);
+  };
+
+  try {
+    resetIdleTimer();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      resetIdleTimer();
+      if (!value) {
+        continue;
+      }
+      for (const message of parser.push(value)) {
+        const errText = extractCodeWhispererError(message);
+        if (errText) {
+          if (!headersSent) {
+            throw new KiroUpstreamError(args.requestId, 502, errText);
+          }
+          continue;
+        }
+        const result = accumulator.push(message);
+        if (result.textDelta) {
+          ensureHeaders();
+          for (const frame of emitter.textDelta(result.textDelta)) {
+            args.responseRaw.write(frame);
+          }
+        }
+        if (result.toolUse) {
+          ensureHeaders();
+          for (const frame of emitter.toolUseDelta(result.toolUse)) {
+            args.responseRaw.write(frame);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+    }
+    opened.cleanup();
+    if (error instanceof KiroUpstreamError) {
+      throw error;
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new KiroUpstreamError(args.requestId, 502, `Kiro stream read failed: ${reason}`);
+  }
+
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+  }
+  opened.cleanup();
+
+  ensureHeaders();
+  const toolUses = accumulator.toolUses();
+  const outputText = accumulator.text + toolUses.map((t) => JSON.stringify(t.input)).join("");
+  const usage = anthropicUsage(args.parsed, outputText);
+  for (const frame of emitter.finish(usage.usage.output_tokens)) {
+    args.responseRaw.write(frame);
+  }
+  args.responseRaw.end();
+
+  if (accumulator.error) {
+    args.logger.warn(
+      { requestId: args.requestId, streamError: accumulator.error },
+      "kiro anthropic stream completed with a post-output error frame",
+    );
+  }
+
+  return usage;
+}
