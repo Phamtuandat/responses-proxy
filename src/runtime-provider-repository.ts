@@ -16,6 +16,10 @@ import {
 } from "./rtk-layer.js";
 import { resolveClientTokenWindowStart } from "./client-token-limits.js";
 export { resolveClientTokenWindowStart } from "./client-token-limits.js";
+import {
+  CODEWHISPERER_GENERATE_PATH,
+  DEFAULT_KIRO_MODEL_ALIASES,
+} from "./kiro-codewhisperer.js";
 type Database = InstanceType<typeof BetterSqlite3>;
 
 export type RuntimeProviderCapabilities = {
@@ -30,7 +34,7 @@ export type RuntimeProviderCapabilities = {
   sanitizeReasoningSummary: boolean;
   preserveMessagesPayload?: boolean;
   preserveRawRequestBody?: boolean;
-  transportMode?: "responses" | "chat_completions";
+  transportMode?: "responses" | "chat_completions" | "codewhisperer";
   stripModelPrefixes: string[];
   modelAliases?: Record<string, string>;
   rtkPolicy?: RtkLayerPolicy;
@@ -66,7 +70,7 @@ export type RuntimeProviderPreset = {
   updatedAt?: string;
 };
 
-export type RuntimeProviderAuthMode = "api_key" | "chatgpt_oauth";
+export type RuntimeProviderAuthMode = "api_key" | "chatgpt_oauth" | "kiro";
 
 export const BUILTIN_CLIENT_ROUTE_KEYS = ["default"] as const;
 export type ClientRouteKey = string;
@@ -1146,9 +1150,11 @@ export class RuntimeProviderRepository {
   }
 }
 
+export const KIRO_PROVIDER_ID = "account-kiro";
+
 export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderPreset[] {
   const primaryIdentity = inferProviderIdentity(config.UPSTREAM_BASE_URL, "");
-  return ensureUniqueProviderIds([
+  const presets: RuntimeProviderPreset[] = [
     {
       id: primaryIdentity.id,
       name: primaryIdentity.name,
@@ -1159,7 +1165,42 @@ export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderP
       clientApiKeys: [],
       capabilities: buildDefaultCapabilitiesFromConfig(config),
     },
-  ]);
+  ];
+  if (config.KIRO_ENABLED) {
+    presets.push(buildKiroProviderPreset(config));
+  }
+  return ensureUniqueProviderIds(presets);
+}
+
+/**
+ * System-managed provider that serves requests through a Kiro (AWS CodeWhisperer)
+ * account from 9router. Accounts/tokens live in 9router's own DB; this preset only
+ * declares routing + the CodeWhisperer transport so the forward path can translate.
+ */
+function buildKiroProviderPreset(config: AppConfig): RuntimeProviderPreset {
+  const region = config.KIRO_DEFAULT_REGION;
+  const baseUrl = `https://codewhisperer.${region}.amazonaws.com`;
+  return {
+    id: KIRO_PROVIDER_ID,
+    name: "Kiro (9router)",
+    baseUrl,
+    responsesUrl: `${baseUrl}${CODEWHISPERER_GENERATE_PATH}`,
+    authMode: "kiro",
+    providerApiKeys: [],
+    clientApiKeys: [],
+    capabilities: {
+      systemManaged: true,
+      accountPlatform: "kiro",
+      accountPoolRequired: true,
+      usageCheckEnabled: false,
+      stripMaxOutputTokens: false,
+      requestParameterPolicy: {},
+      sanitizeReasoningSummary: false,
+      transportMode: "codewhisperer",
+      stripModelPrefixes: [],
+      modelAliases: { ...DEFAULT_KIRO_MODEL_ALIASES },
+    },
+  };
 }
 
 function openDatabase(dbFile: string): Database {
@@ -1687,7 +1728,13 @@ function normalizeApiKeys(values: unknown[]): string[] {
 }
 
 function parseRuntimeProviderAuthMode(value: unknown): RuntimeProviderAuthMode {
-  return value === "chatgpt_oauth" ? "chatgpt_oauth" : "api_key";
+  if (value === "chatgpt_oauth") {
+    return "chatgpt_oauth";
+  }
+  if (value === "kiro") {
+    return "kiro";
+  }
+  return "api_key";
 }
 
 export function normalizeClientRouteKey(value: string): string {
@@ -1974,12 +2021,18 @@ function normalizeOptionalUrl(value: string): string {
   }
 }
 
-function normalizeTransportMode(value: unknown): "responses" | "chat_completions" | undefined {
+function normalizeTransportMode(
+  value: unknown,
+): "responses" | "chat_completions" | "codewhisperer" | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const normalized = value.trim().toLowerCase();
-  if (normalized === "responses" || normalized === "chat_completions") {
+  if (
+    normalized === "responses" ||
+    normalized === "chat_completions" ||
+    normalized === "codewhisperer"
+  ) {
     return normalized;
   }
   return undefined;

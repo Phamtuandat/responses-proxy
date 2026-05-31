@@ -16,6 +16,8 @@
     "bot:worker:dev": "tsx watch src/telegram-bot/worker.ts",
     "bot:worker": "tsx src/telegram-bot/worker.ts",
     "bot:start": "node dist/telegram-bot/index.js",
+    "kiro:import": "tsx src/kiro-import-cli.ts",
+    "kiro:import:prod": "node dist/kiro-import-cli.js",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test $(find src -name '*.test.ts' -print)",
     "app:install": "./scripts/install.sh",

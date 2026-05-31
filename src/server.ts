@@ -94,6 +94,13 @@ import { CustomerWorkspaceRepository } from "./telegram-bot/customer-workspace-r
 import { DashboardAuthRepository } from "./dashboard-auth.js";
 import { AuditLogRepository } from "./audit-log.js";
 import { processSepayWebhook, type SepayWebhookPayload } from "./sepay-webhook.js";
+import { KiroTokenStore } from "./kiro-token-store.js";
+import {
+  KiroAuthError,
+  KiroUpstreamError,
+  forwardKiroJson,
+  forwardKiroSse,
+} from "./kiro-forward.js";
 
 const config = readConfig(process.env);
 const CHATGPT_OAUTH_PROVIDER_ID = "account-openai-codex";
@@ -118,6 +125,32 @@ const chatGptOAuthStore = ChatGptOAuthStore.create(path.resolve(config.APP_DB_PA
 const promptCacheStateStore = PromptCacheStateStore.create(path.resolve(config.APP_DB_PATH));
 const responseCacheStore = ResponseCacheStore.create(path.resolve(config.APP_DB_PATH));
 setInterval(() => responseCacheStore.prune(), 10 * 60 * 1000).unref();
+// Kiro accounts/tokens live in 9router's own SQLite DB. Open it read/write (for
+// token write-back) only when enabled and present; otherwise leave Kiro disabled
+// so non-Kiro deployments are unaffected.
+const kiroTokenStore: KiroTokenStore | null = (() => {
+  if (!config.KIRO_ENABLED) {
+    return null;
+  }
+  if (!existsSync(config.KIRO_DB_PATH)) {
+    console.warn(
+      `[kiro] KIRO_ENABLED is set but no 9router database was found at ${config.KIRO_DB_PATH}; Kiro provider is disabled`,
+    );
+    return null;
+  }
+  try {
+    return KiroTokenStore.open(config.KIRO_DB_PATH, {
+      writeBack: config.KIRO_WRITE_BACK_ENABLED,
+    });
+  } catch (error) {
+    console.warn(
+      `[kiro] failed to open 9router database at ${config.KIRO_DB_PATH}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return null;
+  }
+})();
 const httpRateLimiter = new InMemoryHttpRateLimiter();
 const reactClientDir = path.resolve(process.cwd(), "dist", "client");
 const reactRootStaticAssetFiles = ["favicon.svg", "app-icon.svg"] as const;
@@ -1847,6 +1880,21 @@ async function handleResponsesRequest(
     });
   }
   const selectedProvider = providerResolution.provider;
+  if (selectedProvider.authMode === "kiro") {
+    const kiroModelOverride = providerRepository.getModelOverride(clientRoute);
+    return handleKiroResponsesRequest({
+      reply,
+      logger: request.log,
+      requestId,
+      startedAt,
+      clientRoute,
+      customerUsageAccess,
+      provider: selectedProvider,
+      requestBody: kiroModelOverride
+        ? { ...parsed.data, model: kiroModelOverride }
+        : (parsed.data as Record<string, unknown>),
+    });
+  }
   const currentModelOverride = providerRepository.getModelOverride(clientRoute);
   const clientRouteRtkPolicy = providerRepository.getClientRouteRtkPolicy(clientRoute);
   const maxOutputTokensRule = resolveMaxOutputTokensRule(selectedProvider.capabilities);
@@ -2289,6 +2337,166 @@ async function handleResponsesRequest(
 app.post("/v1/responses", async (request, reply) =>
   handleResponsesRequest(request, reply, "/v1/responses"),
 );
+
+/**
+ * Serves a `/v1/responses` request through a Kiro (AWS CodeWhisperer) account from
+ * 9router. Translation between the Responses format and CodeWhisperer lives in
+ * kiro-forward.ts; this handler owns dispatch, usage accounting, and error shaping.
+ */
+async function handleKiroResponsesRequest(args: {
+  reply: {
+    code(statusCode: number): { send(payload: Record<string, unknown>): unknown };
+    header(name: string, value: string): unknown;
+    send(payload: unknown): unknown;
+    hijack(): void;
+    raw: NodeJS.WritableStream & {
+      headersSent?: boolean;
+      setHeader(name: string, value: string): void;
+      flushHeaders?: () => void;
+      end(chunk?: unknown): void;
+      destroy(error?: Error): void;
+    };
+  };
+  logger: FastifyBaseLogger;
+  requestId: string;
+  startedAt: number;
+  clientRoute: ClientRouteKey;
+  customerUsageAccess:
+    | {
+        kind: "customer";
+        workspace: { id: string };
+        entitlement: { id: string };
+        customerKey: { id: string };
+      }
+    | { kind: "operator" };
+  provider: RuntimeProviderPreset;
+  requestBody: Record<string, unknown>;
+}): Promise<unknown> {
+  const { reply, requestId, provider, requestBody } = args;
+  const isStream = requestBody.stream === true;
+
+  if (!kiroTokenStore) {
+    const message =
+      "Kiro provider is not available. Set KIRO_ENABLED=true and point KIRO_DB_PATH at a 9router database.";
+    reply.header("x-proxy-request-id", requestId);
+    reply.header("x-proxy-error-code", "KIRO_PROVIDER_UNAVAILABLE");
+    reply.header("x-proxy-retryable", "0");
+    return reply.code(503).send({
+      error: { type: "proxy_error", code: "KIRO_PROVIDER_UNAVAILABLE", message },
+    });
+  }
+
+  try {
+    if (isStream) {
+      reply.hijack();
+      const usage = await forwardKiroSse({
+        store: kiroTokenStore,
+        provider,
+        config,
+        requestId,
+        body: requestBody,
+        logger: args.logger,
+        responseRaw: reply.raw,
+      });
+      recordClientTokenUsageFromPayload(args.clientRoute, usage);
+      recordCustomerUsageFromPayload({
+        billingRepository,
+        usagePayload: usage,
+        access: args.customerUsageAccess,
+      });
+      args.logger.info(
+        {
+          requestId,
+          clientRoute: args.clientRoute,
+          provider: provider.id,
+          totalMs: Date.now() - args.startedAt,
+        },
+        "kiro responses proxy stream request completed",
+      );
+      return reply;
+    }
+
+    const { payload, usage } = await forwardKiroJson({
+      store: kiroTokenStore,
+      provider,
+      config,
+      requestId,
+      body: requestBody,
+      logger: args.logger,
+    });
+    recordClientTokenUsageFromPayload(args.clientRoute, usage);
+    recordCustomerUsageFromPayload({
+      billingRepository,
+      usagePayload: usage,
+      access: args.customerUsageAccess,
+    });
+    args.logger.info(
+      {
+        requestId,
+        clientRoute: args.clientRoute,
+        provider: provider.id,
+        totalMs: Date.now() - args.startedAt,
+      },
+      "kiro responses proxy JSON request completed",
+    );
+    reply.header("x-proxy-request-id", requestId);
+    reply.header("x-proxy-provider-id", provider.id);
+    reply.header("x-proxy-upstream-target", provider.id);
+    return reply.send(payload);
+  } catch (error) {
+    const statusCode =
+      error instanceof KiroAuthError
+        ? error.statusCode
+        : error instanceof KiroUpstreamError
+          ? error.statusCode
+          : typeof error === "object" && error !== null && "statusCode" in error
+            ? Number((error as { statusCode?: number }).statusCode) || 502
+            : 502;
+    const upstreamBody = error instanceof KiroUpstreamError ? error.body : undefined;
+    const defaultCode =
+      error instanceof KiroAuthError
+        ? error.body.code
+        : statusCode >= 500
+          ? "UPSTREAM_REQUEST_FAILED"
+          : "UPSTREAM_BAD_REQUEST";
+    args.logger.error(
+      {
+        err: error,
+        requestId,
+        clientRoute: args.clientRoute,
+        provider: provider.id,
+        totalMs: Date.now() - args.startedAt,
+      },
+      "kiro responses proxy request failed",
+    );
+
+    if (isStream) {
+      sendHijackedStreamError(reply.raw, {
+        statusCode,
+        message: error instanceof Error ? error.message : "Unknown Kiro proxy error",
+        requestId,
+        upstreamBody,
+        defaultCode,
+        providerErrorPolicy: provider.capabilities.errorPolicy,
+      });
+      return reply;
+    }
+
+    const resolvedError = resolveProxyError({
+      statusCode,
+      message: error instanceof Error ? error.message : "Unknown Kiro proxy error",
+      requestId,
+      upstreamBody,
+      defaultCode,
+      errorType: "proxy_error",
+      providerErrorPolicy: provider.capabilities.errorPolicy,
+    });
+    reply.header("x-proxy-request-id", requestId);
+    reply.header("x-proxy-error-code", resolvedError.errorCode);
+    reply.header("x-proxy-retryable", resolvedError.retryable ? "1" : "0");
+    return reply.code(statusCode).send(resolvedError.envelope);
+  }
+}
 
 
 function sendHijackedStreamError(

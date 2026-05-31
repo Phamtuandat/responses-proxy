@@ -1,4 +1,10 @@
+import os from "node:os";
+import path from "node:path";
 import { z } from "zod";
+
+function defaultKiroDbPath(): string {
+  return path.join(os.homedir(), ".9router", "db", "data.sqlite");
+}
 
 function parseIdList(value: string | undefined): string[] {
   return (value ?? "")
@@ -237,6 +243,20 @@ const envSchema = z.object({
     }),
   SEPAY_WEBHOOK_SECRET: z.string().optional(),
   SEPAY_WEBHOOK_ALLOWED_IPS: z.string().optional().transform(parseDelimitedList),
+  KIRO_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  KIRO_DB_PATH: z
+    .string()
+    .optional()
+    .transform((value) => (value?.trim() ? value.trim() : defaultKiroDbPath())),
+  KIRO_DEFAULT_REGION: z.string().min(1).default("us-east-1"),
+  KIRO_REFRESH_LEAD_SECONDS: z.coerce.number().int().nonnegative().default(120),
+  KIRO_WRITE_BACK_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

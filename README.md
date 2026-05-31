@@ -142,6 +142,102 @@ automatically fall back to another provider that is already configured in the
 app runtime routes. By default it prefers the `codex` client route as the
 secondary provider for `default` traffic.
 
+## Kiro provider (AWS CodeWhisperer via 9router)
+
+The proxy can serve `/v1/responses` traffic through a Kiro account managed by
+[9router](https://github.com/). Kiro authenticates against the AWS CodeWhisperer
+`generateAssistantResponse` API (a binary `vnd.amazon.eventstream` protocol), so
+the proxy translates between the OpenAI Responses format and CodeWhisperer in
+both directions.
+
+Accounts and OAuth tokens originate in 9router's own SQLite database
+(`providerConnections`, `provider = "kiro"`). The recommended setup is to **copy
+those accounts into a resproxy-owned database** so the proxy is the sole owner and
+can refresh + persist tokens itself, with no dependency on 9router at runtime.
+
+Import the accounts (reads 9router read-only, writes a resproxy-owned copy):
+
+```bash
+# defaults: --from ~/.9router/db/data.sqlite  --to ./logs/kiro.sqlite
+npm run kiro:import -- --to ./logs/dev-mac/kiro.sqlite
+```
+
+> [!WARNING]
+> A Kiro refresh rotates the refresh token and invalidates the previous one. Once
+> resproxy owns the accounts and refreshes them, do **not** keep using those same
+> Kiro accounts in a running 9router, or the two will invalidate each other's
+> tokens. Treat the copy as a handover.
+
+Then enable it (these are the dev defaults in `env/dev.mac.env`):
+
+```bash
+KIRO_ENABLED=true
+# resproxy-owned copy (host ./logs/dev-mac maps to /app/logs in the container).
+KIRO_DB_PATH=/app/logs/kiro.sqlite
+KIRO_DEFAULT_REGION=us-east-1
+KIRO_REFRESH_LEAD_SECONDS=120
+# ON: resproxy owns this DB and persists refreshed tokens here.
+KIRO_WRITE_BACK_ENABLED=true
+```
+
+The copy lives under `logs/` which is already bind-mounted into the container, so
+no extra Docker volume is needed and the deployment does not require 9router to be
+installed. Re-run `npm run kiro:import` any time you want to re-sync from 9router
+(it upserts by account id).
+
+> [!NOTE]
+> Alternative (shared, read-only): point `KIRO_DB_PATH` at the live 9router DB and
+> set `KIRO_WRITE_BACK_ENABLED=false`. The proxy then reads accounts and refreshes
+> only its own in-memory access token, leaving 9router as the DB owner. Mount the
+> whole `db` directory read-only so SQLite can read the WAL `-wal`/`-shm` siblings.
+
+When enabled, a system-managed provider `account-kiro` ("Kiro (9router)") is
+registered. Bind a client route to it so `/v1/responses` traffic resolves to the
+provider by API key:
+
+```bash
+curl -X POST http://127.0.0.1:8318/api/clients \
+  -H 'Authorization: Bearer <operator-or-bootstrap-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"client":"kiro","providerId":"account-kiro","apiKeys":["sk-kiro-route"]}'
+```
+
+Then call it with that route key (or target the provider explicitly with the
+`x-provider-id: account-kiro` header):
+
+```bash
+curl http://127.0.0.1:8318/v1/responses \
+  -H 'Authorization: Bearer sk-kiro-route' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "claude-sonnet-4",
+    "input": "Hello from Kiro",
+    "stream": false
+  }'
+```
+
+CodeWhisperer for Kiro uses lowercase model ids (not bedrock-style ids):
+
+- `auto` (default) — lets CodeWhisperer pick the model
+- `claude-sonnet-4`, `claude-sonnet-4-5`, `claude-sonnet-4-6`
+- `claude-haiku-4.5`
+- `kiro-`-prefixed aliases map to the same ids (e.g. `kiro-claude-sonnet-4`)
+
+Unknown model names fall back to `auto`. Any `auto`/`claude-*` id is passed
+through as-is.
+
+Notes:
+
+- Both `stream:true` and `stream:false` are supported. The streaming path emits
+  real incremental `response.output_text.delta` frames as text arrives.
+- Usage is estimated (~4 chars/token) since CodeWhisperer does not report token
+  counts; it is still recorded for client and customer accounting on both paths.
+- v1 is text in / text out. Tool calls and reasoning summaries are not yet
+  translated to the CodeWhisperer protocol.
+- If `KIRO_ENABLED` is set but the 9router DB is missing, the provider is
+  skipped with a warning so non-Kiro deployments are unaffected.
+- Multiple Kiro accounts are rotated round-robin across requests.
+
 ## Client token limits
 
 Each runtime client route can have an optional hard token quota. Limits are
