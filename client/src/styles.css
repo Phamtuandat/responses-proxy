@@ -39,13 +39,14 @@
   --status-warning: #ffd60a;
   --status-error: #ff6961;
   --status-unknown: #8e8e93;
-  /* Chart Colors */
-  --chart-primary: #0a84ff;
-  --chart-secondary: #6f5bff;
-  --chart-success: #30d158;
-  --chart-warning: #ffd60a;
-  --chart-error: #ff6961;
-  --chart-grid: rgba(255, 255, 255, 0.1);
+  /* Enhanced Chart Colors */
+  --chart-primary: #0066cc;
+  --chart-secondary: #5a4fcf;
+  --chart-success: #28a745;
+  --chart-warning: #ffc107;
+  --chart-error: #dc3545;
+  --chart-grid-light: rgba(0, 0, 0, 0.1);
+  --chart-grid-dark: rgba(255, 255, 255, 0.2);
   /* Animation System */
   --animation-fast: 150ms;
   --animation-normal: 220ms;
@@ -222,6 +223,9 @@ textarea:focus-visible {
   display: grid;
   gap: var(--space-5);
   align-content: start;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
 }
 
 .brand-card,
@@ -247,6 +251,7 @@ textarea:focus-visible {
   padding: var(--space-6);
   border-radius: var(--radius-card);
   background: var(--hero-surface);
+  min-width: 0;
 }
 
 .brand-mark {
@@ -282,6 +287,12 @@ textarea:focus-visible {
 .loading-copy p {
   color: var(--text-secondary);
   line-height: var(--leading-body);
+}
+
+.brand-copy {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
 }
 
 .side-nav {
@@ -382,6 +393,10 @@ textarea:focus-visible {
 
 .nav-label {
   flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .content-area {
@@ -747,6 +762,10 @@ textarea:focus-visible {
 .stat-card strong {
   font-size: var(--text-xl);
   letter-spacing: -0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .stat-card p {
@@ -754,6 +773,9 @@ textarea:focus-visible {
   color: var(--text-secondary);
   line-height: 1.5;
   font-size: var(--text-sm);
+  overflow-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
 }
 
 .stat-card-success::before {
@@ -1307,8 +1329,15 @@ textarea,
 
 .data-table td {
   color: var(--text-secondary);
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-table td.expandable {
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   word-break: break-word;
 }
 
@@ -2367,6 +2396,7 @@ textarea,
   transition: all 220ms ease;
   font-size: var(--text-md);
   position: relative;
+  min-width: 0;
 }
 
 .nav-group-item:hover {
@@ -3011,6 +3041,10 @@ textarea,
   color: var(--text-secondary);
   margin: 0;
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .metric-card-status-indicator {
@@ -3045,6 +3079,8 @@ textarea,
   font-weight: 600;
   color: var(--text-primary);
   line-height: var(--leading-tight);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .metric-card-trend {

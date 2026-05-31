@@ -68,12 +68,18 @@ export function DashboardScreen() {
   }
 
   const { health, providers, usage, cache, telemetryWarning } = state.data;
+
+  // Safe data extraction with comprehensive null checks
   const stats = usage && isRecord(usage.stats) ? usage.stats : {};
   const today = isRecord(stats.today) ? stats.today : {};
   const month = isRecord(stats.month) ? stats.month : {};
   const latest = cache?.latest ?? null;
+
+  // Safe array handling with fallbacks
   const clientRoutes = providers && Array.isArray(providers.clientRoutes) ? providers.clientRoutes : [];
   const providerList = providers && Array.isArray(providers.providers) ? providers.providers : [];
+
+  // Safe cache status calculation
   const cacheStatus = cache
     ? latest
       ? latest.cacheHit
@@ -81,6 +87,7 @@ export function DashboardScreen() {
         : "Latest miss/unknown"
       : "No telemetry yet"
     : "Unavailable";
+
   const cacheCaption = cache
     ? latest?.timestamp
       ? formatDateTime(latest.timestamp)

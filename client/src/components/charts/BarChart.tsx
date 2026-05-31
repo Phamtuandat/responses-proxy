@@ -66,12 +66,24 @@ export function BarChart({
       {
         label: title || 'Data',
         data: data.map(point => point.value),
-        backgroundColor: data.map(point =>
-          point.color || 'var(--accent-soft)'
-        ),
-        borderColor: data.map(point =>
-          point.color?.replace('20', '') || 'var(--accent)'
-        ),
+        backgroundColor: data.map(point => {
+          if (point.color) {
+            // If color ends with opacity suffix (like '20'), create transparent version
+            if (point.color.match(/[a-f0-9]{2}$/i)) {
+              return point.color;
+            }
+            // Add transparency to solid colors
+            return point.color + '20';
+          }
+          return 'var(--chart-primary)20';
+        }),
+        borderColor: data.map(point => {
+          if (point.color) {
+            // Remove opacity suffix if present to get solid color
+            return point.color.replace(/[a-f0-9]{2}$/i, '');
+          }
+          return 'var(--chart-primary)';
+        }),
         borderWidth: 1,
         borderRadius: 4,
         borderSkipped: false,
