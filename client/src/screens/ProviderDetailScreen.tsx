@@ -59,23 +59,6 @@ interface ProviderDetailScreenProps {
 }
 
 // Real API integration - no more mock data
-      outputCostPer1M: 75.0,
-      supportsStreaming: true,
-      supportsTools: true,
-      supportsVision: true,
-      supportsJsonMode: true,
-      enabled: false
-    }
-  ],
-  quota: {
-    quotaType: "requests",
-    used: 1295,
-    limit: 15000,
-    usagePercent: 8.6,
-    resetAt: "2026-06-01T00:00:00Z",
-    resetInSeconds: 32400
-  }
-};
 
 function ProviderDetailHeader({ provider }: { provider: Provider }) {
   const catalogEntry = getProviderById(provider.id);
@@ -920,44 +903,6 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
         onClose={() => setAccountModalOpen(false)}
         onAccountsChanged={handleAccountsChanged}
       />
-    </div>
-  );
-              <div className="eligibility-content">
-                {eligibility.eligible ? (
-                  <div className="eligibility-ready">
-                    <CheckCircleIcon className="eligibility-icon" />
-                    <div className="eligibility-text">
-                      <div className="eligibility-status">Ready for Fallback</div>
-                      <div className="eligibility-score">Score: {eligibility.score}/100</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="eligibility-not-ready">
-                    <AlertIcon className="eligibility-icon" />
-                    <div className="eligibility-text">
-                      <div className="eligibility-status">Not Ready</div>
-                      <div className="eligibility-reasons">
-                        {eligibility.reasons.slice(0, 2).map((reason, index) => (
-                          <div key={index} className="eligibility-reason">• {reason}</div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {!eligibility.eligible && (
-                  <div className="eligibility-fixes">
-                    <div className="fixes-title">Suggested Fixes:</div>
-                    {getSuggestedFixes(provider, eligibility).slice(0, 3).map((fix, index) => (
-                      <div key={index} className="eligibility-fix">💡 {fix}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </SurfaceCard>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

@@ -17,6 +17,8 @@ import { EnhancedDashboardScreen } from "./screens/EnhancedDashboardScreen";
 import { EndpointScreen } from "./screens/EndpointScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
+import { EnhancedProvidersScreen } from "./screens/EnhancedProvidersScreen";
+import { ProviderDetailScreen } from "./screens/ProviderDetailScreen";
 import { RtkScreen } from "./screens/RtkScreen";
 import { UsageScreen } from "./screens/UsageScreen";
 import { flatNavItems, routerFlatNavItems, routeAliases, resolveRouteAlias } from "./navigation/FunctionalNavigation";
@@ -281,9 +283,9 @@ function renderScreen(routeState: RouteState) {
 
     // Legacy routes
     case "providers":
-      return <ProvidersScreen />;
+      return <EnhancedProvidersScreen />;
     case "provider-detail":
-      return <ProvidersScreen providerId={routeState.params.providerId} />;
+      return <ProviderDetailScreen providerId={routeState.params.providerId} />;
     case "clients":
       return <ClientsScreen />;
     case "client-detail":
@@ -305,9 +307,7 @@ function renderScreen(routeState: RouteState) {
     case "cache":
       return <CacheScreen />;
     case "dashboard":
-      // Redirect dashboard to endpoint for router-focused UI
-      window.location.hash = "#/endpoint";
-      return <EndpointScreen />;
+      return <EnhancedDashboardScreen />;
     default:
       return <EndpointScreen />;
   }
