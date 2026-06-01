@@ -260,7 +260,7 @@ export class ChatGptOAuthStore {
     return account;
   }
 
-  private listAccounts(): ChatGptOAuthAccount[] {
+  listAccounts(): ChatGptOAuthAccount[] {
     this.ensureSchema();
     const rows = this.db
       .prepare("SELECT * FROM chatgpt_oauth_accounts ORDER BY email, account_id, id")

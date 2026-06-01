@@ -257,6 +257,17 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => value !== "false"),
+
+  // Routing System Configuration
+  ROUTING_HEALTH_CHECK_INTERVAL: z.coerce.number().int().positive().default(30000), // 30 seconds
+  ROUTING_WEBSOCKET_BROADCAST_INTERVAL: z.coerce.number().int().positive().default(5000), // 5 seconds
+  ROUTING_PROVIDER_HEALTH_CACHE_TTL: z.coerce.number().int().positive().default(60000), // 1 minute
+  ROUTING_HEALTH_SCORE_THRESHOLD: z.coerce.number().int().min(0).max(100).default(50), // Minimum eligibility score
+  ROUTING_MAX_FALLBACK_DELAY: z.coerce.number().int().nonnegative().default(10000), // 10 seconds max delay
+  ROUTING_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"), // Enable routing system by default
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

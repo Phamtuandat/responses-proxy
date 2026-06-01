@@ -1,15 +1,57 @@
-// React hooks for provider data management
+// React hooks for provider data management with real-time health monitoring
 import { useState, useEffect, useCallback, useMemo } from "react";
 import type { Provider, ProviderFilters, ProviderTierSummary } from "./providerTypes";
 import { fetchProviders, fetchProviderById, testProvider, refreshProviderHealth } from "./providerApi";
 import { getProvidersByTier, getTierSummary } from "./providerCatalog";
+import { healthWebSocketClient, type HealthMessage, type HealthUpdateMessage, type HealthSummaryMessage } from "../../utils/healthWebSocket";
 
-// Hook for fetching all providers
+// Provider health metrics from WebSocket
+export type ProviderHealthMetrics = {
+  providerId: string;
+  isHealthy: boolean;
+  healthScore: number;
+  responseTime: {
+    average: number;
+    p95: number;
+    p99: number;
+  };
+  errorRate: {
+    rate: number;
+    recentErrors: number;
+    totalRequests: number;
+  };
+  quotaStatus: {
+    usagePercent: number;
+    remaining: number;
+    limit: number;
+    resetTime?: string;
+  };
+  accountStatus: {
+    hasValidAccounts: boolean;
+    accountsNearExpiry: boolean;
+    activeAccounts: number;
+    totalAccounts: number;
+  };
+  lastChecked: number;
+  lastUpdated: number;
+};
+
+export type HealthSummary = {
+  totalProviders: number;
+  healthyProviders: number;
+  degradedProviders: number;
+  unhealthyProviders: number;
+  averageHealthScore: number;
+};
+
+// Hook for fetching all providers with real-time health updates
 export function useProviders() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [healthMetrics, setHealthMetrics] = useState<Map<string, ProviderHealthMetrics>>(new Map());
+  const [healthSummary, setHealthSummary] = useState<HealthSummary | null>(null);
 
   const loadProviders = useCallback(async () => {
     try {
@@ -24,6 +66,61 @@ export function useProviders() {
       setLoading(false);
     }
   }, []);
+
+  // Handle real-time health updates
+  const handleHealthUpdate = useCallback((message: HealthMessage) => {
+    if (message.type === 'health_update') {
+      const updateMessage = message as HealthUpdateMessage;
+      setHealthMetrics(prev => {
+        const updated = new Map(prev);
+        updated.set(updateMessage.providerId, updateMessage.metrics);
+        return updated;
+      });
+
+      // Update provider health status based on metrics
+      setProviders(prev => prev.map(provider => {
+        if (provider.id === updateMessage.providerId) {
+          const metrics = updateMessage.metrics;
+          let healthStatus = provider.healthStatus;
+
+          if (metrics.healthScore >= 70) {
+            healthStatus = 'healthy';
+          } else if (metrics.healthScore >= 40) {
+            healthStatus = 'degraded';
+          } else {
+            healthStatus = 'unhealthy';
+          }
+
+          // Check for rate limiting
+          if (metrics.quotaStatus.usagePercent > 90) {
+            healthStatus = 'rate_limited';
+          }
+
+          // Check for quota exhaustion
+          if (metrics.quotaStatus.usagePercent >= 100) {
+            healthStatus = 'quota_exhausted';
+          }
+
+          return {
+            ...provider,
+            healthStatus,
+            healthScore: metrics.healthScore,
+            lastHealthCheck: new Date(metrics.lastChecked).toISOString()
+          };
+        }
+        return provider;
+      }));
+    } else if (message.type === 'health_summary') {
+      const summaryMessage = message as HealthSummaryMessage;
+      setHealthSummary(summaryMessage.summary);
+    }
+  }, []);
+
+  // Subscribe to health updates
+  useEffect(() => {
+    const unsubscribe = healthWebSocketClient.subscribe(handleHealthUpdate);
+    return unsubscribe;
+  }, [handleHealthUpdate]);
 
   useEffect(() => {
     loadProviders();
@@ -42,11 +139,23 @@ export function useProviders() {
     }
   }, [loadProviders]);
 
+  // Enhanced providers with health metrics
+  const enhancedProviders = useMemo(() => {
+    return providers.map(provider => {
+      const metrics = healthMetrics.get(provider.id);
+      return {
+        ...provider,
+        healthMetrics: metrics
+      };
+    });
+  }, [providers, healthMetrics]);
+
   return {
-    providers,
+    providers: enhancedProviders,
     loading,
     error,
     lastRefresh,
+    healthSummary,
     refresh,
     refreshHealth
   };
@@ -245,7 +354,7 @@ export function useProviderStats(providers: Provider[]) {
   return stats;
 }
 
-// Hook for auto-refresh functionality
+// Hook for auto-refresh functionality with health monitoring
 export function useAutoRefresh(refreshFn: () => Promise<void>, intervalMs: number = 30000) {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
 
@@ -262,5 +371,86 @@ export function useAutoRefresh(refreshFn: () => Promise<void>, intervalMs: numbe
   return {
     autoRefreshEnabled,
     setAutoRefreshEnabled
+  };
+}
+
+// Hook for real-time health monitoring
+export function useHealthMonitoring() {
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
+  const [healthSummary, setHealthSummary] = useState<HealthSummary | null>(null);
+  const [providerHealth, setProviderHealth] = useState<Map<string, ProviderHealthMetrics>>(new Map());
+
+  // Handle health updates
+  const handleHealthUpdate = useCallback((message: HealthMessage) => {
+    if (message.type === 'health_update') {
+      const updateMessage = message as HealthUpdateMessage;
+      setProviderHealth(prev => {
+        const updated = new Map(prev);
+        updated.set(updateMessage.providerId, updateMessage.metrics);
+        return updated;
+      });
+    } else if (message.type === 'health_summary') {
+      const summaryMessage = message as HealthSummaryMessage;
+      setHealthSummary(summaryMessage.summary);
+    }
+  }, []);
+
+  // Monitor connection status
+  useEffect(() => {
+    const checkStatus = () => {
+      setConnectionStatus(healthWebSocketClient.getConnectionStatus());
+    };
+
+    // Check status immediately and then periodically
+    checkStatus();
+    const interval = setInterval(checkStatus, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Subscribe to health updates
+  useEffect(() => {
+    const unsubscribe = healthWebSocketClient.subscribe(handleHealthUpdate);
+    return unsubscribe;
+  }, [handleHealthUpdate]);
+
+  const connect = useCallback(() => {
+    healthWebSocketClient.connect();
+  }, []);
+
+  const disconnect = useCallback(() => {
+    healthWebSocketClient.disconnect();
+  }, []);
+
+  return {
+    connectionStatus,
+    healthSummary,
+    providerHealth,
+    connect,
+    disconnect
+  };
+}
+
+// Hook for auto health monitoring (starts monitoring when component mounts)
+export function useAutoHealthMonitoring(enabled: boolean = true) {
+  const { connectionStatus, healthSummary, providerHealth } = useHealthMonitoring();
+
+  useEffect(() => {
+    if (enabled) {
+      healthWebSocketClient.connect();
+    }
+
+    return () => {
+      if (enabled) {
+        healthWebSocketClient.disconnect();
+      }
+    };
+  }, [enabled]);
+
+  return {
+    connectionStatus,
+    healthSummary,
+    providerHealth,
+    isEnabled: enabled
   };
 }

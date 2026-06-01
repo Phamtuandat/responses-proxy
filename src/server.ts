@@ -109,6 +109,17 @@ import {
   buildCountTokensResponse,
   parseAnthropicRequest,
 } from "./anthropic-messages.js";
+import { RoutingComboRepository } from "./routing-combo-repository.js";
+import { RoutingEngine } from "./routing-engine.js";
+import { RoutingSimulationEngine } from "./routing-simulation-engine.js";
+import { ProviderHealthService } from "./provider-health-service.js";
+import { HealthWebSocketManager } from "./health-websocket-manager.js";
+import {
+  resolveProviderWithRouting,
+  recordRequestResult,
+  type RoutingIntegrationContext,
+  type RoutingRequest
+} from "./routing-integration.js";
 
 const config = readConfig(process.env);
 const CHATGPT_OAUTH_PROVIDER_ID = "account-openai-codex";
@@ -159,6 +170,43 @@ const kiroTokenStore: KiroTokenStore | null = (() => {
     return null;
   }
 })();
+
+// Initialize routing services after all stores are available
+const routingComboRepository = new RoutingComboRepository(providerRepository.getDatabase());
+const routingEngine = new RoutingEngine(providerRepository);
+const routingSimulationEngine = new RoutingSimulationEngine(routingEngine, providerRepository);
+const providerHealthService = new ProviderHealthService(
+  providerRepository,
+  chatGptOAuthStore,
+  kiroTokenStore,
+  config.ROUTING_HEALTH_CHECK_INTERVAL, // Use configurable health check interval
+  {
+    responseTime: {
+      good: 2000, // 2s
+      degraded: 5000 // 5s
+    },
+    errorRate: {
+      good: 0.02, // 2%
+      degraded: 0.1 // 10%
+    },
+    quotaUsage: {
+      warning: 80, // 80%
+      critical: 95 // 95%
+    }
+  }
+);
+const healthWebSocketManager = new HealthWebSocketManager(
+  providerHealthService,
+  config.ROUTING_WEBSOCKET_BROADCAST_INTERVAL // Use configurable broadcast interval
+);
+
+// Create routing integration context
+const routingIntegrationContext: RoutingIntegrationContext = {
+  routingComboRepository,
+  routingEngine,
+  healthService: providerHealthService
+};
+
 const httpRateLimiter = new InMemoryHttpRateLimiter();
 const reactClientDir = path.resolve(process.cwd(), "dist", "client");
 const reactRootStaticAssetFiles = ["favicon.svg", "app-icon.svg"] as const;
@@ -210,6 +258,26 @@ export const app = Fastify({
   trustProxy: config.HTTP_TRUST_PROXY,
   disableRequestLogging: true,
 });
+
+// Activate routing system services after Fastify app is created
+(async () => {
+  try {
+    // Start health monitoring for all providers
+    providerHealthService.startHealthMonitoring();
+    console.log('✓ Provider health monitoring activated');
+
+    // Initialize WebSocket health broadcasts
+    await healthWebSocketManager.initialize(app);
+    console.log('✓ Health WebSocket broadcasts activated');
+
+    // Verify routing services are operational
+    const stats = await routingComboRepository.getComboStats();
+    console.log(`✓ Routing system activated with ${stats.total} combos, ${stats.active} active`);
+  } catch (error) {
+    console.warn('⚠️ Routing system activation failed, falling back to simple provider selection:', error);
+    // System will continue with basic provider selection if routing services fail
+  }
+})();
 
 const DASHBOARD_SESSION_COOKIE = "responses_proxy_dashboard_session";
 
@@ -2149,6 +2217,507 @@ app.post("/api/providers/delete", async (request, reply) => {
     .then((response) => reply.code(response.statusCode).send(response.json()));
 });
 
+// Routing Combos API
+app.get("/api/routing/combos", async (request, reply) => {
+  try {
+    const combos = await routingComboRepository.getAllCombos();
+    const stats = await routingComboRepository.getComboStats();
+    return reply.send({
+      combos,
+      stats
+    });
+  } catch (error) {
+    console.error("Failed to fetch routing combos:", error);
+    return reply.code(500).send({
+      error: "Failed to fetch routing combos",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.get("/api/routing/combos/:id", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+
+  if (!id) {
+    return reply.code(400).send({
+      error: "Missing combo ID"
+    });
+  }
+
+  try {
+    const combo = await routingComboRepository.getComboById(id);
+    if (!combo) {
+      return reply.code(404).send({
+        error: "Routing combo not found"
+      });
+    }
+    return reply.send(combo);
+  } catch (error) {
+    console.error("Failed to fetch routing combo:", error);
+    return reply.code(500).send({
+      error: "Failed to fetch routing combo",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/api/routing/combos", async (request, reply) => {
+  const body = request.body as any;
+
+  try {
+    // Basic validation
+    if (!body.name || typeof body.name !== "string") {
+      return reply.code(400).send({
+        error: "Missing or invalid combo name"
+      });
+    }
+
+    if (!Array.isArray(body.tiers)) {
+      return reply.code(400).send({
+        error: "Missing or invalid tiers array"
+      });
+    }
+
+    if (!body.policies || typeof body.policies !== "object") {
+      return reply.code(400).send({
+        error: "Missing or invalid policies object"
+      });
+    }
+
+    const combo = await routingComboRepository.createCombo(body);
+    return reply.code(201).send(combo);
+  } catch (error) {
+    console.error("Failed to create routing combo:", error);
+    return reply.code(500).send({
+      error: "Failed to create routing combo",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.put("/api/routing/combos/:id", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+  const body = request.body as any;
+
+  if (!id) {
+    return reply.code(400).send({
+      error: "Missing combo ID"
+    });
+  }
+
+  try {
+    // Basic validation
+    if (!body.name || typeof body.name !== "string") {
+      return reply.code(400).send({
+        error: "Missing or invalid combo name"
+      });
+    }
+
+    if (!Array.isArray(body.tiers)) {
+      return reply.code(400).send({
+        error: "Missing or invalid tiers array"
+      });
+    }
+
+    if (!body.policies || typeof body.policies !== "object") {
+      return reply.code(400).send({
+        error: "Missing or invalid policies object"
+      });
+    }
+
+    const combo = await routingComboRepository.updateCombo(id, body);
+    return reply.send(combo);
+  } catch (error) {
+    console.error("Failed to update routing combo:", error);
+    if (error instanceof Error && error.message.includes("not found")) {
+      return reply.code(404).send({
+        error: "Routing combo not found"
+      });
+    }
+    return reply.code(500).send({
+      error: "Failed to update routing combo",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.delete("/api/routing/combos/:id", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+
+  if (!id) {
+    return reply.code(400).send({
+      error: "Missing combo ID"
+    });
+  }
+
+  try {
+    await routingComboRepository.deleteCombo(id);
+    return reply.send({
+      ok: true
+    });
+  } catch (error) {
+    console.error("Failed to delete routing combo:", error);
+    if (error instanceof Error) {
+      if (error.message.includes("not found")) {
+        return reply.code(404).send({
+          error: "Routing combo not found"
+        });
+      }
+      if (error.message.includes("Cannot delete active") || error.message.includes("Cannot delete default")) {
+        return reply.code(400).send({
+          error: error.message
+        });
+      }
+    }
+    return reply.code(500).send({
+      error: "Failed to delete routing combo",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/api/routing/combos/:id/simulate", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+  const body = request.body as any;
+
+  if (!id) {
+    return reply.code(400).send({
+      error: "Missing combo ID"
+    });
+  }
+
+  try {
+    const combo = await routingComboRepository.getComboById(id);
+    if (!combo) {
+      return reply.code(404).send({
+        error: "Routing combo not found"
+      });
+    }
+
+    // Create simulation request with validation
+    const simulationRequest = {
+      comboId: id,
+      route: body.route || 'chat',
+      model: body.model || 'claude-3-5-sonnet-20241022',
+      tokenCount: body.tokenCount || 1000,
+      priority: body.priority || 'normal',
+      includeHealthCheck: body.includeHealthCheck !== false,
+      simulateFailures: body.simulateFailures || false,
+      maxRetries: body.maxRetries || 3
+    };
+
+    // Run real simulation using the routing engine
+    const simulationResult = await routingSimulationEngine.simulate(combo, simulationRequest);
+
+    return reply.send(simulationResult);
+  } catch (error) {
+    console.error("Failed to simulate routing combo:", error);
+    return reply.code(500).send({
+      error: "Failed to simulate routing combo",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/api/routing/combos/:id/set-default", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+
+  if (!id) {
+    return reply.code(400).send({
+      error: "Missing combo ID"
+    });
+  }
+
+  try {
+    await routingComboRepository.setDefaultCombo(id);
+    return reply.send({
+      ok: true
+    });
+  } catch (error) {
+    console.error("Failed to set default routing combo:", error);
+    return reply.code(500).send({
+      error: "Failed to set default routing combo",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+// Provider Health API
+app.get("/api/health/providers", async (request, reply) => {
+  try {
+    const allHealth = providerHealthService.getAllProviderHealth();
+    const healthArray = Array.from(allHealth.values());
+
+    return reply.send({
+      providers: healthArray,
+      summary: providerHealthService.getHealthSummary()
+    });
+  } catch (error) {
+    console.error("Failed to fetch provider health:", error);
+    return reply.code(500).send({
+      error: "Failed to fetch provider health",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.get("/api/health/providers/:providerId", async (request, reply) => {
+  const params = request.params as { providerId?: string };
+  const providerId = typeof params.providerId === "string" ? params.providerId.trim() : "";
+
+  if (!providerId) {
+    return reply.code(400).send({
+      error: "Missing provider ID"
+    });
+  }
+
+  try {
+    const health = providerHealthService.getProviderHealth(providerId);
+    if (!health) {
+      return reply.code(404).send({
+        error: "Provider health data not found"
+      });
+    }
+
+    return reply.send(health);
+  } catch (error) {
+    console.error(`Failed to fetch health for provider ${providerId}:`, error);
+    return reply.code(500).send({
+      error: "Failed to fetch provider health",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/api/health/providers/:providerId/check", async (request, reply) => {
+  const params = request.params as { providerId?: string };
+  const providerId = typeof params.providerId === "string" ? params.providerId.trim() : "";
+
+  if (!providerId) {
+    return reply.code(400).send({
+      error: "Missing provider ID"
+    });
+  }
+
+  try {
+    const result = await providerHealthService.forceHealthCheck(providerId);
+
+    if (!result.success) {
+      return reply.code(500).send({
+        error: "Health check failed",
+        message: result.error
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      metrics: result.metrics
+    });
+  } catch (error) {
+    console.error(`Failed to check health for provider ${providerId}:`, error);
+    return reply.code(500).send({
+      error: "Failed to perform health check",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.get("/api/health/summary", async (request, reply) => {
+  try {
+    const summary = providerHealthService.getHealthSummary();
+    return reply.send(summary);
+  } catch (error) {
+    console.error("Failed to fetch health summary:", error);
+    return reply.code(500).send({
+      error: "Failed to fetch health summary",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/api/health/record-request", async (request, reply) => {
+  const body = request.body as any;
+
+  if (!body.providerId || typeof body.providerId !== "string") {
+    return reply.code(400).send({
+      error: "Missing or invalid provider ID"
+    });
+  }
+
+  if (typeof body.responseTime !== "number" || body.responseTime < 0) {
+    return reply.code(400).send({
+      error: "Missing or invalid response time"
+    });
+  }
+
+  if (typeof body.isError !== "boolean") {
+    return reply.code(400).send({
+      error: "Missing or invalid error flag"
+    });
+  }
+
+  try {
+    providerHealthService.recordRequestResult(
+      body.providerId,
+      body.responseTime,
+      body.isError
+    );
+
+    return reply.send({
+      ok: true
+    });
+  } catch (error) {
+    console.error("Failed to record request result:", error);
+    return reply.code(500).send({
+      error: "Failed to record request result",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+// Client Route Assignment API
+app.get("/api/routing/client-routes", async (request, reply) => {
+  try {
+    const assignments = await routingComboRepository.getAllClientRouteAssignments();
+    return reply.send({
+      assignments
+    });
+  } catch (error) {
+    console.error("Failed to fetch client route assignments:", error);
+    return reply.code(500).send({
+      error: "Failed to fetch client route assignments",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.get("/api/routing/client-routes/:clientRoute", async (request, reply) => {
+  const params = request.params as { clientRoute?: string };
+  const clientRoute = typeof params.clientRoute === "string" ? params.clientRoute.trim() : "";
+
+  if (!clientRoute) {
+    return reply.code(400).send({
+      error: "Missing client route"
+    });
+  }
+
+  try {
+    const comboId = await routingComboRepository.getClientRouteCombo(clientRoute);
+
+    if (!comboId) {
+      return reply.send({
+        clientRoute,
+        comboId: null,
+        combo: null
+      });
+    }
+
+    const combo = await routingComboRepository.getComboById(comboId);
+    return reply.send({
+      clientRoute,
+      comboId,
+      combo
+    });
+  } catch (error) {
+    console.error(`Failed to fetch routing combo for client route ${clientRoute}:`, error);
+    return reply.code(500).send({
+      error: "Failed to fetch client route assignment",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/api/routing/client-routes/:clientRoute/assign", async (request, reply) => {
+  const params = request.params as { clientRoute?: string };
+  const clientRoute = typeof params.clientRoute === "string" ? params.clientRoute.trim() : "";
+  const body = request.body as any;
+
+  if (!clientRoute) {
+    return reply.code(400).send({
+      error: "Missing client route"
+    });
+  }
+
+  if (!body.comboId || typeof body.comboId !== "string") {
+    return reply.code(400).send({
+      error: "Missing or invalid combo ID"
+    });
+  }
+
+  try {
+    await routingComboRepository.assignClientRouteCombo(clientRoute, body.comboId);
+
+    return reply.send({
+      ok: true,
+      clientRoute,
+      comboId: body.comboId
+    });
+  } catch (error) {
+    console.error(`Failed to assign routing combo ${body.comboId} to client route ${clientRoute}:`, error);
+    return reply.code(500).send({
+      error: "Failed to assign routing combo",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.delete("/api/routing/client-routes/:clientRoute/assign", async (request, reply) => {
+  const params = request.params as { clientRoute?: string };
+  const clientRoute = typeof params.clientRoute === "string" ? params.clientRoute.trim() : "";
+
+  if (!clientRoute) {
+    return reply.code(400).send({
+      error: "Missing client route"
+    });
+  }
+
+  try {
+    await routingComboRepository.unassignClientRouteCombo(clientRoute);
+
+    return reply.send({
+      ok: true,
+      clientRoute
+    });
+  } catch (error) {
+    console.error(`Failed to unassign routing combo from client route ${clientRoute}:`, error);
+    return reply.code(500).send({
+      error: "Failed to unassign routing combo",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.get("/api/routing/combos/:comboId/client-routes", async (request, reply) => {
+  const params = request.params as { comboId?: string };
+  const comboId = typeof params.comboId === "string" ? params.comboId.trim() : "";
+
+  if (!comboId) {
+    return reply.code(400).send({
+      error: "Missing combo ID"
+    });
+  }
+
+  try {
+    const clientRoutes = await routingComboRepository.getComboClientRoutes(comboId);
+
+    return reply.send({
+      comboId,
+      clientRoutes
+    });
+  } catch (error) {
+    console.error(`Failed to fetch client routes for combo ${comboId}:`, error);
+    return reply.code(500).send({
+      error: "Failed to fetch combo client routes",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
 for (const routePath of dashboardEntryPaths) {
   app.get(routePath, async (_request, reply) => {
     return serveReactDashboard(reply);
@@ -2288,18 +2857,26 @@ app.get("/v1/models", async (request, reply) => {
     return reply.code(routingAccess.error.statusCode).send(routingAccess.error.body);
   }
   const providerHint = readRequestProviderHint(request.headers, undefined);
-  const providerResolution = resolveProviderForRequest({
-    providers: routingAccess.providers,
-    explicitProviderId: providerHint.providerId,
-    explicitProviderName: providerHint.providerName,
-  });
 
-  if ("error" in providerResolution) {
-    return reply.code(providerResolution.error.statusCode).send({
-      error: providerResolution.error,
+  // Use routing integration for enhanced provider selection
+  const routingRequest: RoutingRequest = {
+    clientRoute: "default", // /v1/models uses default client route
+    providers: routingAccess.providers,
+    providerHint,
+    requestId: randomUUID(),
+    startedAt: Date.now(),
+    headers: request.headers,
+    metadata: undefined
+  };
+
+  const routingResult = await resolveProviderWithRouting(routingRequest, routingIntegrationContext);
+
+  if ("error" in routingResult) {
+    return reply.code(routingResult.error.statusCode).send({
+      error: routingResult.error,
     });
   }
-  const selectedProvider = providerResolution.provider;
+  const selectedProvider = routingResult.provider;
 
   // Kiro provider speaks the Anthropic Messages API for Claude Code, which does a
   // preflight `GET /v1/models` to validate the configured model. Return an
@@ -2435,17 +3012,42 @@ async function handleResponsesRequest(
     return reply.code(limitError.statusCode).send(limitError.body);
   }
   const providerHint = readRequestProviderHint(request.headers, parsed.data.metadata);
-  const providerResolution = resolveProviderForRequest({
+
+  // Use routing integration for enhanced provider selection
+  const routingRequest: RoutingRequest = {
+    clientRoute,
     providers: routingAccess.providers,
-    explicitProviderId: providerHint.providerId,
-    explicitProviderName: providerHint.providerName,
-  });
-  if ("error" in providerResolution) {
-    return reply.code(providerResolution.error.statusCode).send({
-      error: providerResolution.error,
+    providerHint,
+    requestId,
+    startedAt,
+    headers: request.headers,
+    metadata: parsed.data.metadata
+  };
+
+  const routingResult = await resolveProviderWithRouting(routingRequest, routingIntegrationContext);
+
+  if ("error" in routingResult) {
+    return reply.code(routingResult.error.statusCode).send({
+      error: routingResult.error,
     });
   }
-  const selectedProvider = providerResolution.provider;
+
+  const selectedProvider = routingResult.provider;
+
+  // Add routing headers for debugging and monitoring
+  reply.header("x-proxy-routing-method", routingResult.matchReason);
+  if (routingResult.routingComboId) {
+    reply.header("x-proxy-routing-combo", routingResult.routingComboId);
+  }
+  if (routingResult.tierName) {
+    reply.header("x-proxy-routing-tier", routingResult.tierName);
+  }
+  if (routingResult.selectionTime !== undefined) {
+    reply.header("x-proxy-routing-time-ms", routingResult.selectionTime.toString());
+  }
+  if (routingResult.fallbackCount !== undefined && routingResult.fallbackCount > 0) {
+    reply.header("x-proxy-routing-fallbacks", routingResult.fallbackCount.toString());
+  }
   if (selectedProvider.authMode === "kiro") {
     const kiroModelOverride = providerRepository.getModelOverride(clientRoute);
     return handleKiroResponsesRequest({
@@ -2681,6 +3283,15 @@ async function handleResponsesRequest(
         timestamp: new Date().toISOString(),
       };
       setLatestPromptCacheObservation(latestPromptCacheObservation);
+
+      // Record successful streaming request for health monitoring
+      recordRequestResult(
+        routingIntegrationContext,
+        selectedProvider.id,
+        Date.now() - startedAt,
+        false // not an error
+      );
+
       request.log.info(
         {
         requestId,
@@ -2832,6 +3443,15 @@ async function handleResponsesRequest(
     );
     reply.header("x-proxy-rtk-applied", rtkLayerResult.stats.applied ? "1" : "0");
     reply.header("x-proxy-rtk-chars-saved", String(rtkLayerResult.stats.charsSaved));
+
+    // Record successful request for health monitoring
+    recordRequestResult(
+      routingIntegrationContext,
+      selectedProvider.id,
+      Date.now() - startedAt,
+      false // not an error
+    );
+
     reply.send(payload);
   } catch (error) {
     request.log.error(
@@ -2869,6 +3489,14 @@ async function handleResponsesRequest(
       upstreamBody,
       ...traceContext,
     });
+
+    // Record failed request for health monitoring
+    recordRequestResult(
+      routingIntegrationContext,
+      selectedProvider.id,
+      Date.now() - startedAt,
+      true // is an error
+    );
 
     const resolvedError = resolveProxyError({
       statusCode,
@@ -2983,18 +3611,27 @@ async function handleAnthropicMessagesRequest(
       : { kind: "operator" as const };
 
   const providerHint = readRequestProviderHint(request.headers, undefined);
-  const providerResolution = resolveProviderForRequest({
+
+  // Use routing integration for enhanced provider selection
+  const routingRequest: RoutingRequest = {
+    clientRoute,
     providers: routingAccess.providers,
-    explicitProviderId: providerHint.providerId,
-    explicitProviderName: providerHint.providerName,
-  });
-  if ("error" in providerResolution) {
+    providerHint,
+    requestId,
+    startedAt,
+    headers: request.headers,
+    metadata: undefined
+  };
+
+  const routingResult = await resolveProviderWithRouting(routingRequest, routingIntegrationContext);
+
+  if ("error" in routingResult) {
     reply.header("x-proxy-request-id", requestId);
     return reply
-      .code(providerResolution.error.statusCode)
-      .send(buildAnthropicError("authentication_error", providerResolution.error.message));
+      .code(routingResult.error.statusCode)
+      .send(buildAnthropicError("authentication_error", routingResult.error.message));
   }
-  const provider = providerResolution.provider;
+  const provider = routingResult.provider;
   if (provider.authMode !== "kiro") {
     reply.header("x-proxy-request-id", requestId);
     return reply
@@ -5958,10 +6595,30 @@ app.setErrorHandler((error, _request, reply) => {
 
 async function main(): Promise<void> {
   logDashboardMode();
+
+  // Initialize WebSocket support for health monitoring
+  try {
+    await healthWebSocketManager.initialize(app);
+    console.log('Health WebSocket manager initialized');
+  } catch (error) {
+    console.error('Failed to initialize health WebSocket manager:', error);
+  }
+
+  // Start provider health monitoring
+  try {
+    providerHealthService.startHealthMonitoring();
+    console.log('Provider health monitoring started');
+  } catch (error) {
+    console.error('Failed to start provider health monitoring:', error);
+  }
+
   await app.listen({
     host: config.HOST,
     port: config.PORT,
   });
+
+  console.log(`Server started on ${config.HOST}:${config.PORT}`);
+  console.log(`Health monitoring active for ${providerRepository.listProviders().length} providers`);
 }
 
 if (process.env.RESPONSES_PROXY_DISABLE_LISTEN !== "true") {
@@ -5970,3 +6627,50 @@ if (process.env.RESPONSES_PROXY_DISABLE_LISTEN !== "true") {
     process.exit(1);
   });
 }
+
+// Graceful shutdown handling
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully...');
+
+  try {
+    // Stop health monitoring
+    providerHealthService.stopHealthMonitoring();
+    console.log('Provider health monitoring stopped');
+
+    // Shutdown WebSocket manager
+    healthWebSocketManager.shutdown();
+    console.log('Health WebSocket manager shutdown');
+
+    // Close Fastify server
+    await app.close();
+    console.log('Server closed');
+
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully...');
+
+  try {
+    // Stop health monitoring
+    providerHealthService.stopHealthMonitoring();
+    console.log('Provider health monitoring stopped');
+
+    // Shutdown WebSocket manager
+    healthWebSocketManager.shutdown();
+    console.log('Health WebSocket manager shutdown');
+
+    // Close Fastify server
+    await app.close();
+    console.log('Server closed');
+
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+});

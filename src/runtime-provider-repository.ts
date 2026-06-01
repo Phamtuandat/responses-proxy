@@ -317,6 +317,10 @@ export class RuntimeProviderRepository {
     return repository;
   }
 
+  getDatabase(): Database {
+    return this.db;
+  }
+
   getActiveProviderId(): string {
     return this.activeProviderId;
   }
@@ -1294,6 +1298,59 @@ function ensureSchema(db: Database): void {
       total_tokens INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (client_route, window_start)
+    );
+
+    -- Routing combo tables
+    CREATE TABLE IF NOT EXISTS routing_combos (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS routing_tiers (
+      id TEXT PRIMARY KEY,
+      combo_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      priority INTEGER NOT NULL,
+      tier TEXT NOT NULL,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      fallback_delay INTEGER NOT NULL DEFAULT 1000,
+      max_retries INTEGER NOT NULL DEFAULT 2,
+      health_threshold TEXT,
+      FOREIGN KEY (combo_id) REFERENCES routing_combos(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS routing_tier_providers (
+      id TEXT PRIMARY KEY,
+      tier_id TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      weight INTEGER NOT NULL DEFAULT 50,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      model_override TEXT,
+      FOREIGN KEY (tier_id) REFERENCES routing_tiers(id) ON DELETE CASCADE,
+      FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS routing_combo_policies (
+      combo_id TEXT PRIMARY KEY,
+      load_balancing TEXT NOT NULL DEFAULT 'weighted',
+      failover_strategy TEXT NOT NULL DEFAULT 'immediate',
+      token_budget_mode TEXT NOT NULL DEFAULT 'per_route',
+      quota_management TEXT,
+      cost_optimization TEXT,
+      retry_policy TEXT,
+      FOREIGN KEY (combo_id) REFERENCES routing_combos(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS routing_combo_client_routes (
+      combo_id TEXT NOT NULL,
+      client_route TEXT NOT NULL,
+      PRIMARY KEY (combo_id, client_route),
+      FOREIGN KEY (combo_id) REFERENCES routing_combos(id) ON DELETE CASCADE
     );
   `);
   ensureProvidersColumn(db, "owned_by", "TEXT");
