@@ -209,77 +209,21 @@ function renderScreen(routeState: RouteState) {
     case "combos":
       return <CombosScreen />;
     case "quota-tracker":
-      return (
-        <EmptyState
-          title="Quota Tracker"
-          description="Provider quota monitoring and reset tracking will be available here."
-          actionHref="#/usage"
-          actionLabel="View Usage"
-        />
-      );
+      return <UsageScreen />;
     case "mitm":
-      return (
-        <EmptyState
-          title="MITM"
-          description="Request inspection and proxy debugging tools will be available here."
-          actionHref="#/endpoint"
-          actionLabel="Back to Endpoint"
-        />
-      );
+      return <CacheScreen />;
     case "cli-tools":
-      return (
-        <EmptyState
-          title="CLI Tools"
-          description="Setup commands for Claude Code, Codex, Cursor, Cline, and other tools will be available here."
-          actionHref="#/config-helper"
-          actionLabel="Config Helper"
-        />
-      );
+      return <ConfigHelperScreen />;
     case "media-providers":
-      return (
-        <EmptyState
-          title="Media Providers"
-          description="Image, audio, video, and multimodal provider configuration will be available here."
-          actionHref="#/providers"
-          actionLabel="Manage Providers"
-        />
-      );
+      return <EnhancedProvidersScreen />;
     case "proxy-pools":
-      return (
-        <EmptyState
-          title="Proxy Pools"
-          description="Network proxy pool management will be available here."
-          actionHref="#/endpoint"
-          actionLabel="Back to Endpoint"
-        />
-      );
+      return <EnhancedProvidersScreen />;
     case "skills":
-      return (
-        <EmptyState
-          title="Skills"
-          description="Installed tools, extensions, and router skills will be available here."
-          actionHref="#/endpoint"
-          actionLabel="Back to Endpoint"
-        />
-      );
+      return <RtkScreen />;
     case "console-log":
-      return (
-        <EmptyState
-          title="Console Log"
-          description="Runtime logs, provider errors, and request traces will be available here."
-          actionHref="#/endpoint"
-          actionLabel="Back to Endpoint"
-        />
-      );
+      return <CacheScreen />;
     case "settings":
-      return (
-        <EmptyState
-          title="Settings"
-          description="App settings, auth, theme, and security configuration will be available here."
-          actionHref="#/auth-management"
-          actionLabel="Auth Management"
-        />
-      );
+      return <AuthScreen />;
 
     // Legacy routes
     case "providers":
