@@ -11,6 +11,127 @@ import { useProviders, useAutoHealthMonitoring } from "../features/providers/pro
 import type { Provider } from "../features/providers/providerTypes";
 import { formatNumber, formatPercent } from "../lib/format";
 
+// Local premium styling overrides embedded for visual encapsulation
+const PremiumStyles = () => (
+  <style>{`
+    /* Server status pulsing indicator */
+    @keyframes statusPulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.4);
+      }
+      70% {
+        box-shadow: 0 0 0 8px rgba(48, 209, 88, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(48, 209, 88, 0);
+      }
+    }
+
+    .status-pulse-dot {
+      width: 10px;
+      height: 10px;
+      background-color: var(--status-healthy);
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+      animation: statusPulse 2s infinite var(--animation-easing);
+    }
+
+    /* Fallback progress bar styles */
+    .tier-progress-container {
+      width: 100%;
+      background: var(--neutral-soft);
+      height: 8px;
+      border-radius: var(--radius-pill);
+      overflow: hidden;
+      margin-top: 8px;
+      position: relative;
+    }
+
+    .tier-progress-fill {
+      height: 100%;
+      border-radius: var(--radius-pill);
+      transition: width var(--animation-normal) var(--animation-easing), background-color var(--animation-normal) var(--animation-easing);
+    }
+
+    /* Setup command tab styles */
+    .setup-tab-bar {
+      display: flex;
+      gap: var(--space-2);
+      border-bottom: 1px solid var(--line);
+      margin-bottom: var(--space-4);
+      padding-bottom: var(--space-1);
+    }
+
+    .setup-tab-btn {
+      background: none;
+      border: none;
+      font-family: inherit;
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--text-secondary);
+      padding: var(--space-2) var(--space-4);
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      transition: all var(--animation-fast) var(--animation-easing);
+    }
+
+    .setup-tab-btn:hover {
+      color: var(--text-primary);
+      background: var(--interactive-hover);
+    }
+
+    .setup-tab-btn.active {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    /* Stylized workflow step layout */
+    .pipeline-container-premium {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+      width: 100%;
+    }
+
+    .pipeline-step-premium {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3) var(--space-4);
+      background: var(--surface-muted);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      transition: all var(--animation-normal) var(--animation-easing);
+      cursor: default;
+    }
+
+    .pipeline-step-premium:hover {
+      background: var(--surface-hover);
+      border-color: var(--line-strong);
+      transform: translateX(4px);
+    }
+
+    .pipeline-step-premium.active {
+      border-left: 3px solid var(--accent);
+      background: var(--surface);
+    }
+
+    .step-indicator-premium {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: var(--text-xs);
+      font-weight: 600;
+    }
+  `}</style>
+);
+
 interface ServerStatusCardProps {
   health: HealthResponse | null;
   loading: boolean;
@@ -30,7 +151,7 @@ function ServerStatusCard({ health, loading, endpointUrl, onRefresh }: ServerSta
         <div className="status-item">
           <div className="status-indicator">
             {isRunning ? (
-              <CheckCircleIcon className="status-icon status-healthy" />
+              <span className="status-pulse-dot" />
             ) : (
               <AlertIcon className="status-icon status-error" />
             )}
@@ -100,17 +221,67 @@ function ActiveProviderCard({ health, providers }: ActiveProviderCardProps) {
                       (activeProvider as any)?.capabilities?.defaultModels?.[0] ||
                       "auto";
 
+  // Dynamic vendor-specific HSL styling attributes
+  const vendorStyles = (() => {
+    const id = activeProviderId?.toLowerCase() || "";
+    if (id.includes("claude") || id.includes("anthropic")) {
+      return {
+        bg: "rgba(245, 166, 35, 0.06)",
+        border: "rgba(245, 166, 35, 0.22)",
+        text: "var(--warning)",
+        icon: "🦉"
+      };
+    } else if (id.includes("openai") || id.includes("codex") || id.includes("gpt")) {
+      return {
+        bg: "rgba(48, 209, 88, 0.06)",
+        border: "rgba(48, 209, 88, 0.22)",
+        text: "var(--success)",
+        icon: "🧠"
+      };
+    } else if (id.includes("gemini") || id.includes("google")) {
+      return {
+        bg: "rgba(10, 132, 255, 0.06)",
+        border: "rgba(10, 132, 255, 0.22)",
+        text: "var(--accent)",
+        icon: "✨"
+      };
+    } else if (id.includes("kiro")) {
+      return {
+        bg: "rgba(111, 91, 255, 0.06)",
+        border: "rgba(111, 91, 255, 0.22)",
+        text: "var(--accent-2)",
+        icon: "⚡"
+      };
+    } else {
+      return {
+        bg: "var(--neutral-soft)",
+        border: "var(--line)",
+        text: "var(--text-secondary)",
+        icon: "🔌"
+      };
+    }
+  })();
+
   return (
     <SurfaceCard
       title="Active Provider"
       description="Currently selected provider for new requests"
+      style={{
+        border: `1px solid ${vendorStyles.border}`,
+        background: vendorStyles.bg,
+        transition: "all var(--animation-normal) var(--animation-easing)",
+      }}
     >
       <div className="active-provider-info">
-        <div className="provider-header">
-          <ProvidersIcon className="provider-icon" />
-          <div className="provider-details">
-            <div className="provider-name">{displayName}</div>
-            <div className="provider-meta">
+        <div className="provider-header" style={{ display: "flex", alignItems: "center" }}>
+          <div className="provider-vendor-icon" style={{ fontSize: "2rem", marginRight: "12px" }}>
+            {vendorStyles.icon}
+          </div>
+          <div className="provider-details" style={{ flex: 1 }}>
+            <div className="provider-name" style={{ color: vendorStyles.text, fontWeight: "600", fontSize: "1.1rem" }}>
+              {displayName}
+            </div>
+            <div className="provider-meta" style={{ marginTop: "4px" }}>
               <StatusBadge variant="accent" size="sm">
                 {tier}
               </StatusBadge>
@@ -123,9 +294,9 @@ function ActiveProviderCard({ health, providers }: ActiveProviderCardProps) {
             </div>
           </div>
         </div>
-        <div className="provider-model">
-          <div className="model-label">Active Model</div>
-          <code className="model-name">{activeModel}</code>
+        <div className="provider-model" style={{ marginTop: "16px" }}>
+          <div className="model-label" style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Active Model</div>
+          <code className="model-name" style={{ display: "block", marginTop: "4px" }}>{activeModel}</code>
         </div>
       </div>
     </SurfaceCard>
@@ -150,6 +321,19 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
       status = healthyCount > 0 ? "healthy" : "warning";
     }
 
+    const usagePercent = configuredProviders.length > 0
+      ? (healthyCount / configuredProviders.length) * 100
+      : 0;
+
+    let barColor = "var(--neutral-soft)";
+    if (configuredProviders.length > 0) {
+      barColor = usagePercent === 100
+        ? "var(--success)"
+        : usagePercent > 0
+          ? "var(--warning)"
+          : "var(--danger)";
+    }
+
     const tierLabels = {
       subscription: "Subscription",
       cheap: "Cheap",
@@ -160,7 +344,9 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
       tier: tierLabels[tier],
       providers: configuredProviders.length,
       healthy: healthyCount,
-      status
+      status,
+      usagePercent,
+      barColor
     };
   });
 
@@ -171,10 +357,10 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
     >
       <div className="fallback-tiers-list">
         {tierData.map((tier) => (
-          <div key={tier.tier} className="fallback-tier-item">
-            <div className="tier-info">
-              <div className="tier-name">{tier.tier}</div>
-              <div className="tier-stats">
+          <div key={tier.tier} className="fallback-tier-item" style={{ marginBottom: "16px" }}>
+            <div className="tier-info" style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+              <div className="tier-name" style={{ fontWeight: "500" }}>{tier.tier}</div>
+              <div className="tier-stats" style={{ fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>
                 {tier.providers > 0 ? (
                   `${tier.healthy}/${tier.providers} healthy`
                 ) : (
@@ -183,16 +369,31 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
               </div>
             </div>
             {tier.providers > 0 ? (
-              <StatusBadge
-                variant={tier.status === "healthy" ? "success" : "warning"}
-                size="sm"
-              >
-                {tier.status === "healthy" ? "Ready" : "Warning"}
-              </StatusBadge>
+              <>
+                <div className="tier-progress-container">
+                  <div 
+                    className="tier-progress-fill" 
+                    style={{ 
+                      width: `${tier.usagePercent}%`, 
+                      backgroundColor: tier.barColor 
+                    }} 
+                  />
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
+                  <StatusBadge
+                    variant={tier.status === "healthy" ? "success" : "warning"}
+                    size="xs"
+                  >
+                    {tier.status === "healthy" ? "Ready" : "Warning"}
+                  </StatusBadge>
+                </div>
+              </>
             ) : (
-              <StatusBadge variant="neutral" size="sm">
-                Disabled
-              </StatusBadge>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
+                <StatusBadge variant="neutral" size="xs">
+                  Disabled
+                </StatusBadge>
+              </div>
             )}
           </div>
         ))}
@@ -214,11 +415,11 @@ function RoutingPipelineCard({ health, providers, endpointUrl }: RoutingPipeline
   const activeTier = activeProvider?.tier ? `${activeProvider.tier.toUpperCase()} Tier` : "Routing Pipeline";
 
   const routingPipeline = [
-    { step: "Client Tool", status: "active", description: "Claude Code / Cline / API Client" },
-    { step: "Local Endpoint", status: "active", description: endpointUrl.replace(/^https?:\/\//, "") },
-    { step: "Router Engine", status: "active", description: "Smart Multi-Tier Routing" },
-    { step: activeTier, status: "active", description: activeProviderName },
-    { step: "Response", status: "active", description: "Streaming + Prompt Caching" }
+    { step: "Client CLI", description: "Claude Code / Cline Client", active: true },
+    { step: "Local Proxy", description: endpointUrl.replace(/^https?:\/\//, ""), active: true },
+    { step: "Router Engine", description: "Failover Strategy Routing", active: true },
+    { step: activeTier, description: activeProviderName, active: activeProvider !== undefined },
+    { step: "Response Stream", description: "Dynamic cache delivery", active: activeProvider !== undefined }
   ];
 
   return (
@@ -226,22 +427,25 @@ function RoutingPipelineCard({ health, providers, endpointUrl }: RoutingPipeline
       title="Routing Pipeline"
       description="Request flow through the router system"
     >
-      <div className="routing-pipeline">
+      <div className="pipeline-container-premium">
         {routingPipeline.map((step, index) => (
-          <React.Fragment key={step.step}>
-            <div className="pipeline-step">
-              <div className="step-indicator">
-                <CheckCircleIcon className="step-icon status-healthy" />
-              </div>
-              <div className="step-details">
-                <div className="step-name">{step.step}</div>
-                <div className="step-description">{step.description}</div>
-              </div>
+          <div 
+            key={step.step} 
+            className={`pipeline-step-premium ${step.active ? "active" : ""}`}
+          >
+            <div className="step-indicator-premium">
+              {index + 1}
             </div>
-            {index < routingPipeline.length - 1 && (
-              <div className="pipeline-arrow">→</div>
-            )}
-          </React.Fragment>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: "600", fontSize: "var(--text-sm)" }}>{step.step}</div>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>{step.description}</div>
+            </div>
+            <div className="step-status">
+              <StatusBadge variant={step.active ? "success" : "neutral"} size="xs">
+                {step.active ? "Active" : "Pending"}
+              </StatusBadge>
+            </div>
+          </div>
         ))}
       </div>
     </SurfaceCard>
@@ -249,27 +453,30 @@ function RoutingPipelineCard({ health, providers, endpointUrl }: RoutingPipeline
 }
 
 function QuickSetupCard({ endpointUrl }: { endpointUrl: string }) {
-  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"claude" | "cursor" | "openai">("claude");
+  const [copied, setCopied] = useState(false);
 
-  const setupCommands = [
-    {
+  const setupCommands = {
+    claude: {
       tool: "Claude Code",
       command: `export ANTHROPIC_API_KEY="your-key-here"\nexport ANTHROPIC_BASE_URL="${endpointUrl}"`
     },
-    {
+    cursor: {
       tool: "Cursor",
       command: `// In Cursor settings:\n{\n  "anthropic.baseURL": "${endpointUrl}",\n  "anthropic.apiKey": "your-key-here"\n}`
     },
-    {
+    openai: {
       tool: "OpenAI CLI",
       command: `export OPENAI_API_KEY="your-key-here"\nexport OPENAI_BASE_URL="${endpointUrl}"`
     }
-  ];
+  };
 
-  const copyCommand = (command: string, tool: string) => {
+  const currentSetup = setupCommands[activeTab];
+
+  const copyCommand = (command: string) => {
     navigator.clipboard.writeText(command);
-    setCopiedCommand(tool);
-    setTimeout(() => setCopiedCommand(null), 2000);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -277,22 +484,50 @@ function QuickSetupCard({ endpointUrl }: { endpointUrl: string }) {
       title="Quick Setup"
       description="Copy configuration for popular AI tools"
     >
-      <div className="setup-commands">
-        {setupCommands.map((item) => (
-          <div key={item.tool} className="setup-command-item">
-            <div className="command-header">
-              <span className="command-tool">{item.tool}</span>
-              <button
-                className="copy-command-button"
-                onClick={() => copyCommand(item.command, item.tool)}
-                title={`Copy ${item.tool} configuration`}
-              >
-                {copiedCommand === item.tool ? "Copied!" : "Copy"}
-              </button>
-            </div>
-            <pre className="command-code">{item.command}</pre>
-          </div>
-        ))}
+      <div className="setup-tab-bar">
+        <button 
+          className={`setup-tab-btn ${activeTab === "claude" ? "active" : ""}`}
+          onClick={() => setActiveTab("claude")}
+        >
+          Claude Code
+        </button>
+        <button 
+          className={`setup-tab-btn ${activeTab === "cursor" ? "active" : ""}`}
+          onClick={() => setActiveTab("cursor")}
+        >
+          Cursor
+        </button>
+        <button 
+          className={`setup-tab-btn ${activeTab === "openai" ? "active" : ""}`}
+          onClick={() => setActiveTab("openai")}
+        >
+          OpenAI CLI
+        </button>
+      </div>
+
+      <div className="setup-command-item" style={{ position: "relative", marginTop: "12px" }}>
+        <button
+          className="copy-command-button"
+          onClick={() => copyCommand(currentSetup.command)}
+          style={{
+            position: "absolute",
+            top: "8px",
+            right: "8px",
+            zIndex: 10,
+            background: "var(--control-bg)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--radius-sm)",
+            padding: "4px 8px",
+            fontSize: "var(--text-xs)",
+            cursor: "pointer",
+            transition: "all var(--animation-fast) var(--animation-easing)",
+          }}
+        >
+          {copied ? "Copied!" : "Copy"}
+        </button>
+        <pre className="command-code" style={{ paddingRight: "70px", margin: 0 }}>
+          {currentSetup.command}
+        </pre>
       </div>
     </SurfaceCard>
   );
@@ -348,6 +583,7 @@ export function EndpointScreen() {
 
   return (
     <div className="screen-stack">
+      <PremiumStyles />
       <PageHeader
         icon={EndpointIcon}
         title="Endpoint"
