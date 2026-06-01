@@ -11,126 +11,48 @@ import { useProviders, useAutoHealthMonitoring } from "../features/providers/pro
 import type { Provider } from "../features/providers/providerTypes";
 import { formatNumber, formatPercent } from "../lib/format";
 
-// Local premium styling overrides embedded for visual encapsulation
-const PremiumStyles = () => (
-  <style>{`
-    /* Server status pulsing indicator */
-    @keyframes statusPulse {
-      0% {
-        box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.4);
+// Helper function to render syntax-highlighted terminal commands
+function renderSyntaxHighlightedCommand(cmd: string, type: "claude" | "cursor" | "openai") {
+  if (type === "cursor") {
+    return cmd.split("\n").map((line, idx) => {
+      if (line.trim().startsWith("//")) {
+        return (
+          <div key={idx} style={{ color: "rgba(255, 255, 255, 0.44)", fontStyle: "italic" }}>
+            {line}
+          </div>
+        );
       }
-      70% {
-        box-shadow: 0 0 0 8px rgba(48, 209, 88, 0);
+      const parts = line.split(":");
+      if (parts.length >= 2) {
+        const key = parts[0];
+        const val = parts.slice(1).join(":");
+        return (
+          <div key={idx}>
+            <span style={{ color: "#ff8c00" }}>{key}</span>:
+            <span style={{ color: "#64a8ff" }}>{val}</span>
+          </div>
+        );
       }
-      100% {
-        box-shadow: 0 0 0 0 rgba(48, 209, 88, 0);
+      return <div key={idx} style={{ color: "rgba(255, 255, 255, 0.6)" }}>{line}</div>;
+    });
+  } else {
+    return cmd.split("\n").map((line, idx) => {
+      if (line.startsWith("export ")) {
+        const parts = line.split("=");
+        const variable = parts[0];
+        const value = parts.slice(1).join("=");
+        return (
+          <div key={idx}>
+            <span className="command-highlight">export</span>{" "}
+            <span className="variable-highlight">{variable.replace("export ", "")}</span>=
+            <span style={{ color: "#64a8ff" }}>{value}</span>
+          </div>
+        );
       }
-    }
-
-    .status-pulse-dot {
-      width: 10px;
-      height: 10px;
-      background-color: var(--status-healthy);
-      border-radius: 50%;
-      display: inline-block;
-      margin-right: 8px;
-      animation: statusPulse 2s infinite var(--animation-easing);
-    }
-
-    /* Fallback progress bar styles */
-    .tier-progress-container {
-      width: 100%;
-      background: var(--neutral-soft);
-      height: 8px;
-      border-radius: var(--radius-pill);
-      overflow: hidden;
-      margin-top: 8px;
-      position: relative;
-    }
-
-    .tier-progress-fill {
-      height: 100%;
-      border-radius: var(--radius-pill);
-      transition: width var(--animation-normal) var(--animation-easing), background-color var(--animation-normal) var(--animation-easing);
-    }
-
-    /* Setup command tab styles */
-    .setup-tab-bar {
-      display: flex;
-      gap: var(--space-2);
-      border-bottom: 1px solid var(--line);
-      margin-bottom: var(--space-4);
-      padding-bottom: var(--space-1);
-    }
-
-    .setup-tab-btn {
-      background: none;
-      border: none;
-      font-family: inherit;
-      font-size: var(--text-sm);
-      font-weight: 500;
-      color: var(--text-secondary);
-      padding: var(--space-2) var(--space-4);
-      cursor: pointer;
-      border-radius: var(--radius-sm);
-      transition: all var(--animation-fast) var(--animation-easing);
-    }
-
-    .setup-tab-btn:hover {
-      color: var(--text-primary);
-      background: var(--interactive-hover);
-    }
-
-    .setup-tab-btn.active {
-      color: var(--accent);
-      background: var(--accent-soft);
-    }
-
-    /* Stylized workflow step layout */
-    .pipeline-container-premium {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-3);
-      width: 100%;
-    }
-
-    .pipeline-step-premium {
-      display: flex;
-      align-items: center;
-      gap: var(--space-3);
-      padding: var(--space-3) var(--space-4);
-      background: var(--surface-muted);
-      border: 1px solid var(--line);
-      border-radius: var(--radius-sm);
-      transition: all var(--animation-normal) var(--animation-easing);
-      cursor: default;
-    }
-
-    .pipeline-step-premium:hover {
-      background: var(--surface-hover);
-      border-color: var(--line-strong);
-      transform: translateX(4px);
-    }
-
-    .pipeline-step-premium.active {
-      border-left: 3px solid var(--accent);
-      background: var(--surface);
-    }
-
-    .step-indicator-premium {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-size: var(--text-xs);
-      font-weight: 600;
-    }
-  `}</style>
-);
+      return <div key={idx}>{line}</div>;
+    });
+  }
+}
 
 interface ServerStatusCardProps {
   health: HealthResponse | null;
@@ -505,29 +427,38 @@ function QuickSetupCard({ endpointUrl }: { endpointUrl: string }) {
         </button>
       </div>
 
-      <div className="setup-command-item" style={{ position: "relative", marginTop: "12px" }}>
-        <button
-          className="copy-command-button"
-          onClick={() => copyCommand(currentSetup.command)}
-          style={{
-            position: "absolute",
-            top: "8px",
-            right: "8px",
-            zIndex: 10,
-            background: "var(--control-bg)",
-            border: "1px solid var(--line)",
-            borderRadius: "var(--radius-sm)",
-            padding: "4px 8px",
-            fontSize: "var(--text-xs)",
-            cursor: "pointer",
-            transition: "all var(--animation-fast) var(--animation-easing)",
-          }}
-        >
-          {copied ? "Copied!" : "Copy"}
-        </button>
-        <pre className="command-code" style={{ paddingRight: "70px", margin: 0 }}>
-          {currentSetup.command}
-        </pre>
+      <div className="terminal-wrapper">
+        <div className="terminal-header">
+          <div className="terminal-dots">
+            <span className="terminal-dot terminal-dot-red" />
+            <span className="terminal-dot terminal-dot-yellow" />
+            <span className="terminal-dot terminal-dot-green" />
+          </div>
+          <span className="terminal-title">{activeTab === "cursor" ? "JSON" : "BASH"}</span>
+          <button
+            className="copy-command-button"
+            onClick={() => copyCommand(currentSetup.command)}
+            style={{
+              background: "rgba(255, 255, 255, 0.08)",
+              border: "1px solid rgba(255, 255, 255, 0.12)",
+              borderRadius: "var(--radius-sm)",
+              padding: "4px 8px",
+              fontSize: "var(--text-xs)",
+              color: "rgba(255, 255, 255, 0.8)",
+              cursor: "pointer",
+              transition: "all var(--animation-fast) var(--animation-easing)",
+            }}
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
+        <div className="terminal-body">
+          <pre>
+            <code>
+              {renderSyntaxHighlightedCommand(currentSetup.command, activeTab)}
+            </code>
+          </pre>
+        </div>
       </div>
     </SurfaceCard>
   );
