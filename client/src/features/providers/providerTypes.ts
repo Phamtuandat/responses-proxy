@@ -65,6 +65,7 @@ export interface Provider {
   quota?: ProviderQuota;
   accounts?: ProviderAccountSummary[];
   models?: ProviderModel[];
+  providerApiKeys?: string[];
 
   riskNotice?: ProviderRiskNotice;
 

@@ -12,8 +12,8 @@ interface RuntimeProviderPreset {
   responsesUrl: string;
   authMode?: "api_key" | "chatgpt_oauth" | "kiro";
   chatgptAccountId?: string;
-  providerApiKeys: string[];
-  clientApiKeys: string[];
+  providerApiKeys?: string[];
+  clientApiKeys?: string[];
   capabilities: {
     ownedBy?: string;
     systemManaged?: boolean;
@@ -119,7 +119,7 @@ function computeHealthStatus(
   usageInfo?: ProviderUsageInfo
 ): ProviderHealthStatus {
   // Check if provider has any API keys configured
-  const hasApiKeys = provider.providerApiKeys.length > 0;
+  const hasApiKeys = Array.isArray(provider.providerApiKeys) && provider.providerApiKeys.length > 0;
   const hasOAuthAccount = provider.chatgptAccountId;
   const isConfigured = hasApiKeys || hasOAuthAccount;
 
@@ -168,15 +168,21 @@ function getProviderDisplayName(name: string): string {
   ).join(' ');
 }
 
+import { getProviderById } from "./providerCatalog";
+
 // Map backend RuntimeProviderPreset to frontend Provider
 export function mapBackendToFrontendProvider(
   backend: RuntimeProviderPreset,
   usageInfo?: ProviderUsageInfo
 ): Provider {
-  const tier = classifyProviderTier(backend.name);
+  const isCatalog = !!getProviderById(backend.id);
+  const tier = isCatalog ? classifyProviderTier(backend.name) : 'custom';
   const authTypes = mapAuthTypes(backend.authMode);
   const serviceKinds = determineServiceKinds(backend.name, backend.capabilities);
   const healthStatus = computeHealthStatus(backend, usageInfo);
+
+  const displayName = isCatalog ? getProviderDisplayName(backend.name) : backend.name;
+  const description = isCatalog ? `${displayName} provider` : `Custom endpoint: ${backend.baseUrl}`;
 
   // Create account summaries
   const accounts: ProviderAccountSummary[] = [];
@@ -191,7 +197,7 @@ export function mapBackendToFrontendProvider(
     });
   }
 
-  if (backend.providerApiKeys.length > 0) {
+  if (Array.isArray(backend.providerApiKeys) && backend.providerApiKeys.length > 0) {
     backend.providerApiKeys.forEach((key, index) => {
       accounts.push({
         id: `api-key-${index}`,
@@ -216,8 +222,8 @@ export function mapBackendToFrontendProvider(
   return {
     id: backend.id,
     name: backend.name,
-    displayName: getProviderDisplayName(backend.name),
-    description: `${getProviderDisplayName(backend.name)} provider`,
+    displayName,
+    description,
     tier,
     serviceKinds,
     authTypes,
@@ -229,6 +235,7 @@ export function mapBackendToFrontendProvider(
     fallbackEligible: healthStatus === 'healthy' && accounts.length > 0,
     accounts,
     quota,
+    providerApiKeys: backend.providerApiKeys,
     models: [], // Will be populated separately if needed
     createdAt: backend.createdAt,
     updatedAt: backend.updatedAt
@@ -294,8 +301,7 @@ export async function fetchProviderById(id: string): Promise<Provider | null> {
     }
 
     return mapBackendToFrontendProvider(response.provider, usageInfo);
-  } catch (error) {
-    console.error(`Failed to fetch provider ${id}:`, error);
+  } catch {
     return null;
   }
 }

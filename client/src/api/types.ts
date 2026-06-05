@@ -587,3 +587,20 @@ export interface EnhancedClientRoute {
   preferredProviders?: string[];
   excludedProviders?: string[];
 }
+
+export type AuditLogRecord = {
+  id: string;
+  event: string;
+  actorType: string;
+  actorId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type AuditLogsResponse = {
+  ok?: boolean;
+  logs?: AuditLogRecord[];
+  [key: string]: unknown;
+};

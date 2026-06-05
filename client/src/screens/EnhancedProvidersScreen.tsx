@@ -1,528 +1,244 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
+import { getHealth } from "../api/client";
 import { PageHeader } from "../components/PageHeader";
 import { SurfaceCard } from "../components/SurfaceCard";
-import { StatCard } from "../components/StatCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { RefreshButton } from "../components/RefreshButton";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingState } from "../components/LoadingState";
-import { HealthDashboard, HealthStatusIndicator } from "../components/health/HealthDashboard";
-import { ProvidersIcon, CheckCircleIcon, AlertIcon, ConfigIcon } from "../components/icons";
+import { ProvidersIcon } from "../components/icons";
 import type {
   Provider,
   ProviderTier,
-  ProviderHealthStatus,
-  ProviderServiceKind,
-  ProviderAuthType,
-  ProviderFilters,
-  ProviderSummary,
-  ProviderPrimaryAction
 } from "../features/providers/providerTypes";
-import {
-  PROVIDER_CATALOG,
-  getProvidersByTier,
-  getTierSummary,
-  SERVICE_KINDS,
-  AUTH_TYPES
-} from "../features/providers/providerCatalog";
-import {
-  checkProviderEligibility,
-  getFallbackOrder
-} from "../features/providers/providerEligibility";
-import {
-  formatHealthStatus,
-  getRecommendedAction
-} from "../features/providers/providerHealth";
 import {
   useProviders,
   useProviderTest,
-  useFilteredProviders,
-  useProviderStats,
-  useAutoRefresh
 } from "../features/providers/providerHooks";
 import {
-  useHealthMonitoring,
   useHealthBasedProviders,
   useAutoHealthMonitoring
 } from "../features/health/healthHooks";
 
 // Real API integration - no more mock data
 
-interface ProviderCardProps {
-  provider: Provider;
-  onConnect: (providerId: string) => void;
-  onTest: (providerId: string) => void;
-  onManage: (providerId: string) => void;
-  onEnable: (providerId: string) => void;
-  testResult?: { success: boolean; message: string; latencyMs?: number };
-  isTesting?: boolean;
+function getProviderGradient(providerId: string): string {
+  const id = providerId.toLowerCase();
+  if (id.includes("claude") || id.includes("anthropic")) {
+    return "linear-gradient(135deg, #d97706, #b45309)"; // Warm amber
+  }
+  if (id.includes("openai") || id.includes("codex") || id.includes("copilot")) {
+    return "linear-gradient(135deg, #1e293b, #0f172a)"; // Dark slate
+  }
+  if (id.includes("gemini") || id.includes("google")) {
+    return "linear-gradient(135deg, #2563eb, #7c3aed)"; // Blue to violet
+  }
+  if (id.includes("deepseek")) {
+    return "linear-gradient(135deg, #0d9488, #0f766e)"; // Teal
+  }
+  if (id.includes("groq")) {
+    return "linear-gradient(135deg, #ea580c, #c2410c)"; // Orange/Red
+  }
+  if (id.includes("mistral")) {
+    return "linear-gradient(135deg, #e11d48, #be123c)"; // Rose
+  }
+  if (id.includes("xai") || id.includes("grok")) {
+    return "linear-gradient(135deg, #000000, #1e293b)"; // True black
+  }
+  if (id.includes("cursor")) {
+    return "linear-gradient(135deg, #4f46e5, #3730a3)"; // Indigo
+  }
+  if (id.includes("qwen") || id.includes("alibaba")) {
+    return "linear-gradient(135deg, #059669, #047857)"; // Emerald
+  }
+  if (id.includes("cloudflare")) {
+    return "linear-gradient(135deg, #f97316, #ea580c)"; // Cloudflare orange
+  }
+  if (id.includes("nvidia")) {
+    return "linear-gradient(135deg, #16a34a, #15803d)"; // Nvidia green
+  }
+  return "linear-gradient(135deg, #64748b, #475569)"; // Gray default
 }
 
-function ProviderCard({ provider, onConnect, onTest, onManage, onEnable, testResult, isTesting }: ProviderCardProps) {
-  const healthInfo = formatHealthStatus(provider.healthStatus);
-  const recommendedAction = getRecommendedAction(provider);
-  const eligibility = checkProviderEligibility(provider);
+function getProviderInitials(displayName: string): string {
+  const parts = displayName.split(" ");
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return displayName.slice(0, 2).toUpperCase();
+}
 
-  const handlePrimaryAction = () => {
-    switch (recommendedAction.action) {
-      case "connect":
-      case "configure":
-        onConnect(provider.id);
-        break;
-      case "test":
-        onTest(provider.id);
-        break;
-      case "enable":
-        onEnable(provider.id);
-        break;
-      case "reconnect":
-        onConnect(provider.id);
-        break;
-      default:
-        onManage(provider.id);
-    }
-  };
+function getProviderStatus(provider: Provider) {
+  if (!provider.configured) {
+    return { label: "No connection", dotClass: "not_configured" };
+  }
+  if (provider.healthStatus === "healthy") {
+    return { label: "Ready", dotClass: "healthy" };
+  } else if (provider.healthStatus === "degraded") {
+    return { label: "Degraded", dotClass: "degraded" };
+  } else if (provider.healthStatus === "quota_exhausted") {
+    return { label: "Quota Exhausted", dotClass: "quota_exhausted" };
+  }
+  return { label: "Ready", dotClass: "healthy" };
+}
 
+function SmallProviderCard({ 
+  provider, 
+  isDisabled, 
+  onToggle, 
+  onClick 
+}: { 
+  provider: Provider; 
+  isDisabled: boolean; 
+  onToggle: () => void; 
+  onClick: () => void; 
+}) {
+  const statusInfo = isDisabled 
+    ? { label: "Disabled", dotClass: "not_configured" }
+    : getProviderStatus(provider);
+  const gradient = getProviderGradient(provider.id);
+  const initials = getProviderInitials(provider.displayName);
+  
   return (
-    <div className="provider-card">
-      <div className="provider-card-header">
-        <div className="provider-info">
-          <div className="provider-name-row">
-            <h3 className="provider-name">{provider.displayName}</h3>
-            <div className="provider-badges">
-              <StatusBadge variant="accent" size="sm">
-                {provider.tier}
-              </StatusBadge>
-              <HealthStatusIndicator providerId={provider.id} />
-            </div>
-          </div>
-          <div className="provider-description">{provider.description}</div>
-        </div>
-
-        <div className="provider-status">
-          <div className="status-indicator">
-            {provider.healthStatus === "healthy" ? (
-              <CheckCircleIcon className="status-icon status-healthy" />
-            ) : (
-              <AlertIcon className="status-icon status-error" />
-            )}
-          </div>
-          <div className="status-details">
-            <div className="status-label">{healthInfo.label}</div>
-            <div className="status-message">{healthInfo.message}</div>
-            {provider.lastHealthCheckAt && (
-              <div className="status-timestamp">
-                Last checked: {new Date(provider.lastHealthCheckAt).toLocaleString()}
-              </div>
-            )}
-          </div>
-        </div>
+    <div className="provider-small-card" onClick={onClick}>
+      <div className="provider-small-logo-container" style={{ background: gradient }}>
+        {initials}
       </div>
-
-      <div className="provider-card-body">
-        {/* Service Kinds */}
-        <div className="provider-meta-row">
-          <div className="meta-label">Services</div>
-          <div className="meta-value">
-            {provider.serviceKinds.map(kind => (
-              <StatusBadge key={kind} variant="neutral" size="xs">
-                {kind}
-              </StatusBadge>
-            ))}
+      <div className="provider-small-info">
+        <div className="provider-small-name-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-2)" }}>
+          <h4 className="provider-small-name" title={provider.displayName}>{provider.displayName}</h4>
+          <div 
+            className={`custom-switch ${isDisabled ? 'off' : 'on'}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            title={isDisabled ? "Enable Provider" : "Disable Provider"}
+          >
+            <span className="custom-switch-slider" />
           </div>
         </div>
-
-        {/* Auth Types */}
-        <div className="provider-meta-row">
-          <div className="meta-label">Auth</div>
-          <div className="meta-value">
-            {provider.authTypes.map(auth => (
-              <StatusBadge key={auth} variant="neutral" size="xs">
-                {auth.replace('_', ' ')}
-              </StatusBadge>
-            ))}
-          </div>
+        <div className="provider-small-status">
+          <span className={`provider-small-status-dot ${statusInfo.dotClass}`} />
+          <span>{statusInfo.label}</span>
         </div>
-
-        {/* Accounts */}
-        {provider.accounts && provider.accounts.length > 0 && (
-          <div className="provider-meta-row">
-            <div className="meta-label">Accounts</div>
-            <div className="meta-value">
-              {provider.accounts.map(account => (
-                <div key={account.id} className="account-summary">
-                  <span className="account-label">{account.label}</span>
-                  <StatusBadge
-                    variant={account.status === "connected" ? "success" : "warning"}
-                    size="xs"
-                  >
-                    {account.status}
-                  </StatusBadge>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Quota */}
-        {provider.quota && (
-          <div className="provider-meta-row">
-            <div className="meta-label">Quota</div>
-            <div className="meta-value">
-              {provider.quota.usagePercent !== undefined ? (
-                <div className="quota-bar">
-                  <div className="quota-progress" style={{ width: `${provider.quota.usagePercent}%` }} />
-                  <span className="quota-text">{provider.quota.usagePercent.toFixed(1)}%</span>
-                </div>
-              ) : (
-                <span className="quota-unknown">Unknown</span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Risk Notice */}
-        {provider.riskNotice && (
-          <div className="provider-risk-notice">
-            <AlertIcon className="risk-icon" />
-            <div className="risk-content">
-              <div className="risk-title">{provider.riskNotice.title}</div>
-              <div className="risk-message">{provider.riskNotice.message}</div>
-            </div>
-          </div>
-        )}
-
-        {/* Test Result */}
-        {testResult && (
-          <div className={`test-result ${testResult.success ? 'test-success' : 'test-error'}`}>
-            <div className="test-status">
-              {testResult.success ? 'Test Passed' : 'Test Failed'}
-              {testResult.latencyMs && ` (${testResult.latencyMs}ms)`}
-            </div>
-            <div className="test-message">{testResult.message}</div>
-          </div>
-        )}
-      </div>
-
-      <div className="provider-card-actions">
-        <button
-          className="button-primary"
-          onClick={handlePrimaryAction}
-          disabled={isTesting}
-        >
-          {isTesting ? 'Testing...' : recommendedAction.label}
-        </button>
-
-        <button
-          className="button-secondary"
-          onClick={() => onTest(provider.id)}
-          disabled={isTesting}
-        >
-          {isTesting ? 'Testing...' : 'Test'}
-        </button>
-
-        <button
-          className="button-secondary"
-          onClick={() => onManage(provider.id)}
-        >
-          Manage
-        </button>
       </div>
     </div>
   );
 }
 
-interface TierSectionProps {
-  tier: ProviderTier;
-  providers: Provider[];
-  onConnect: (providerId: string) => void;
-  onTest: (providerId: string) => void;
-  onManage: (providerId: string) => void;
-  onEnable: (providerId: string) => void;
-  getTestResult: (providerId: string) => { success: boolean; message: string; latencyMs?: number } | undefined;
-  isTestingProvider: (providerId: string) => boolean;
-}
-
-function TierSection({ tier, providers, onConnect, onTest, onManage, onEnable, getTestResult, isTestingProvider }: TierSectionProps) {
-  const tierInfo = getTierSummary(tier, providers);
-
-  if (providers.length === 0) {
-    return null;
-  }
-
-  const tierLabels = {
-    subscription: "Subscription Tier",
-    cheap: "Cost-Effective Tier",
-    free: "Free Tier",
-    custom: "Custom Tier"
-  };
-
-  const tierDescriptions = {
-    subscription: "Premium providers with high reliability and features",
-    cheap: "Budget-friendly providers with good performance",
-    free: "Free providers with usage limitations",
-    custom: "Custom configured providers"
-  };
-
-  return (
-    <SurfaceCard
-      title={tierLabels[tier]}
-      description={tierDescriptions[tier]}
-      badge={`${providers.length} provider${providers.length !== 1 ? 's' : ''}`}
-    >
-      <div className="tier-summary">
-        <div className="tier-stats">
-          <div className="tier-stat">
-            <span className="stat-value">{tierInfo.healthyCount}</span>
-            <span className="stat-label">Healthy</span>
-          </div>
-          <div className="tier-stat">
-            <span className="stat-value">{tierInfo.configuredCount}</span>
-            <span className="stat-label">Configured</span>
-          </div>
-          <div className="tier-stat">
-            <span className="stat-value">{tierInfo.fallbackReadyCount}</span>
-            <span className="stat-label">Fallback Ready</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="providers-grid">
-        {providers.map(provider => (
-          <ProviderCard
-            key={provider.id}
-            provider={provider}
-            onConnect={onConnect}
-            onTest={onTest}
-            onManage={onManage}
-            onEnable={onEnable}
-            testResult={getTestResult(provider.id)}
-            isTesting={isTestingProvider(provider.id)}
-          />
-        ))}
-      </div>
-    </SurfaceCard>
-  );
-}
-
-interface ProviderFiltersCardProps {
-  filters: ProviderFilters;
-  onFiltersChange: (filters: ProviderFilters) => void;
-}
-
-function ProviderFiltersCard({ filters, onFiltersChange }: ProviderFiltersCardProps) {
-  const handleTierFilter = (tier: ProviderTier) => {
-    const currentTiers = filters.tier || [];
-    const newTiers = currentTiers.includes(tier)
-      ? currentTiers.filter(t => t !== tier)
-      : [...currentTiers, tier];
-
-    onFiltersChange({
-      ...filters,
-      tier: newTiers.length > 0 ? newTiers : undefined
-    });
-  };
-
-  const handleStatusFilter = (status: ProviderHealthStatus) => {
-    const currentStatuses = filters.status || [];
-    const newStatuses = currentStatuses.includes(status)
-      ? currentStatuses.filter(s => s !== status)
-      : [...currentStatuses, status];
-
-    onFiltersChange({
-      ...filters,
-      status: newStatuses.length > 0 ? newStatuses : undefined
-    });
-  };
-
-  const clearFilters = () => {
-    onFiltersChange({});
-  };
-
-  return (
-    <SurfaceCard title="Filters" description="Filter providers by tier, status, and configuration">
-      <div className="filters-section">
-        <div className="filter-group">
-          <div className="filter-label">Tier</div>
-          <div className="filter-options">
-            {(['subscription', 'cheap', 'free', 'custom'] as ProviderTier[]).map(tier => (
-              <button
-                key={tier}
-                className={`filter-button ${filters.tier?.includes(tier) ? 'active' : ''}`}
-                onClick={() => handleTierFilter(tier)}
-              >
-                {tier}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filter-group">
-          <div className="filter-label">Status</div>
-          <div className="filter-options">
-            {(['healthy', 'degraded', 'quota_exhausted', 'not_configured'] as ProviderHealthStatus[]).map(status => (
-              <button
-                key={status}
-                className={`filter-button ${filters.status?.includes(status) ? 'active' : ''}`}
-                onClick={() => handleStatusFilter(status)}
-              >
-                {status.replace('_', ' ')}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filter-group">
-          <div className="filter-label">Configuration</div>
-          <div className="filter-options">
-            <button
-              className={`filter-button ${filters.configured === true ? 'active' : ''}`}
-              onClick={() => onFiltersChange({
-                ...filters,
-                configured: filters.configured === true ? undefined : true
-              })}
-            >
-              Configured Only
-            </button>
-            <button
-              className={`filter-button ${filters.fallbackEligible === true ? 'active' : ''}`}
-              onClick={() => onFiltersChange({
-                ...filters,
-                fallbackEligible: filters.fallbackEligible === true ? undefined : true
-              })}
-            >
-              Fallback Ready
-            </button>
-          </div>
-        </div>
-
-        {(filters.tier || filters.status || filters.configured !== undefined || filters.fallbackEligible !== undefined) && (
-          <button className="button-secondary" onClick={clearFilters}>
-            Clear All Filters
-          </button>
-        )}
-      </div>
-    </SurfaceCard>
-  );
-}
-
 export function EnhancedProvidersScreen() {
-  const [filters, setFilters] = useState<ProviderFilters>({});
   const [searchQuery, setSearchQuery] = useState("");
-  const [showHealthDashboard, setShowHealthDashboard] = useState(false);
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
+  const [disabledProviderIds, setDisabledProviderIds] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem("disabled_providers");
+      return stored ? new Set(JSON.parse(stored)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const toggleProviderEnabled = (providerId: string) => {
+    setDisabledProviderIds(prev => {
+      const next = new Set(prev);
+      if (next.has(providerId)) {
+        next.delete(providerId);
+      } else {
+        next.add(providerId);
+      }
+      try {
+        localStorage.setItem("disabled_providers", JSON.stringify(Array.from(next)));
+      } catch (err) {
+        console.error("Failed to persist disabled providers:", err);
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    getHealth().then(data => {
+      if (data && data.activeProviderId) {
+        setActiveProviderId(data.activeProviderId);
+      }
+    }).catch(() => {});
+  }, []);
 
   // Fetch providers from real API
-  const { providers, loading, error, refresh, refreshHealth } = useProviders();
-  const { testProvider, getTestResult, isTestingProvider } = useProviderTest();
-  const { autoRefreshEnabled, setAutoRefreshEnabled } = useAutoRefresh(refresh, 30000);
+  const { providers, loading, error, refresh } = useProviders();
+  const { testProvider } = useProviderTest();
 
   // Auto-start health monitoring
   useAutoHealthMonitoring(true);
 
   // Get health-enhanced providers with real-time status
-  const { enhancedProviders, sortedByHealth, getProvidersNeedingAttention } = useHealthBasedProviders(providers);
+  const { enhancedProviders } = useHealthBasedProviders(providers);
 
-  // Health monitoring integration
-  const { healthSummary: globalHealthSummary, isMonitoring, refreshAllHealth } = useHealthMonitoring();
-
-  // Filter providers based on current filters and search
+  // Filter providers based on search query
   const filteredProviders = useMemo(() => {
     return enhancedProviders.filter(provider => {
-      // Search query filter
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
-        const matchesSearch =
+        return (
           provider.name.toLowerCase().includes(query) ||
           provider.displayName.toLowerCase().includes(query) ||
-          provider.description?.toLowerCase().includes(query);
-        if (!matchesSearch) return false;
+          provider.description?.toLowerCase().includes(query)
+        );
       }
-
-      // Tier filter
-      if (filters.tier && filters.tier.length > 0 && !filters.tier.includes(provider.tier)) {
-        return false;
-      }
-
-      // Status filter
-      if (filters.status && filters.status.length > 0 && !filters.status.includes(provider.healthStatus)) {
-        return false;
-      }
-
-      // Fallback eligible filter
-      if (filters.fallbackEligible !== undefined && provider.fallbackEligible !== filters.fallbackEligible) {
-        return false;
-      }
-
-      // Configured filter
-      if (filters.configured !== undefined && provider.configured !== filters.configured) {
-        return false;
-      }
-
       return true;
     });
-  }, [enhancedProviders, filters, searchQuery]);
+  }, [enhancedProviders, searchQuery]);
 
-  // Use the filtered providers hook for tier organization
-  const { providersByTier, tierSummaries } = useFilteredProviders(filteredProviders);
-  const stats = useProviderStats(enhancedProviders);
+  const customProviders = useMemo(() => {
+    return filteredProviders.filter(p => p.tier === "custom");
+  }, [filteredProviders]);
 
-  // Get providers needing attention for health alerts
-  const providersNeedingAttention = getProvidersNeedingAttention();
+  const oauthProviders = useMemo(() => {
+    return filteredProviders.filter(p => p.tier !== "custom" && p.authTypes.includes("oauth"));
+  }, [filteredProviders]);
+
+  const freeProviders = useMemo(() => {
+    return filteredProviders.filter(p => p.tier === "free" && !p.authTypes.includes("oauth"));
+  }, [filteredProviders]);
+
+  const apiKeyProviders = useMemo(() => {
+    return filteredProviders.filter(p => 
+      p.tier !== "custom" && 
+      !p.authTypes.includes("oauth") && 
+      p.tier !== "free"
+    );
+  }, [filteredProviders]);
 
   // Event handlers
   const handleConnect = (providerId: string) => {
-    // Navigate to provider detail screen for connection setup
     window.location.hash = `#/providers/${providerId}`;
   };
 
   const handleTest = async (providerId: string) => {
     try {
-      const result = await testProvider(providerId);
-      // Test result is stored in the hook state and can be accessed via getTestResult
-      console.log(`Test result for ${providerId}:`, result);
+      await testProvider(providerId);
     } catch (error) {
       console.error(`Failed to test provider ${providerId}:`, error);
     }
   };
 
-  const handleManage = (providerId: string) => {
-    // Navigate to provider detail screen
-    window.location.hash = `#/providers/${providerId}`;
-  };
-
-  const handleEnable = (providerId: string) => {
-    // For now, just navigate to manage - enable/disable will be implemented later
-    handleManage(providerId);
-  };
-
   const handleAddProvider = () => {
-    // Navigate to add provider flow
     window.location.hash = "#/providers/new";
+  };
+
+  const handleTestAll = async (providersToTest: Provider[]) => {
+    const configured = providersToTest.filter(p => p.configured);
+    for (const p of configured) {
+      handleTest(p.id);
+    }
   };
 
   const handleRefresh = async () => {
     try {
-      await Promise.all([refresh(), refreshAllHealth()]);
+      await refresh();
     } catch (error) {
       console.error('Failed to refresh providers:', error);
     }
-  };
-
-  const handleRefreshHealth = async () => {
-    try {
-      await Promise.all([refreshHealth(), refreshAllHealth()]);
-    } catch (error) {
-      console.error('Failed to refresh provider health:', error);
-    }
-  };
-
-  // Summary stats from real data with health integration
-  const summaryStats = {
-    total: stats.total,
-    configured: stats.configured,
-    healthy: globalHealthSummary?.healthy || stats.healthy,
-    fallbackReady: stats.fallbackReady,
-    needingAttention: providersNeedingAttention.length
   };
 
   // Loading state
@@ -567,119 +283,212 @@ export function EnhancedProvidersScreen() {
       <PageHeader
         icon={ProvidersIcon}
         title="Providers"
-        description="Manage AI provider connections and routing"
+        description="Manage your AI provider connections"
         actions={
-          <div className="page-actions">
+          <div className="page-actions" style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+            <div className="search-container" style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <input
+                type="text"
+                className="search-input"
+                placeholder="Search providers..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  padding: "6px 12px 6px 32px",
+                  fontSize: "var(--font-sm)",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--line)",
+                  background: "var(--surface-input)",
+                  color: "var(--text-primary)",
+                  width: "200px",
+                }}
+              />
+              <span style={{ position: "absolute", left: "10px", color: "var(--text-secondary)", fontSize: "var(--font-sm)", pointerEvents: "none" }}>🔍</span>
+            </div>
             <RefreshButton onClick={handleRefresh} />
-            <button
-              className="button-secondary"
-              onClick={handleRefreshHealth}
-              title="Refresh provider health status"
-            >
-              Refresh Health
-            </button>
-            <button
-              className={`button-secondary ${showHealthDashboard ? 'active' : ''}`}
-              onClick={() => setShowHealthDashboard(!showHealthDashboard)}
-              title="Toggle health monitoring dashboard"
-            >
-              Health Monitor
-            </button>
-            <button className="button-primary" onClick={handleAddProvider}>
-              Add Provider
-            </button>
           </div>
         }
       />
 
       <div className="providers-screen-layout">
-        {/* Health Dashboard (when enabled) */}
-        {showHealthDashboard && (
-          <div className="providers-health-section">
-            <HealthDashboard autoStart={true} showControls={true} compact={false} />
+        {/* Custom Providers */}
+        <div className="provider-section" style={{ marginBottom: "var(--space-6)" }}>
+          <div className="provider-section-title-row">
+            <h3>Custom Providers (OpenAI/Anthropic Compatible)</h3>
+            <div className="provider-section-actions">
+              <button className="button-primary" onClick={handleAddProvider}>
+                + Add Provider
+              </button>
+            </div>
           </div>
-        )}
-
-        {/* Summary Stats */}
-        <div className="providers-stats-row">
-          <StatCard
-            title="Total Providers"
-            value={summaryStats.total.toString()}
-            caption="All configured providers"
-          />
-          <StatCard
-            title="Configured"
-            value={summaryStats.configured.toString()}
-            caption="Ready for use"
-            trend={summaryStats.configured > 0 ? "up" : "neutral"}
-          />
-          <StatCard
-            title="Healthy"
-            value={summaryStats.healthy.toString()}
-            caption="Working normally"
-            trend={summaryStats.healthy > 0 ? "up" : "neutral"}
-          />
-          <StatCard
-            title="Fallback Ready"
-            value={summaryStats.fallbackReady.toString()}
-            caption="Available for routing"
-            trend={summaryStats.fallbackReady > 0 ? "up" : "neutral"}
-          />
-          <StatCard
-            title="Need Attention"
-            value={summaryStats.needingAttention.toString()}
-            caption="Health issues detected"
-            trend={summaryStats.needingAttention > 0 ? "down" : "up"}
-          />
+          {customProviders.length === 0 ? (
+            <div className="provider-empty-state" style={{ 
+              textAlign: "center", 
+              padding: "var(--space-6)", 
+              border: "1px dashed var(--line)", 
+              borderRadius: "var(--radius-md)",
+              color: "var(--text-secondary)",
+              fontSize: "var(--font-sm)"
+            }}>
+              No custom providers — use buttons above to add OpenAI/Anthropic compatible endpoints
+            </div>
+          ) : (
+            <div className="providers-small-grid">
+              {customProviders.map(provider => (
+                <SmallProviderCard
+                  key={provider.id}
+                  provider={provider}
+                  isDisabled={disabledProviderIds.has(provider.id)}
+                  onToggle={() => toggleProviderEnabled(provider.id)}
+                  onClick={() => handleConnect(provider.id)}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Search and Filters */}
-        <div className="providers-controls-row">
-          <SurfaceCard title="Search" description="Find providers by name or description">
-            <input
-              type="text"
-              className="search-input"
-              placeholder="Search providers..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </SurfaceCard>
-
-          <ProviderFiltersCard
-            filters={filters}
-            onFiltersChange={setFilters}
-          />
+        {/* OAuth Providers */}
+        <div className="provider-section" style={{ marginBottom: "var(--space-6)" }}>
+          <div className="provider-section-title-row">
+            <h3>OAuth Providers</h3>
+            <button 
+              className="button-secondary" 
+              style={{ fontSize: "var(--font-xs)", padding: "4px var(--space-2)" }}
+              onClick={() => handleTestAll(oauthProviders)}
+              disabled={oauthProviders.filter(p => p.configured).length === 0}
+            >
+              ▷ Test All
+            </button>
+          </div>
+          {oauthProviders.length === 0 ? (
+            <div style={{ color: "var(--text-secondary)", fontSize: "var(--font-sm)" }}>No OAuth providers found</div>
+          ) : (
+            <div className="providers-small-grid">
+              {oauthProviders.map(provider => (
+                <SmallProviderCard
+                  key={provider.id}
+                  provider={provider}
+                  isDisabled={disabledProviderIds.has(provider.id)}
+                  onToggle={() => toggleProviderEnabled(provider.id)}
+                  onClick={() => handleConnect(provider.id)}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Provider Tiers */}
-        <div className="providers-tiers">
-          {(["subscription", "cheap", "free", "custom"] as ProviderTier[]).map(tier => (
-            <TierSection
-              key={tier}
-              tier={tier}
-              providers={providersByTier[tier] || []}
-              onConnect={handleConnect}
-              onTest={handleTest}
-              onManage={handleManage}
-              onEnable={handleEnable}
-              getTestResult={getTestResult}
-              isTestingProvider={isTestingProvider}
-            />
-          ))}
+        {/* Free Tier Providers */}
+        <div className="provider-section" style={{ marginBottom: "var(--space-6)" }}>
+          <div className="provider-section-title-row">
+            <h3>Free Tier Providers</h3>
+            <button 
+              className="button-secondary" 
+              style={{ fontSize: "var(--font-xs)", padding: "4px var(--space-2)" }}
+              onClick={() => handleTestAll(freeProviders)}
+              disabled={freeProviders.filter(p => p.configured).length === 0}
+            >
+              ▷ Test All
+            </button>
+          </div>
+          {freeProviders.length === 0 ? (
+            <div style={{ color: "var(--text-secondary)", fontSize: "var(--font-sm)" }}>No Free Tier providers found</div>
+          ) : (
+            <div className="providers-small-grid">
+              {freeProviders.map(provider => (
+                <SmallProviderCard
+                  key={provider.id}
+                  provider={provider}
+                  isDisabled={disabledProviderIds.has(provider.id)}
+                  onToggle={() => toggleProviderEnabled(provider.id)}
+                  onClick={() => handleConnect(provider.id)}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
-        {filteredProviders.length === 0 && !loading && (
-          <EmptyState
-            title="No providers found"
-            description="No providers match your current filters. Try adjusting your search or filter criteria."
-            actionLabel="Clear Filters"
-            onClick={() => {
-              setFilters({});
-              setSearchQuery("");
-            }}
-          />
-        )}
+        {/* API Key Providers */}
+        <div className="provider-section" style={{ marginBottom: "var(--space-6)" }}>
+          <div className="provider-section-title-row">
+            <h3>API Key Providers</h3>
+            <button 
+              className="button-secondary" 
+              style={{ fontSize: "var(--font-xs)", padding: "4px var(--space-2)" }}
+              onClick={() => handleTestAll(apiKeyProviders)}
+              disabled={apiKeyProviders.filter(p => p.configured).length === 0}
+            >
+              ▷ Test All
+            </button>
+          </div>
+          {apiKeyProviders.length === 0 ? (
+            <div style={{ color: "var(--text-secondary)", fontSize: "var(--font-sm)" }}>No API Key providers found</div>
+          ) : (
+            <div className="providers-small-grid">
+              {apiKeyProviders.map(provider => (
+                <SmallProviderCard
+                  key={provider.id}
+                  provider={provider}
+                  isDisabled={disabledProviderIds.has(provider.id)}
+                  onToggle={() => toggleProviderEnabled(provider.id)}
+                  onClick={() => handleConnect(provider.id)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+export function MediaProvidersScreen() {
+  return (
+    <div className="screen-stack">
+      <PageHeader
+        icon={ProvidersIcon}
+        title="Media Providers"
+        description="Multimodal, voice, image, and video generation upstreams"
+      />
+      <SurfaceCard title="Feature Coming Soon" description="Extended media provider pool" tone="info">
+        <div style={{ padding: "var(--space-6) var(--space-4)", textAlign: "center" }}>
+          <span style={{ fontSize: "3rem" }}>🎨</span>
+          <h3 style={{ margin: "var(--space-3) 0 var(--space-2) 0", fontSize: "var(--font-lg)" }}>Extended Multimodal Pipeline</h3>
+          <p style={{ margin: "0 auto var(--space-4) auto", color: "var(--text-secondary)", fontSize: "var(--font-sm)", maxWidth: "540px", lineHeight: "1.6" }}>
+            Media Providers will allow responses-proxy to handle multimodal requests (audio processing, text-to-speech, DALL-E image generation, and video upstreams) with automatic cost routing and fallback policies.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", justifyContent: "center" }}>
+            <StatusBadge variant="accent">Image Tiers</StatusBadge>
+            <StatusBadge variant="accent">Audio Failover</StatusBadge>
+            <StatusBadge variant="accent">Video Upstreams</StatusBadge>
+          </div>
+        </div>
+      </SurfaceCard>
+    </div>
+  );
+}
+
+export function ProxyPoolsScreen() {
+  return (
+    <div className="screen-stack">
+      <PageHeader
+        icon={ProvidersIcon}
+        title="Proxy Pools"
+        description="Distributed network proxies and rotating IP pools"
+      />
+      <SurfaceCard title="Feature Coming Soon" description="Network proxy list configuration" tone="info">
+        <div style={{ padding: "var(--space-6) var(--space-4)", textAlign: "center" }}>
+          <span style={{ fontSize: "3rem" }}>🌐</span>
+          <h3 style={{ margin: "var(--space-3) 0 var(--space-2) 0", fontSize: "var(--font-lg)" }}>Rotating Network IP Pools</h3>
+          <p style={{ margin: "0 auto var(--space-4) auto", color: "var(--text-secondary)", fontSize: "var(--font-sm)", maxWidth: "540px", lineHeight: "1.6" }}>
+            Proxy Pools will enable routing upstream provider requests through a configured list of residential or datacenter web proxies. This prevents rate-limiting and geographical blocks from impacting high-frequency developer workflows.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", justifyContent: "center" }}>
+            <StatusBadge variant="accent">Rotating Proxies</StatusBadge>
+            <StatusBadge variant="accent">IP Health Check</StatusBadge>
+            <StatusBadge variant="accent">Geo-Targeting</StatusBadge>
+          </div>
+        </div>
+      </SurfaceCard>
     </div>
   );
 }

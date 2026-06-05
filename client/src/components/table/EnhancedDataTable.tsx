@@ -195,23 +195,46 @@ export function EnhancedDataTable<T>({
                       if (input) input.indeterminate = isPartiallySelected;
                     }}
                     onChange={() => toggleAllRows(true)}
+                    aria-label="Select all rows"
                   />
                 </th>
               )}
-              {columns.map((column) => (
-                <th
-                  key={String(column.key)}
-                  className={`
-                    ${column.sortable ? 'sortable' : ''}
-                    ${sortColumn === column.key ? `sorted-${sortDirection}` : ''}
-                    ${column.className || ''}
-                  `}
-                  style={{ width: column.width }}
-                  onClick={() => column.sortable && setSort(String(column.key))}
-                >
-                  {column.label}
-                </th>
-              ))}
+              {columns.map((column) => {
+                const isSorted = sortColumn === column.key;
+                const ariaSort = column.sortable
+                  ? isSorted
+                    ? sortDirection === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                  : undefined;
+
+                return (
+                  <th
+                    key={String(column.key)}
+                    className={`
+                      ${column.sortable ? 'sortable' : ''}
+                      ${isSorted ? `sorted-${sortDirection}` : ''}
+                      ${column.className || ''}
+                    `}
+                    style={{ width: column.width }}
+                    aria-sort={ariaSort}
+                  >
+                    {column.sortable ? (
+                      <button
+                        type="button"
+                        className="table-sort-button"
+                        onClick={() => setSort(String(column.key))}
+                        aria-label={`Sort by ${column.label}`}
+                      >
+                        {column.label}
+                      </button>
+                    ) : (
+                      column.label
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -231,6 +254,7 @@ export function EnhancedDataTable<T>({
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => toggleRowSelection(rowId)}
+                        aria-label="Select row"
                       />
                     </td>
                   )}

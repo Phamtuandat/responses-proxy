@@ -32,6 +32,7 @@ import type {
   RtkPolicyInput,
   RtkPolicyMutationResponse,
   UsageStatsResponse,
+  AuditLogsResponse,
 } from "./types";
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -255,4 +256,13 @@ export function deleteKiroAccount(accountId: string) {
 
 export function importKiroAccounts(input?: KiroImportInput) {
   return apiSend<KiroImportResponse>("/api/kiro/import", "POST", input);
+}
+
+export function getAuditLogs(params?: { limit?: number; event?: string; subjectId?: string }) {
+  const query = new URLSearchParams();
+  if (params?.limit) query.append("limit", String(params.limit));
+  if (params?.event) query.append("event", params.event);
+  if (params?.subjectId) query.append("subjectId", params.subjectId);
+  const search = query.toString() ? `?${query.toString()}` : "";
+  return apiGet<AuditLogsResponse>(`/api/debug/audit-logs${search}`);
 }

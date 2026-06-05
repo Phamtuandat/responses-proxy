@@ -1,7 +1,8 @@
 // Routing Combo Builder Component
 // Visual interface for configuring multi-tier routing with drag-and-drop capabilities
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
+import { validateRoutingCombo } from "../../features/routing/routingApi";
 import { SurfaceCard } from "../SurfaceCard";
 import { StatusBadge } from "../StatusBadge";
 import { LoadingState } from "../LoadingState";
@@ -73,12 +74,12 @@ export function RoutingComboBuilder({
     loadFromTemplate
   } = useRoutingComboBuilder(combo);
 
-  // Validation
-  const {
-    validate,
-    getValidationResult,
-    isValidating
-  } = useRoutingComboValidation();
+  // Validation (fully synchronous using pure function to avoid state-based infinite loops)
+  const validationResult = useMemo(() => {
+    return validateRoutingCombo(builderCombo);
+  }, [builderCombo]);
+
+  const isValidating = useCallback((key: string) => false, []);
 
   // Provider utilities
   const {
@@ -88,17 +89,6 @@ export function RoutingComboBuilder({
     getProvidersForTier,
     getProviderById
   } = useProvidersForRouting(providers);
-
-  // Auto-validate when combo changes
-  useEffect(() => {
-    if (isDirty) {
-      const newValidationKey = `validation-${Date.now()}`;
-      setValidationKey(newValidationKey);
-      validate(builderCombo, newValidationKey).catch(console.error);
-    }
-  }, [builderCombo, isDirty, validate]);
-
-  const validationResult = getValidationResult(validationKey);
 
   // Event handlers
   const handleSave = useCallback(async () => {

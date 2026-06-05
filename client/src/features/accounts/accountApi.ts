@@ -2,6 +2,7 @@
 // Handles ChatGPT OAuth, Kiro tokens, and API key accounts for providers
 
 import { apiGet, apiSend } from "../../api/client";
+import { getProviderById } from "../providers/providerCatalog";
 import type {
   ProviderAuthType,
   ProviderAccountSummary,
@@ -120,8 +121,7 @@ export async function fetchProviderAccounts(providerId: string): Promise<Account
     }
 
     return accounts;
-  } catch (error) {
-    console.error(`Failed to fetch accounts for provider ${providerId}:`, error);
+  } catch {
     throw new Error('Failed to load provider accounts');
   }
 }
@@ -487,7 +487,20 @@ export async function deleteProviderAccount(providerId: string, accountId: strin
         break;
 
       case 'api_key':
-        throw new Error('API key deletion not yet implemented');
+        const index = parseInt(accountId.replace('api-key-', ''), 10);
+        if (isNaN(index)) {
+          throw new Error(`Invalid account ID for API key: ${accountId}`);
+        }
+        const existingKeys = Array.isArray(provider.providerApiKeys) ? provider.providerApiKeys : [];
+        const updatedKeys = existingKeys.filter((_: any, idx: number) => idx !== index);
+        await apiSend(`/api/providers/${encodeURIComponent(providerId)}`, 'PUT', {
+          name: provider.name,
+          baseUrl: provider.baseUrl,
+          authMode: provider.authMode,
+          providerApiKeys: updatedKeys,
+          capabilities: provider.capabilities
+        });
+        break;
 
       default:
         throw new Error(`Unsupported auth mode: ${provider.authMode}`);
@@ -501,12 +514,20 @@ export async function deleteProviderAccount(providerId: string, accountId: strin
 export async function startAccountConnection(providerId: string, authType: ProviderAuthType): Promise<ConnectionFlow> {
   try {
     switch (authType) {
-      case 'oauth':
+      case 'oauth': {
         // Determine if this is ChatGPT OAuth or Kiro based on provider
-        const providerResponse = await apiGet(`/api/providers/${providerId}`);
-        const provider = providerResponse.provider;
+        let provider: any = null;
+        try {
+          const providerResponse = await apiGet(`/api/providers/${providerId}`);
+          provider = providerResponse.provider;
+        } catch {
+          // Ignore network/404 errors for unconfigured providers
+        }
 
-        if (provider?.authMode === 'chatgpt_oauth') {
+        const catalogEntry = getProviderById(providerId);
+        const authMode = provider?.authMode || catalogEntry?.preferredAuthType || 'api_key';
+
+        if (authMode === 'chatgpt_oauth' || providerId === 'openai-codex' || providerId.includes('chatgpt') || providerId === 'account-openai-codex') {
           const response = await apiSend('/api/chatgpt-oauth/start', 'POST', {});
           return {
             type: 'oauth',
@@ -515,14 +536,16 @@ export async function startAccountConnection(providerId: string, authType: Provi
             instructions: 'Click the link to authorize with ChatGPT, then paste the callback URL below.',
             requiresCallback: true
           };
-        } else if (provider?.authMode === 'kiro') {
+        } else if (authMode === 'kiro' || providerId.startsWith('kiro-')) {
           return {
             type: 'kiro',
-            instructions: 'Kiro account connection requires importing from 9router. Use the import function in the Kiro management screen.',
+            instructions: 'Kiro accounts are imported from a 9router database. The proxy then owns token refresh (write-back) without sharing 9router\'s live database.',
             requiresCallback: false
           };
         }
-        break;
+
+        throw new Error('OAuth authentication is not supported for this provider on the backend. Please use API Key authentication instead.');
+      }
 
       case 'api_key':
         return {
@@ -534,10 +557,8 @@ export async function startAccountConnection(providerId: string, authType: Provi
       default:
         throw new Error(`Unsupported auth type: ${authType}`);
     }
-
-    throw new Error('Unable to start connection flow');
   } catch (error) {
     console.error(`Failed to start connection flow for ${authType}:`, error);
-    throw new Error('Failed to start account connection');
+    throw error instanceof Error ? error : new Error('Failed to start account connection');
   }
 }

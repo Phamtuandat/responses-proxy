@@ -8,6 +8,25 @@ import { CheckCircleIcon, AlertIcon, TrashIcon, RefreshIcon } from "../icons";
 import type { AccountConnection } from "../../features/accounts/accountApi";
 import type { ProviderAuthType, ProviderAccountRoutingMode } from "../../features/providers/providerTypes";
 import { useAccountConnection, useAccountOperations } from "../../features/accounts/accountHooks";
+import {
+  apiGet,
+  getKiroAccounts,
+  importKiroAccounts,
+  submitChatGptOAuthCallback,
+  updateProvider,
+} from "../../api/client";
+import { createOrRecoverProvider } from "./createOrRecoverProvider";
+import { validateWithTimeout, type ValidationResult } from "./validateConnection";
+
+/** Shape of an existing provider as returned by GET /api/providers/:id. */
+interface ExistingProvider {
+  providerApiKeys?: string[];
+  name?: string;
+  baseUrl?: string;
+  authMode?: string;
+  capabilities?: Record<string, unknown>;
+}
+
 
 interface AccountManagementModalProps {
   providerId: string;
@@ -34,6 +53,8 @@ export function AccountManagementModal({
 }: AccountManagementModalProps) {
   const [selectedAuthType, setSelectedAuthType] = useState<ProviderAuthType>(supportedAuthTypes[0]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
 
   const {
     connectionFlow,
@@ -61,6 +82,8 @@ export function AccountManagementModal({
       clearConnectionError();
       clearOperationError();
       setShowDeleteConfirm(false);
+      setValidating(false);
+      setValidationResult(null);
       if (editingAccount) {
         setSelectedAuthType(editingAccount.authType);
       }
@@ -75,37 +98,108 @@ export function AccountManagementModal({
     }
   }, [startConnection]);
 
+  const runValidation = useCallback(async (accountId: string) => {
+    setValidating(true);
+    setValidationResult(null);
+    try {
+      const result = await validateWithTimeout(providerId, accountId);
+      setValidationResult(result);
+    } finally {
+      setValidating(false);
+    }
+  }, [providerId]);
+
   const handleCompleteConnection = useCallback(async (data: any) => {
     try {
-      // Handle different completion types
-      if (data.callbackUrl) {
-        // OAuth completion
-        const response = await fetch('/api/chatgpt-oauth/callback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            callbackUrl: data.callbackUrl,
-            state: data.state
-          })
-        });
+      // Account identifier to validate once the connection is saved. Left null
+      // when validation should be skipped (e.g. bulk Kiro imports).
+      let accountId: string | null = null;
 
-        if (!response.ok) {
-          throw new Error('Failed to complete OAuth flow');
+      // Handle different completion types
+      if (data.kiroImport) {
+        // Kiro accounts are connected by importing them from a 9router database.
+        const importResult = await importKiroAccounts(
+          data.sourcePath ? { sourcePath: data.sourcePath } : undefined
+        );
+
+        if (importResult.imported === 0) {
+          throw new Error('No Kiro accounts were found in the source database. Sign in through 9router first.');
         }
+
+        // Only validate single-account imports; skip the health check for bulk
+        // imports where there is no single obvious account to test.
+        if (importResult.imported === 1) {
+          try {
+            const kiroAccounts = await getKiroAccounts();
+            accountId = kiroAccounts.accounts?.[0]?.id ?? null;
+          } catch (err) {
+            console.warn('Could not resolve imported Kiro account for validation:', err);
+          }
+        }
+      } else if (data.callbackUrl) {
+        // OAuth completion. The callback URL IS the redirect URL the browser
+        // landed on; the server extracts `state` from its query params.
+        const response = await submitChatGptOAuthCallback({ redirectUrl: data.callbackUrl });
+        accountId = response.account?.accountId ?? null;
       } else if (data.apiKey) {
-        // API key addition - this would need backend support
-        console.log('API key addition not yet implemented:', data);
-        throw new Error('API key addition not yet implemented');
+        // API key addition. Check if the provider already exists on the backend.
+        const newApiKey = data.apiKey;
+        let existingProvider: ExistingProvider | null = null;
+
+        try {
+          const body = await apiGet<{ ok?: boolean; provider?: ExistingProvider }>(
+            `/api/providers/${encodeURIComponent(providerId)}`
+          );
+          if (body.ok && body.provider) {
+            existingProvider = body.provider;
+          }
+        } catch (err) {
+          // apiGet throws on 404/network — treat as provider not existing.
+          console.log("Provider does not exist on backend:", err);
+        }
+
+        if (!existingProvider) {
+          // Provider doesn't exist on backend. Create it (with 409-recovery).
+          await createOrRecoverProvider({ providerId, apiKey: newApiKey });
+          // A freshly created provider has a single key at index 0.
+          accountId = 'api-key-0';
+        } else {
+          // Provider exists. Append the new API key to the existing list.
+          const existingKeys = Array.isArray(existingProvider.providerApiKeys)
+            ? existingProvider.providerApiKeys
+            : [];
+
+          if (!existingKeys.includes(newApiKey)) {
+            // The new key's index equals the length of the array before append.
+            accountId = `api-key-${existingKeys.length}`;
+            await updateProvider(providerId, {
+              name: existingProvider.name ?? "",
+              baseUrl: existingProvider.baseUrl ?? "",
+              authMode: existingProvider.authMode ?? "api_key",
+              providerApiKeys: [...existingKeys, newApiKey],
+              capabilities: existingProvider.capabilities,
+            });
+          } else {
+            // Key already present — validate the existing entry.
+            accountId = `api-key-${existingKeys.indexOf(newApiKey)}`;
+          }
+        }
       }
 
-      // Refresh accounts and close modal
+      // Refresh accounts before kicking off validation so the list is current.
       onAccountsChanged();
-      onClose();
+
+      // Fire-and-forget the health check so handleCompleteConnection resolves
+      // promptly and the connection flow can advance to the complete step,
+      // where the spinner and result are rendered as state updates arrive.
+      if (accountId) {
+        void runValidation(accountId);
+      }
     } catch (err) {
       console.error('Failed to complete connection:', err);
       throw err;
     }
-  }, [onAccountsChanged, onClose]);
+  }, [providerId, onAccountsChanged, runValidation]);
 
   const handleUpdateRoutingMode = useCallback(async (
     accountId: string,
@@ -206,6 +300,8 @@ export function AccountManagementModal({
           onStartConnection={handleStartConnection}
           onCompleteConnection={handleCompleteConnection}
           onCancel={onClose}
+          validating={validating}
+          validationResult={validationResult}
         />
       )}
     </div>
