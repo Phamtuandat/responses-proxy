@@ -95,6 +95,7 @@ import { DashboardAuthRepository } from "./dashboard-auth.js";
 import { AuditLogRepository } from "./audit-log.js";
 import { processSepayWebhook, type SepayWebhookPayload } from "./sepay-webhook.js";
 import { KiroTokenStore } from "./kiro-token-store.js";
+import { DeviceLoginService, DeviceLoginError } from "./kiro-device-login.js";
 import {
   KiroAuthError,
   KiroUpstreamError,
@@ -170,6 +171,14 @@ const kiroTokenStore: KiroTokenStore | null = (() => {
     return null;
   }
 })();
+
+// Device login service — handles OAuth Device Authorization Grant flow for Kiro accounts
+const deviceLoginService = new DeviceLoginService({
+  config,
+  appDb: providerRepository.getDatabase(),
+  kiroDbPath: config.KIRO_DB_PATH,
+});
+setInterval(() => deviceLoginService.pruneExpiredSessions(), 60_000).unref();
 
 // Initialize routing services after all stores are available
 const routingComboRepository = new RoutingComboRepository(providerRepository.getDatabase());
@@ -1639,6 +1648,87 @@ app.post("/api/kiro/import", async (request, reply) => {
         message: error instanceof Error ? error.message : "Import failed",
       },
     });
+  }
+});
+
+app.post("/api/kiro/device/start", async (request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DISABLED",
+        message: "Kiro is disabled. Set KIRO_ENABLED=true.",
+      },
+    });
+  }
+  if (!config.KIRO_WRITE_BACK_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_WRITE_BACK_DISABLED",
+        message: "Device login cannot persist accounts when write-back is disabled.",
+      },
+    });
+  }
+
+  const body = request.body as { authMethod?: unknown; startUrl?: unknown; region?: unknown } | undefined;
+  const authMethod = body?.authMethod;
+  if (authMethod !== "builder_id" && authMethod !== "idc") {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_AUTH_METHOD",
+        message: "authMethod must be \"builder_id\" or \"idc\".",
+      },
+    });
+  }
+
+  try {
+    const result = await deviceLoginService.startDeviceLogin({
+      authMethod,
+      startUrl: typeof body?.startUrl === "string" ? body.startUrl : undefined,
+      region: typeof body?.region === "string" ? body.region : undefined,
+    });
+    return reply.send({ ok: true, ...result });
+  } catch (error) {
+    if (error instanceof DeviceLoginError) {
+      return reply.code(error.statusCode).send({ error: error.body });
+    }
+    throw error;
+  }
+});
+
+app.post("/api/kiro/device/poll", async (request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: {
+        type: "configuration_error",
+        code: "KIRO_DISABLED",
+        message: "Kiro is disabled. Set KIRO_ENABLED=true.",
+      },
+    });
+  }
+
+  const body = request.body as { sessionId?: unknown } | undefined;
+  const sessionId = body?.sessionId;
+  if (typeof sessionId !== "string" || !sessionId.trim()) {
+    return reply.code(400).send({
+      error: {
+        type: "validation_error",
+        code: "INVALID_SESSION_ID",
+        message: "sessionId must be a non-empty string.",
+      },
+    });
+  }
+
+  try {
+    const result = await deviceLoginService.pollDeviceLogin(sessionId);
+    return reply.send({ ok: true, ...result });
+  } catch (error) {
+    if (error instanceof DeviceLoginError) {
+      return reply.code(error.statusCode).send({ error: error.body });
+    }
+    throw error;
   }
 });
 

@@ -1,10 +1,11 @@
 // Account Connection Flow Component
-// Handles OAuth flows, Kiro token management, and API key input
+// Handles OAuth flows, Kiro token management, API key input, and device login
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { StatusBadge } from "../StatusBadge";
 import { LoadingState } from "../LoadingState";
 import { CheckCircleIcon, AlertIcon, ExternalLinkIcon } from "../icons";
+import { startKiroDeviceLogin, pollKiroDeviceLogin } from "../../api/client";
 import type { ConnectionFlow } from "../../features/accounts/accountApi";
 import type { ProviderAuthType } from "../../features/providers/providerTypes";
 import type { ValidationResult } from "./validateConnection";
@@ -37,7 +38,7 @@ export function AccountConnectionFlow({
   validationResult = null,
   validating = false
 }: AccountConnectionFlowProps) {
-  const [step, setStep] = useState<'start' | 'authorize' | 'callback' | 'kiro_import' | 'complete'>('start');
+  const [step, setStep] = useState<'start' | 'authorize' | 'callback' | 'kiro_import' | 'device_login' | 'complete'>('start');
   const [callbackUrl, setCallbackUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [apiKeyName, setApiKeyName] = useState('');
@@ -45,9 +46,116 @@ export function AccountConnectionFlow({
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
+  // Device login state
+  const [deviceLoginPhase, setDeviceLoginPhase] = useState<'picker' | 'waiting' | 'done' | 'error'>('picker');
+  const [deviceAuthMethod, setDeviceAuthMethod] = useState<'builder_id' | 'idc'>('builder_id');
+  const [deviceStartUrl, setDeviceStartUrl] = useState('');
+  const [deviceRegion, setDeviceRegion] = useState('us-east-1');
+  const [deviceSessionId, setDeviceSessionId] = useState<string | null>(null);
+  const [deviceUserCode, setDeviceUserCode] = useState('');
+  const [deviceVerificationUri, setDeviceVerificationUri] = useState('');
+  const [deviceVerificationUriComplete, setDeviceVerificationUriComplete] = useState('');
+  const [deviceInterval, setDeviceInterval] = useState(5);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Kiro providers are connected by importing accounts from the 9router database
   // rather than running a live OAuth/API-key flow.
   const isKiro = connectionFlow?.type === 'kiro';
+
+  // Clean up polling interval when step changes or component unmounts
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [step]);
+
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  const handleDeviceLoginStart = useCallback(async () => {
+    try {
+      setLocalError(null);
+      setDeviceError(null);
+      setSubmitting(true);
+
+      const input: { authMethod: 'builder_id' | 'idc'; startUrl?: string; region?: string } = {
+        authMethod: deviceAuthMethod,
+      };
+      if (deviceAuthMethod === 'idc') {
+        input.startUrl = deviceStartUrl.trim();
+        input.region = deviceRegion.trim();
+      }
+
+      const result = await startKiroDeviceLogin(input);
+      setDeviceSessionId(result.sessionId);
+      setDeviceUserCode(result.userCode);
+      setDeviceVerificationUri(result.verificationUri);
+      setDeviceVerificationUriComplete(result.verificationUriComplete);
+      setDeviceInterval(result.interval);
+      setDeviceLoginPhase('waiting');
+    } catch (err) {
+      setDeviceError(err instanceof Error ? err.message : 'Failed to start device login');
+      setDeviceLoginPhase('error');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [deviceAuthMethod, deviceStartUrl, deviceRegion]);
+
+  // Start polling when entering the waiting phase
+  useEffect(() => {
+    if (step !== 'device_login' || deviceLoginPhase !== 'waiting' || !deviceSessionId) {
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const result = await pollKiroDeviceLogin(deviceSessionId);
+
+        if (result.status === 'pending') {
+          // Update interval if server changed it (e.g. slow_down)
+          if (result.interval && result.interval !== deviceInterval) {
+            setDeviceInterval(result.interval);
+            // Restart interval with new timing
+            stopPolling();
+            pollIntervalRef.current = setInterval(poll, result.interval * 1000);
+          }
+        } else if (result.status === 'completed') {
+          stopPolling();
+          setDeviceLoginPhase('done');
+          // Notify parent so it can trigger validation
+          await onCompleteConnection({ kiroDeviceLogin: true, accountId: result.account?.id });
+          setStep('complete');
+        } else if (result.status === 'expired') {
+          stopPolling();
+          setDeviceError('Login expired. Please try again.');
+          setDeviceLoginPhase('error');
+        } else if (result.status === 'error') {
+          stopPolling();
+          setDeviceError(result.error?.message || 'Device login failed.');
+          setDeviceLoginPhase('error');
+        }
+      } catch (err) {
+        stopPolling();
+        setDeviceError(err instanceof Error ? err.message : 'Polling failed.');
+        setDeviceLoginPhase('error');
+      }
+    };
+
+    // Start polling at the server-returned interval
+    pollIntervalRef.current = setInterval(poll, deviceInterval * 1000);
+
+    return () => {
+      stopPolling();
+    };
+  }, [step, deviceLoginPhase, deviceSessionId, deviceInterval, stopPolling, onCompleteConnection]);
 
   const handleStartConnection = useCallback(async () => {
     try {
@@ -180,6 +288,19 @@ export function AccountConnectionFlow({
         >
           Cancel
         </button>
+        {isKiro && (
+          <button
+            className="button-secondary"
+            onClick={() => {
+              setDeviceLoginPhase('picker');
+              setDeviceError(null);
+              setStep('device_login');
+            }}
+            disabled={connecting}
+          >
+            Sign In with Device Code
+          </button>
+        )}
         <button
           className="button-primary"
           onClick={handleStartConnection}
@@ -239,6 +360,205 @@ export function AccountConnectionFlow({
       </div>
     </div>
   );
+
+  const renderDeviceLoginStep = () => {
+    // Phase: picker — choose Builder ID or IDC
+    if (deviceLoginPhase === 'picker') {
+      return (
+        <div className="connection-flow-step">
+          <div className="step-header">
+            <h3>Sign In with Device Code</h3>
+            <p>Choose your authentication method to connect a Kiro account.</p>
+          </div>
+
+          <div className="step-content">
+            <div className="form-group">
+              <label>Authentication Method</label>
+              <div className="auth-method-cards">
+                <button
+                  type="button"
+                  className={`auth-method-card ${deviceAuthMethod === 'builder_id' ? 'selected' : ''}`}
+                  onClick={() => setDeviceAuthMethod('builder_id')}
+                >
+                  <strong>AWS Builder ID</strong>
+                  <span>Personal account</span>
+                </button>
+                <button
+                  type="button"
+                  className={`auth-method-card ${deviceAuthMethod === 'idc' ? 'selected' : ''}`}
+                  onClick={() => setDeviceAuthMethod('idc')}
+                >
+                  <strong>IAM Identity Center</strong>
+                  <span>Enterprise</span>
+                </button>
+              </div>
+            </div>
+
+            {deviceAuthMethod === 'idc' && (
+              <>
+                <div className="form-group">
+                  <label htmlFor="deviceStartUrl">Start URL *</label>
+                  <input
+                    id="deviceStartUrl"
+                    type="text"
+                    className="form-input"
+                    placeholder="https://my-org.awsapps.com/start"
+                    value={deviceStartUrl}
+                    onChange={(e) => setDeviceStartUrl(e.target.value)}
+                    disabled={submitting}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="deviceRegion">Region *</label>
+                  <input
+                    id="deviceRegion"
+                    type="text"
+                    className="form-input"
+                    placeholder="us-east-1"
+                    value={deviceRegion}
+                    onChange={(e) => setDeviceRegion(e.target.value)}
+                    disabled={submitting}
+                  />
+                </div>
+              </>
+            )}
+
+            {(deviceError || localError) && (
+              <div className="connection-error">
+                <AlertIcon className="error-icon" />
+                <span>{deviceError || localError}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="step-actions">
+            <button
+              className="button-secondary"
+              onClick={() => setStep('start')}
+              disabled={submitting}
+            >
+              Back
+            </button>
+            <button
+              className="button-primary"
+              onClick={handleDeviceLoginStart}
+              disabled={submitting || (deviceAuthMethod === 'idc' && (!deviceStartUrl.trim() || !deviceRegion.trim()))}
+            >
+              {submitting ? 'Starting...' : 'Start Device Login'}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Phase: waiting — show user code and poll
+    if (deviceLoginPhase === 'waiting') {
+      return (
+        <div className="connection-flow-step">
+          <div className="step-header">
+            <h3>Enter Code in Browser</h3>
+            <p>Enter the code above on the verification page</p>
+          </div>
+
+          <div className="step-content">
+            <div className="device-user-code">{deviceUserCode}</div>
+
+            <div className="auth-url-section">
+              <a
+                href={deviceVerificationUriComplete}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="auth-url-link"
+              >
+                <ExternalLinkIcon className="link-icon" />
+                Open verification page
+              </a>
+            </div>
+
+            <div className="connection-validating">
+              <span className="login-spinner" aria-hidden="true" />
+              <span>Waiting for browser approval...</span>
+            </div>
+          </div>
+
+          <div className="step-actions">
+            <button
+              className="button-secondary"
+              onClick={() => {
+                stopPolling();
+                onCancel();
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Phase: error — show error with retry
+    if (deviceLoginPhase === 'error') {
+      return (
+        <div className="connection-flow-step">
+          <div className="step-header">
+            <h3>Device Login Failed</h3>
+            <p>Something went wrong during the device login flow.</p>
+          </div>
+
+          <div className="step-content">
+            <div className="connection-error">
+              <AlertIcon className="error-icon" />
+              <span>{deviceError || 'An unknown error occurred.'}</span>
+            </div>
+          </div>
+
+          <div className="step-actions">
+            <button
+              className="button-secondary"
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+            <button
+              className="button-primary"
+              onClick={() => {
+                setDeviceError(null);
+                setDeviceLoginPhase('picker');
+              }}
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Phase: done — brief success before transition to 'complete'
+    return (
+      <div className="connection-flow-step">
+        <div className="step-header">
+          <CheckCircleIcon className="success-icon" />
+          <h3>Device Login Successful</h3>
+          <p>Your Kiro account has been connected.</p>
+        </div>
+
+        <div className="step-content">
+          <div className="success-message">
+            <p>Account connected successfully via device code flow.</p>
+          </div>
+        </div>
+
+        <div className="step-actions">
+          <button
+            className="button-primary"
+            onClick={onCancel}
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   const renderAuthorizeStep = () => (
     <div className="connection-flow-step">
@@ -607,6 +927,7 @@ export function AccountConnectionFlow({
         {step === 'authorize' && renderAuthorizeStep()}
         {step === 'callback' && renderCallbackStep()}
         {step === 'kiro_import' && renderKiroImportStep()}
+        {step === 'device_login' && renderDeviceLoginStep()}
         {step === 'complete' && renderCompleteStep()}
       </div>
     </div>
