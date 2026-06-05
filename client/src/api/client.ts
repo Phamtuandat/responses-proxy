@@ -19,6 +19,9 @@ import type {
   KiroAccountResponse,
   KiroAccountUpdateInput,
   KiroAccountDeleteResponse,
+  KiroDevicePollResponse,
+  KiroDeviceStartInput,
+  KiroDeviceStartResponse,
   KiroImportInput,
   KiroImportResponse,
   KiroStatus,
@@ -265,4 +268,13 @@ export function getAuditLogs(params?: { limit?: number; event?: string; subjectI
   if (params?.subjectId) query.append("subjectId", params.subjectId);
   const search = query.toString() ? `?${query.toString()}` : "";
   return apiGet<AuditLogsResponse>(`/api/debug/audit-logs${search}`);
+}
+
+// Kiro Device Login API functions
+export function startKiroDeviceLogin(input: KiroDeviceStartInput) {
+  return apiSend<KiroDeviceStartResponse>("/api/kiro/device/start", "POST", input);
+}
+
+export function pollKiroDeviceLogin(sessionId: string) {
+  return apiSend<KiroDevicePollResponse>("/api/kiro/device/poll", "POST", { sessionId });
 }

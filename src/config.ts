@@ -257,6 +257,13 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => value !== "false"),
+  KIRO_DEVICE_CLIENT_NAME: z.string().min(1).default("responses-proxy"),
+  KIRO_BUILDER_ID_START_URL: z.string().min(1).default("https://view.awsapps.com/start"),
+  KIRO_DEVICE_SCOPES: z
+    .string()
+    .min(1)
+    .default("codewhisperer:completions,codewhisperer:analysis")
+    .transform((v) => v.split(",").map((s) => s.trim()).filter(Boolean)),
 
   // Routing System Configuration
   ROUTING_HEALTH_CHECK_INTERVAL: z.coerce.number().int().positive().default(30000), // 30 seconds

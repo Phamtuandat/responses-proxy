@@ -604,3 +604,28 @@ export type AuditLogsResponse = {
   logs?: AuditLogRecord[];
   [key: string]: unknown;
 };
+
+// Kiro Device Login (AWS SSO-OIDC Device Authorization Grant)
+export type KiroDeviceStartInput = {
+  authMethod: "builder_id" | "idc";
+  startUrl?: string;
+  region?: string;
+};
+
+export type KiroDeviceStartResponse = {
+  ok: true;
+  sessionId: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export type KiroDevicePollResponse = {
+  ok: true;
+  status: "pending" | "completed" | "expired" | "error";
+  interval?: number;
+  account?: { id: string; name: string };
+  error?: { code: string; message: string };
+};
