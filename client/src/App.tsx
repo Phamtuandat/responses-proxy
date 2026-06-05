@@ -9,6 +9,7 @@ import { NotificationProvider } from "./components/feedback/NotificationProvider
 import { AccountManagementScreen } from "./screens/AccountManagementScreen";
 import { AuthScreen } from "./screens/AuthScreen";
 import { CacheScreen } from "./screens/CacheScreen";
+import { ConsoleLogScreen } from "./screens/ConsoleLogScreen";
 import { ClientsScreen } from "./screens/ClientsScreen";
 import { CombosScreen } from "./screens/CombosScreen";
 import { ConfigHelperScreen } from "./screens/ConfigHelperScreen";
@@ -17,8 +18,9 @@ import { EnhancedDashboardScreen } from "./screens/EnhancedDashboardScreen";
 import { EndpointScreen } from "./screens/EndpointScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
-import { EnhancedProvidersScreen } from "./screens/EnhancedProvidersScreen";
+import { EnhancedProvidersScreen, MediaProvidersScreen, ProxyPoolsScreen } from "./screens/EnhancedProvidersScreen";
 import { ProviderDetailScreen } from "./screens/ProviderDetailScreen";
+import { ProviderNewScreen } from "./screens/ProviderNewScreen";
 import { RtkScreen } from "./screens/RtkScreen";
 import { UsageScreen } from "./screens/UsageScreen";
 import { flatNavItems, routerFlatNavItems, routeAliases, resolveRouteAlias } from "./navigation/FunctionalNavigation";
@@ -26,6 +28,7 @@ import { flatNavItems, routerFlatNavItems, routeAliases, resolveRouteAlias } fro
 export type AppRoute =
   | "dashboard"
   | "providers"
+  | "provider-new"
   | "provider-detail"
   | "clients"
   | "client-detail"
@@ -133,6 +136,15 @@ function readRouteFromHash(): RouteState {
   const detailId = segments[1] ? decodeRouteParam(segments[1]) : "";
 
   if (resolvedBaseRoute === "providers") {
+    // 9router-style dedicated add page: #/providers/new
+    if (detailId === "new") {
+      return {
+        route: "provider-new",
+        baseRoute: resolvedBaseRoute,
+        params: {},
+        isUnknown: segments.length > 2,
+      };
+    }
     return {
       route: detailId ? "provider-detail" : "providers",
       baseRoute: resolvedBaseRoute,
@@ -215,19 +227,21 @@ function renderScreen(routeState: RouteState) {
     case "cli-tools":
       return <ConfigHelperScreen />;
     case "media-providers":
-      return <EnhancedProvidersScreen />;
+      return <MediaProvidersScreen />;
     case "proxy-pools":
-      return <EnhancedProvidersScreen />;
+      return <ProxyPoolsScreen />;
     case "skills":
       return <RtkScreen />;
     case "console-log":
-      return <CacheScreen />;
+      return <ConsoleLogScreen />;
     case "settings":
       return <AuthScreen />;
 
     // Legacy routes
     case "providers":
       return <EnhancedProvidersScreen />;
+    case "provider-new":
+      return <ProviderNewScreen />;
     case "provider-detail":
       return <ProviderDetailScreen providerId={routeState.params.providerId} />;
     case "clients":
@@ -293,7 +307,7 @@ export function App() {
 
   useEffect(() => {
     if (!window.location.hash) {
-      window.history.replaceState(null, "", "#/dashboard");
+      window.history.replaceState(null, "", "#/endpoint");
     }
 
     const handleHashChange = () => setRouteState(readRouteFromHash());

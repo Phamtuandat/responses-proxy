@@ -223,54 +223,6 @@ export const routerNavigation: TabNavigation[] = [
     icon: SettingsIcon,
     sections: [
       {
-        id: "media-providers",
-        label: "Media Providers",
-        icon: MediaIcon,
-        statusIndicator: "unknown",
-        collapsible: false,
-        items: [
-          {
-            route: "media-providers",
-            label: "Media Providers",
-            icon: MediaIcon,
-            description: "Image, audio, video, and multimodal provider config",
-            statusIndicator: "unknown"
-          }
-        ]
-      },
-      {
-        id: "proxy-pools",
-        label: "Proxy Pools",
-        icon: ProxyPoolIcon,
-        statusIndicator: "unknown",
-        collapsible: false,
-        items: [
-          {
-            route: "proxy-pools",
-            label: "Proxy Pools",
-            icon: ProxyPoolIcon,
-            description: "Network proxy pool management",
-            statusIndicator: "unknown"
-          }
-        ]
-      },
-      {
-        id: "skills",
-        label: "Skills",
-        icon: SkillsIcon,
-        statusIndicator: "unknown",
-        collapsible: false,
-        items: [
-          {
-            route: "skills",
-            label: "Skills",
-            icon: SkillsIcon,
-            description: "Installed tools, extensions, and router skills",
-            statusIndicator: "unknown"
-          }
-        ]
-      },
-      {
         id: "console-log",
         label: "Console Log",
         icon: ConsoleIcon,
@@ -537,24 +489,6 @@ export const routerFunctionalNavGroups: FunctionalNavGroup[] = [
     icon: SettingsIcon,
     collapsible: true,
     items: [
-      {
-        route: "media-providers",
-        label: "Media Providers",
-        icon: MediaIcon,
-        description: "Image, audio, video, and multimodal provider config"
-      },
-      {
-        route: "proxy-pools",
-        label: "Proxy Pools",
-        icon: ProxyPoolIcon,
-        description: "Network proxy pool management"
-      },
-      {
-        route: "skills",
-        label: "Skills",
-        icon: SkillsIcon,
-        description: "Installed tools, extensions, and router skills"
-      },
       {
         route: "console-log",
         label: "Console Log",

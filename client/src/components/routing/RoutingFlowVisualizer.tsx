@@ -36,9 +36,9 @@ export function RoutingFlowVisualizer({
     }, {} as Record<string, Provider>);
   }, [providers]);
 
-  const enabledTiers = combo.tiers
-    .filter(tier => tier.isEnabled)
-    .sort((a, b) => a.priority - b.priority);
+  const enabledTiers = (combo.tiers || [])
+    .filter(tier => tier && tier.isEnabled)
+    .sort((a, b) => (a.priority || 0) - (b.priority || 0));
 
   return (
     <SurfaceCard
@@ -120,8 +120,8 @@ interface TierFlowNodeProps {
 }
 
 function TierFlowNode({ tier, providers, isSelected, simulationResult }: TierFlowNodeProps) {
-  const tierProviders = tier.providers.map((binding: any) => {
-    const provider = providers.find(p => p.id === binding.providerId);
+  const tierProviders = (tier.providers || []).map((binding: any) => {
+    const provider = providers.find(p => p.id === binding?.providerId);
     return { ...binding, provider };
   });
 
@@ -330,12 +330,12 @@ interface FlowStatisticsProps {
 
 function FlowStatistics({ combo, providers }: FlowStatisticsProps) {
   const stats = useMemo(() => {
-    const totalTiers = combo.tiers.length;
-    const enabledTiers = combo.tiers.filter(tier => tier.isEnabled).length;
-    const totalProviders = combo.tiers.reduce((sum, tier) => sum + tier.providers.length, 0);
-    const healthyProviders = combo.tiers.reduce((sum, tier) => {
-      return sum + tier.providers.filter(binding => {
-        const provider = providers.find(p => p.id === binding.providerId);
+    const totalTiers = (combo.tiers || []).length;
+    const enabledTiers = (combo.tiers || []).filter(tier => tier && tier.isEnabled).length;
+    const totalProviders = (combo.tiers || []).reduce((sum, tier) => sum + (tier?.providers || []).length, 0);
+    const healthyProviders = (combo.tiers || []).reduce((sum, tier) => {
+      return sum + (tier?.providers || []).filter(binding => {
+        const provider = providers.find(p => p.id === binding?.providerId);
         return provider?.healthStatus === 'healthy';
       }).length;
     }, 0);

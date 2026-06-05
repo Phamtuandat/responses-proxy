@@ -1,22 +1,19 @@
-import React, { useState, useMemo } from "react";
-import { PageHeader } from "../components/PageHeader";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
+import { updateProvider, deleteProvider, getProviderModels } from "../api/client";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { RefreshButton } from "../components/RefreshButton";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingState } from "../components/LoadingState";
+import { PageHeader } from "../components/PageHeader";
 import { AccountManagementModal } from "../components/accounts/AccountManagementModal";
 import { HealthDashboard, HealthStatusIndicator } from "../components/health/HealthDashboard";
 import {
   ProvidersIcon,
-  CheckCircleIcon,
   AlertIcon,
-  ConfigIcon,
-  AuthIcon,
-  QuotaIcon,
-  CliIcon,
   PlusIcon,
-  TestIcon
+  TestIcon,
+  TrashIcon
 } from "../components/icons";
 import type {
   Provider,
@@ -60,52 +57,79 @@ interface ProviderDetailScreenProps {
 
 // Real API integration - no more mock data
 
+// Inline icons used by the 9router-style detail layout (kept local to this screen).
+function ChevronUpMini(props: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className}>
+      <path d="M4 10l4-4 4 4" />
+    </svg>
+  );
+}
+
+function ChevronDownMini(props: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className}>
+      <path d="M4 6l4 4 4-4" />
+    </svg>
+  );
+}
+
+function LockMini(props: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={props.className}>
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    </svg>
+  );
+}
+
+function PencilMini(props: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={props.className}>
+      <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10z" />
+    </svg>
+  );
+}
+
+function CopyMini(props: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={props.className}>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+      <path d="M3.5 10.5h-1A1 1 0 0 1 1.5 9.5v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1" />
+    </svg>
+  );
+}
+
 function ProviderDetailHeader({ provider }: { provider: Provider }) {
   const catalogEntry = getProviderById(provider.id);
-  const healthInfo = formatHealthStatus(provider.healthStatus);
   const connectionCount = provider.accounts?.length || 0;
 
   return (
-    <div className="provider-detail-header">
-      <div className="provider-header-main">
-        <div className="provider-header-info">
-          <div className="provider-header-icon">
-            <ProvidersIcon />
-          </div>
-          <div className="provider-header-details">
-            <h1 className="provider-header-name">{provider.displayName}</h1>
-            <p className="provider-header-description">{provider.description}</p>
+    <div className="pd9-header">
+      <button className="pd9-back" onClick={() => (window.location.hash = "#/providers")}>
+        ← Back to Providers
+      </button>
+
+      <div className="pd9-title-row">
+        <div className="pd9-icon-tile">
+          <ProvidersIcon />
+        </div>
+        <div className="pd9-title-main">
+          <div className="pd9-title-line">
+            <h1 className="pd9-title">{provider.displayName}</h1>
             {catalogEntry?.signupUrl && (
               <a
                 href={catalogEntry.signupUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="provider-external-link"
+                className="pd9-signup-link"
               >
-                Sign up / Learn more →
+                Sign up / Learn more ↗
               </a>
             )}
           </div>
-        </div>
-        <div className="provider-header-meta">
-          <div className="provider-connection-count">
-            <span className="connection-count-number">{connectionCount}</span>
-            <span className="connection-count-label">connection{connectionCount !== 1 ? 's' : ''}</span>
-          </div>
-          <div className="provider-header-badges">
-            <StatusBadge variant="accent" size="md">
-              {provider.tier}
-            </StatusBadge>
-            <StatusBadge variant="neutral" size="md">
-              {AUTH_TYPES[provider.preferredAuthType || "api_key"].label}
-            </StatusBadge>
-            <StatusBadge
-              variant={healthInfo.severity === "success" ? "success" :
-                      healthInfo.severity === "warning" ? "warning" : "danger"}
-              size="md"
-            >
-              {healthInfo.label}
-            </StatusBadge>
+          <div className="pd9-connection-count">
+            {connectionCount} connection{connectionCount !== 1 ? 's' : ''}
           </div>
         </div>
       </div>
@@ -155,330 +179,277 @@ function ProviderRiskNotice({ provider }: { provider: Provider }) {
   );
 }
 
-function ConnectionsCard({ provider }: { provider: Provider }) {
-  const [expandedAccount, setExpandedAccount] = useState<string | null>(null);
-  const [testingAccount, setTestingAccount] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, ProviderTestResult>>({});
+interface ConnectionsCardProps {
+  provider: Provider;
+  accounts: any[];
+  accountsLoading: boolean;
+  accountsError: string | null;
+  onAddAccount: () => void;
+  onEditAccount: (account: any) => void;
+  onTestAccount: (accountId: string) => void;
+  onUpdateRoutingMode: (accountId: string, mode: ProviderAccountRoutingMode) => void;
+  onReorderAccount?: (index: number, direction: "up" | "down") => void;
+  onDeleteAccount: (accountId: string) => void;
+  getTestResult: (accountId: string) => any;
+  isTestingAccount: (accountId: string) => boolean;
+}
 
-  const accounts = provider.accounts || [];
-  const accountHealthSummary = getAccountHealthSummary(accounts);
+function ConnectionsCard({
+  provider,
+  accounts,
+  accountsLoading,
+  accountsError,
+  onAddAccount,
+  onEditAccount,
+  onTestAccount,
+  onUpdateRoutingMode,
+  onReorderAccount,
+  onDeleteAccount,
+  getTestResult,
+  isTestingAccount,
+}: ConnectionsCardProps) {
+  // Round Robin toggle reflects the routing mode of the connections. When ON,
+  // requests are distributed round-robin; when OFF, the proxy sticks to the
+  // first available account. Backed by `onUpdateRoutingMode` where supported.
+  const initialRoundRobin = accounts.some(acc => acc.routingMode === "round_robin");
+  const [roundRobin, setRoundRobin] = useState(initialRoundRobin);
+  const [stickyValue, setStickyValue] = useState(1);
 
-  const routingModes: { value: ProviderAccountRoutingMode; label: string; description: string }[] = [
-    { value: "priority", label: "Priority", description: "Use accounts in order of priority" },
-    { value: "round_robin", label: "Round Robin", description: "Distribute requests across accounts" },
-    { value: "sticky", label: "Sticky", description: "Use same account per client session" },
-    { value: "failover_only", label: "Failover Only", description: "Use only when primary accounts fail" },
-    { value: "disabled", label: "Disabled", description: "Do not use this account" }
-  ];
+  useEffect(() => {
+    setRoundRobin(accounts.some(acc => acc.routingMode === "round_robin"));
+  }, [accounts]);
 
-  const handleTestAccount = async (accountId: string) => {
-    setTestingAccount(accountId);
+  const isTestingAny = accounts.some(acc => isTestingAccount(acc.id));
 
-    // Simulate API call
-    setTimeout(() => {
-      const mockResult = createMockTestResult(provider, Math.random() > 0.2, { accountId });
-      setTestResults(prev => ({ ...prev, [accountId]: mockResult }));
-      setTestingAccount(null);
-    }, 2000);
+  const handleTestOneByOne = async () => {
+    for (const account of accounts) {
+      onTestAccount(account.id);
+    }
   };
 
-  const handleTestAllAccounts = async () => {
-    for (const account of accounts) {
-      if (account.status === "connected") {
-        await handleTestAccount(account.id);
-      }
-    }
+  const handleToggleRoundRobin = () => {
+    const next = !roundRobin;
+    setRoundRobin(next);
+    const mode: ProviderAccountRoutingMode = next ? "round_robin" : "sticky";
+    accounts.forEach(account => onUpdateRoutingMode(account.id, mode));
+  };
+
+  const statusLabel = (status: string) => {
+    if (status === "connected") return "active";
+    return status;
   };
 
   return (
     <SurfaceCard
       title="Connections"
-      description={`${accountHealthSummary.message} • ${accounts.length} total account${accounts.length !== 1 ? 's' : ''}`}
       actions={
-        <div className="connections-actions">
+        <div className="pd9-conn-controls">
           <button
-            className="test-all-button"
-            onClick={handleTestAllAccounts}
-            disabled={testingAccount !== null}
+            className="pd9-test-onebyone"
+            onClick={handleTestOneByOne}
+            disabled={isTestingAny || accounts.length === 0}
           >
-            Test All
+            <TestIcon className="pd9-btn-icon" />
+            {isTestingAny ? "Testing..." : "Test Connection One-by-One"}
           </button>
-          <button className="add-account-button">
-            Add Account
-          </button>
+          <div className="pd9-rotation-control">
+            <span className="pd9-rotation-label">Round Robin</span>
+            <button
+              type="button"
+              className={`pd9-switch ${roundRobin ? "on" : ""}`}
+              role="switch"
+              aria-checked={roundRobin}
+              onClick={handleToggleRoundRobin}
+              disabled={accounts.length === 0}
+              title="Toggle round-robin rotation across connections"
+            >
+              <span className="pd9-switch-knob" />
+            </button>
+          </div>
+          <div className="pd9-sticky-control" title="Sticky session count (visual only)">
+            <span className="pd9-rotation-label">Sticky:</span>
+            <input
+              type="number"
+              min={1}
+              className="pd9-sticky-input"
+              value={stickyValue}
+              onChange={(e) => setStickyValue(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              disabled={!roundRobin}
+            />
+          </div>
         </div>
       }
     >
-      <div className="connections-list">
+      {accountsError && (
+        <div className="connections-error" style={{ color: "var(--danger)", padding: "var(--space-2) 0" }}>
+          Error loading accounts: {accountsError}
+        </div>
+      )}
+
+      <div className="pd9-conn-list">
         {accounts.map((account, index) => {
-          const isExpanded = expandedAccount === account.id;
-          const isTesting = testingAccount === account.id;
-          const testResult = testResults[account.id];
-          const routingMode = routingModes.find(mode => mode.value === account.routingMode);
+          const isTesting = isTestingAccount(account.id);
+          const testResult = getTestResult(account.id);
+          const enabled = account.status !== "disabled";
+          const canReorder = Boolean(onReorderAccount) && accounts.length > 1;
 
           return (
-            <div key={account.id} className="connection-item">
-              <div
-                className="connection-header"
-                onClick={() => setExpandedAccount(isExpanded ? null : account.id)}
-              >
-                <div className="connection-info">
-                  <div className="connection-expand-icon">
-                    {isExpanded ? "▼" : "▶"}
-                  </div>
-                  <AuthIcon className="connection-auth-icon" />
-                  <div className="connection-details">
-                    <div className="connection-label">{account.label}</div>
-                    <div className="connection-meta">
-                      <StatusBadge
-                        variant={account.status === "connected" ? "success" : "danger"}
-                        size="sm"
-                      >
-                        {account.status}
-                      </StatusBadge>
-                      <StatusBadge variant="neutral" size="sm">
-                        {AUTH_TYPES[account.authType].label}
-                      </StatusBadge>
-                      <span className="connection-priority">#{index + 1}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="connection-actions">
-                  <button
-                    className="test-connection-button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleTestAccount(account.id);
-                    }}
-                    disabled={isTesting}
-                  >
-                    {isTesting ? "Testing..." : "Test"}
-                  </button>
-                  <button className="connection-menu-button">⋯</button>
-                </div>
+            <div key={account.id} className={`pd9-conn-row ${enabled ? "" : "is-disabled"}`}>
+              <div className="pd9-conn-reorder">
+                <button
+                  className="pd9-reorder-btn"
+                  aria-label="Move up"
+                  disabled={!canReorder || index === 0}
+                  onClick={() => onReorderAccount && onReorderAccount(index, "up")}
+                >
+                  <ChevronUpMini />
+                </button>
+                <button
+                  className="pd9-reorder-btn"
+                  aria-label="Move down"
+                  disabled={!canReorder || index === accounts.length - 1}
+                  onClick={() => onReorderAccount && onReorderAccount(index, "down")}
+                >
+                  <ChevronDownMini />
+                </button>
               </div>
 
-              {isExpanded && (
-                <div className="connection-expanded">
-                  <div className="connection-expanded-grid">
-                    <div className="connection-field">
-                      <label className="connection-field-label">Email</label>
-                      <div className="connection-field-value">{account.email || "Not provided"}</div>
-                    </div>
-                    <div className="connection-field">
-                      <label className="connection-field-label">Last Used</label>
-                      <div className="connection-field-value">
-                        {account.lastUsedAt
-                          ? new Date(account.lastUsedAt).toLocaleString()
-                          : "Never"
-                        }
-                      </div>
-                    </div>
-                    <div className="connection-field">
-                      <label className="connection-field-label">Routing Mode</label>
-                      <select
-                        className="connection-routing-select"
-                        value={account.routingMode || "priority"}
-                        onChange={(e) => {
-                          // TODO: Update account routing mode
-                          console.log("Update routing mode:", e.target.value);
-                        }}
-                      >
-                        {routingModes.map(mode => (
-                          <option key={mode.value} value={mode.value}>
-                            {mode.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
+              <div className="pd9-conn-lock" title="This connection is managed securely">
+                <LockMini />
+              </div>
 
-                  {account.quota && (
-                    <div className="connection-quota">
-                      <div className="quota-header">
-                        <span className="quota-label">Account Quota</span>
-                        <span className="quota-percent">{account.quota.usagePercent?.toFixed(1)}%</span>
-                      </div>
-                      <div className="quota-bar">
-                        <div
-                          className="quota-fill"
-                          style={{
-                            width: `${Math.min(account.quota.usagePercent || 0, 100)}%`,
-                            backgroundColor: (account.quota.usagePercent || 0) > 90 ? '#ff6961' :
-                                            (account.quota.usagePercent || 0) > 75 ? '#ffd60a' : '#30d158'
-                          }}
-                        />
-                      </div>
-                      <div className="quota-details">
-                        {account.quota.used?.toLocaleString()} / {account.quota.limit?.toLocaleString()} {account.quota.quotaType}
-                        {account.quota.resetAt && (
-                          <span className="quota-reset">
-                            • Resets {new Date(account.quota.resetAt).toLocaleDateString()}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {testResult && (
-                    <div className="connection-test-result">
-                      <div className="test-result-header">
-                        <span className="test-result-label">Test Result</span>
-                        <StatusBadge
-                          variant={testResult.status === "success" ? "success" : "danger"}
-                          size="sm"
-                        >
-                          {testResult.status}
-                        </StatusBadge>
-                      </div>
-                      <div className="test-result-details">
-                        {analyzeTestResult(testResult).summary}
-                        {testResult.latencyMs && (
-                          <span className="test-latency"> • {testResult.latencyMs}ms</span>
-                        )}
-                      </div>
-                      {testResult.suggestedFix && (
-                        <div className="test-result-suggestion">
-                          💡 {testResult.suggestedFix}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="connection-expanded-actions">
-                    <button className="reconnect-button">Reconnect</button>
-                    <button className="edit-account-button">Edit</button>
-                    <button className="delete-account-button">Delete</button>
-                  </div>
+              <div className="pd9-conn-main">
+                <div className="pd9-conn-label">{account.label}</div>
+                <div className="pd9-conn-badges">
+                  <span className={`pd9-status-dot ${account.status === "connected" ? "ok" : "bad"}`} />
+                  <span className="pd9-status-text">{statusLabel(account.status)}</span>
+                  <span className="pd9-conn-chip">{AUTH_TYPES[account.authType]?.label || account.authType}</span>
+                  <span className="pd9-conn-index">#{index + 1}</span>
                 </div>
-              )}
+                {testResult && (
+                  <div className={`pd9-conn-testresult ${testResult.status === "success" ? "ok" : "bad"}`}>
+                    {testResult.status === "success" ? "✓" : "✕"} {analyzeTestResult(testResult).summary}
+                    {testResult.latencyMs ? ` • ${testResult.latencyMs}ms` : ""}
+                  </div>
+                )}
+              </div>
+
+              <div className="pd9-conn-actions">
+                <button
+                  className="pd9-icon-btn"
+                  title="Test connection"
+                  onClick={() => onTestAccount(account.id)}
+                  disabled={isTesting}
+                >
+                  <TestIcon className="pd9-action-icon" />
+                </button>
+                <button
+                  className="pd9-icon-btn"
+                  title="Edit connection"
+                  onClick={() => onEditAccount(account)}
+                >
+                  <PencilMini />
+                </button>
+                <button
+                  className="pd9-icon-btn danger"
+                  title="Delete connection"
+                  onClick={() => {
+                    if (window.confirm(`Are you sure you want to remove account connection "${account.label}"?`)) {
+                      onDeleteAccount(account.id);
+                    }
+                  }}
+                >
+                  <TrashIcon className="pd9-action-icon" />
+                </button>
+                <button
+                  type="button"
+                  className={`pd9-switch sm ${enabled ? "on" : ""}`}
+                  role="switch"
+                  aria-checked={enabled}
+                  title={enabled ? "Disable connection" : "Enable connection"}
+                  onClick={() => onUpdateRoutingMode(account.id, enabled ? "disabled" : "round_robin")}
+                >
+                  <span className="pd9-switch-knob" />
+                </button>
+              </div>
             </div>
           );
         })}
 
-        {accounts.length === 0 && (
+        {accounts.length === 0 && !accountsLoading && (
           <EmptyState
             title="No accounts connected"
             description="Connect an account to start using this provider."
             actionLabel="Add Account"
-            actionHref="#"
+            onClick={onAddAccount}
           />
         )}
+
+        <button className="pd9-add-btn" onClick={onAddAccount}>
+          <PlusIcon className="pd9-btn-icon" />
+          Add
+        </button>
       </div>
     </SurfaceCard>
   );
 }
 
-function ModelsCard({ provider }: { provider: Provider }) {
-  const models = provider.models || [];
+function ModelsCard({ models, loading }: { models: ProviderModel[]; loading?: boolean }) {
   const enabledModels = models.filter(m => m.enabled);
   const [copiedModel, setCopiedModel] = useState<string | null>(null);
 
   const copyModelId = (modelId: string) => {
     navigator.clipboard.writeText(modelId);
     setCopiedModel(modelId);
-    setTimeout(() => setCopiedModel(null), 2000);
-  };
-
-  const handleToggleModel = (modelId: string, enabled: boolean) => {
-    // TODO: Implement model enable/disable
-    console.log("Toggle model:", modelId, enabled);
-  };
-
-  const handleDisableAll = () => {
-    // TODO: Implement disable all models
-    console.log("Disable all models");
-  };
-
-  const handleAddModel = () => {
-    // TODO: Implement add model
-    console.log("Add model");
+    setTimeout(() => setCopiedModel(null), 1500);
   };
 
   return (
     <SurfaceCard
       title="Available Models"
-      description={`${enabledModels.length} enabled • ${models.length} total`}
+      description={loading ? "Loading models..." : `${enabledModels.length} enabled • ${models.length} total`}
       actions={
-        <div className="models-actions">
-          <button className="disable-all-button" onClick={handleDisableAll}>
-            Disable All
-          </button>
-          <button className="add-model-button" onClick={handleAddModel}>
-            Add Model
+        <div className="pd9-models-actions">
+          <button className="pd9-disable-all" title="Disable all models" disabled>
+            ⊘ Disable All
           </button>
         </div>
       }
     >
-      <div className="models-grid">
-        {models.map(model => (
-          <div key={model.id} className={`model-card ${model.enabled ? 'enabled' : 'disabled'}`}>
-            <div className="model-header">
-              <div className="model-info">
-                <div className="model-name">{model.displayName}</div>
-                <div className="model-id">{model.id}</div>
-              </div>
-              <div className="model-actions">
-                <button
-                  className="copy-model-button"
-                  onClick={() => copyModelId(model.id)}
-                  title="Copy model ID"
-                >
-                  {copiedModel === model.id ? "Copied!" : "Copy"}
-                </button>
-                <label className="model-toggle">
-                  <input
-                    type="checkbox"
-                    checked={model.enabled}
-                    onChange={(e) => handleToggleModel(model.id, e.target.checked)}
-                  />
-                  <span className="toggle-slider"></span>
-                </label>
-              </div>
+      {loading ? (
+        <div style={{ padding: "var(--space-6)", textAlign: "center", color: "var(--text-secondary)" }}>
+          Loading available models...
+        </div>
+      ) : (
+        <div className="pd9-models-grid">
+          {models.map(model => (
+            <div key={model.id} className="pd9-model-pill" title={model.id}>
+              <span className="pd9-model-icon">
+                {SERVICE_KINDS[model.serviceKind]?.icon || "🧠"}
+              </span>
+              <span className="pd9-model-id">{model.id}</span>
+              <button
+                className="pd9-model-copy"
+                onClick={() => copyModelId(model.id)}
+                title="Copy model ID"
+              >
+                {copiedModel === model.id ? "✓" : <CopyMini />}
+              </button>
             </div>
+          ))}
 
-            <div className="model-details">
-              <div className="model-service">
-                <span className="service-chip">
-                  {SERVICE_KINDS[model.serviceKind].icon} {SERVICE_KINDS[model.serviceKind].label}
-                </span>
-              </div>
+          <button className="pd9-add-model" title="Add a custom model" disabled>
+            <PlusIcon className="pd9-btn-icon" />
+            Add Model
+          </button>
 
-              {model.contextWindow && (
-                <div className="model-spec">
-                  <span className="spec-label">Context:</span>
-                  <span className="spec-value">{model.contextWindow.toLocaleString()} tokens</span>
-                </div>
-              )}
-
-              {model.inputCostPer1M && (
-                <div className="model-spec">
-                  <span className="spec-label">Cost:</span>
-                  <span className="spec-value">
-                    ${model.inputCostPer1M}/${model.outputCostPer1M} per 1M tokens
-                  </span>
-                </div>
-              )}
-
-              <div className="model-capabilities">
-                {model.supportsStreaming && <span className="capability-chip">Streaming</span>}
-                {model.supportsTools && <span className="capability-chip">Tools</span>}
-                {model.supportsVision && <span className="capability-chip">Vision</span>}
-                {model.supportsJsonMode && <span className="capability-chip">JSON</span>}
-              </div>
+          {models.length === 0 && (
+            <div className="pd9-models-empty">
+              No models available yet.
             </div>
-          </div>
-        ))}
-
-        {models.length === 0 && (
-          <EmptyState
-            title="No models available"
-            description="Add models to start using this provider."
-            actionLabel="Add Model"
-            actionHref="#"
-          />
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </SurfaceCard>
   );
 }
@@ -496,14 +467,22 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
   // Fetch provider data from real API
   const { provider, loading: providerLoading, error: providerError, refresh: refreshProvider } = useProvider(providerId || null);
 
-  // Fetch account data from real API
+  // Only fetch accounts from real API when provider has a backend record
+  const isConfigured = provider?.configured ?? false;
   const {
     accounts,
     loading: accountsLoading,
     error: accountsError,
     stats: accountStats,
     refresh: refreshAccounts
-  } = useProviderAccounts(providerId || null);
+  } = useProviderAccounts(isConfigured ? (providerId || null) : null);
+
+  // Local ordering for the connections list so reorder arrows give immediate
+  // feedback (mirrors 9router). Synced whenever the source accounts change.
+  const [orderedAccounts, setOrderedAccounts] = useState<any[]>([]);
+  useEffect(() => {
+    setOrderedAccounts(accounts);
+  }, [accounts]);
 
   // Account testing functionality
   const {
@@ -541,6 +520,61 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
   const currentHealthStatus = healthUpdate?.healthStatus || provider?.healthStatus || 'unknown';
   const currentHealthMessage = healthUpdate?.healthMessage || provider?.healthMessage;
   const currentQuota = healthUpdate?.quota || provider?.quota;
+
+  // Local states for editing custom providers
+  const [editName, setEditName] = useState("");
+  const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editTransportMode, setEditTransportMode] = useState<"responses" | "chat_completions">("chat_completions");
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // States for fetching dynamic models list
+  const [dynamicModels, setDynamicModels] = useState<ProviderModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+
+  useEffect(() => {
+    if (provider && provider.tier === "custom") {
+      setEditName(provider.displayName || "");
+      setEditBaseUrl(provider.baseUrl || "");
+      setEditTransportMode(provider.capabilities?.transportMode === "responses" ? "responses" : "chat_completions");
+    }
+  }, [provider]);
+
+  const fetchDynamicModels = useCallback(async () => {
+    if (!providerId || !isConfigured) return;
+    try {
+      setModelsLoading(true);
+      const res = await getProviderModels(providerId);
+      if (res && Array.isArray(res.models)) {
+        setDynamicModels(res.models.map((m: any) => {
+          const modelId = typeof m === 'string' ? m : m.id || '';
+          return {
+            id: modelId,
+            displayName: modelId.split('/').pop() || modelId,
+            enabled: true,
+            serviceKind: 'chat',
+            supportsStreaming: true,
+            supportsTools: true,
+            supportsVision: modelId.includes('vision') || modelId.includes('gpt-4o'),
+            supportsJsonMode: true,
+          };
+        }));
+      } else {
+        setDynamicModels([]);
+      }
+    } catch (err) {
+      setDynamicModels([]);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [providerId, isConfigured]);
+
+  useEffect(() => {
+    if (providerId && isConfigured) {
+      fetchDynamicModels();
+    }
+  }, [providerId, isConfigured, fetchDynamicModels]);
 
   // Compute provider eligibility and quota status
   const eligibility = provider ? checkProviderEligibility(provider) : null;
@@ -617,6 +651,73 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
     refreshAccounts();
   };
 
+  const handleReorderAccount = (index: number, direction: "up" | "down") => {
+    setOrderedAccounts(prev => {
+      const next = [...prev];
+      const target = direction === "up" ? index - 1 : index + 1;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  const handleUpdateCustomProvider = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!providerId) return;
+    setSaveError(null);
+    setSaveSuccess(false);
+
+    if (!editName.trim()) {
+      setSaveError("Name is required");
+      return;
+    }
+    if (!editBaseUrl.trim()) {
+      setSaveError("Base URL is required");
+      return;
+    }
+    try {
+      new URL(editBaseUrl);
+    } catch {
+      setSaveError("Base URL must be a valid URL");
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      await updateProvider(providerId, {
+        name: editName.trim(),
+        baseUrl: editBaseUrl.trim(),
+        authMode: provider?.preferredAuthType || "api_key",
+        providerApiKeys: provider?.providerApiKeys || [],
+        capabilities: {
+          ...provider?.capabilities,
+          transportMode: editTransportMode,
+        }
+      });
+      setSaveSuccess(true);
+      await refreshProvider();
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to update provider settings");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteCustomProvider = async () => {
+    if (!providerId || !provider) return;
+    if (!window.confirm(`Are you sure you want to permanently delete custom provider "${provider.displayName}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await deleteProvider(providerId);
+      window.location.hash = "#/providers";
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete provider");
+    }
+  };
+
   // Loading state
   if (providerLoading) {
     return (
@@ -655,238 +756,133 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
   }
 
   return (
-    <div className="screen-stack">
-      <PageHeader
-        icon={ProvidersIcon}
-        title="Provider Details"
-        description="Manage provider connections, models, and configuration"
-        actions={
-          <div className="page-actions">
-            <RefreshButton onClick={handleRefresh} />
-            <button
-              className="button-secondary"
-              onClick={handleRefreshHealth}
-              disabled={isCheckingHealth}
-              title="Refresh provider health status"
-            >
-              {isCheckingHealth ? 'Checking...' : 'Check Health'}
-            </button>
-            <button
-              className={`button-secondary ${showHealthDashboard ? 'active' : ''}`}
-              onClick={() => setShowHealthDashboard(!showHealthDashboard)}
-              title="Toggle health monitoring dashboard"
-            >
-              Health Monitor
-            </button>
-            <button
-              className="back-button"
-              onClick={() => window.location.hash = "#/providers"}
-            >
-              ← Back to Providers
-            </button>
-          </div>
-        }
-      />
-
-      <div className="provider-detail-layout">
-        {/* Health Dashboard (when enabled) */}
-        {showHealthDashboard && (
-          <div className="provider-health-section">
-            <HealthDashboard autoStart={true} showControls={true} compact={true} />
-          </div>
-        )}
-
-        <ProviderDetailHeader
-          provider={provider}
-          accountStats={accountStats}
-          onManageAccounts={handleManageAccounts}
-        />
+    <div className="screen-stack pd9-screen">
+      <div className="provider-detail-layout pd9-layout">
+        <ProviderDetailHeader provider={provider} />
 
         <ProviderRiskNotice provider={provider} />
 
-        <div className="provider-detail-grid">
+        <div className="provider-detail-grid pd9-grid">
           <div className="provider-detail-main">
+            {provider.tier === "custom" && (
+              <SurfaceCard 
+                title="Configuration" 
+                description="Edit endpoint settings and transport mode for this custom provider"
+                actions={
+                  <button 
+                    className="button-danger" 
+                    onClick={handleDeleteCustomProvider}
+                    style={{ fontSize: "var(--font-xs)", padding: "4px var(--space-3)" }}
+                  >
+                    🗑 Delete Provider
+                  </button>
+                }
+              >
+                <form onSubmit={handleUpdateCustomProvider} className="custom-provider-config-form" style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+                  {saveError && (
+                    <div className="modal-error" style={{ color: "var(--danger)", padding: "var(--space-2) 0" }}>
+                      ⚠️ {saveError}
+                    </div>
+                  )}
+                  {saveSuccess && (
+                    <div className="modal-success" style={{ color: "var(--success)", padding: "var(--space-2) 0", fontWeight: "600" }}>
+                      ✓ Configuration updated successfully
+                    </div>
+                  )}
+                  
+                  <div className="form-group" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+                    <label htmlFor="custom-name" style={{ fontSize: "var(--font-xs)", fontWeight: "600", color: "var(--text-secondary)" }}>Provider Name</label>
+                    <input
+                      id="custom-name"
+                      type="text"
+                      className="search-input"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      required
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: "var(--font-sm)",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--line)",
+                        background: "var(--surface-input)",
+                        color: "var(--text-primary)",
+                        width: "100%",
+                      }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+                    <label htmlFor="custom-url" style={{ fontSize: "var(--font-xs)", fontWeight: "600", color: "var(--text-secondary)" }}>Base URL / Endpoint</label>
+                    <input
+                      id="custom-url"
+                      type="url"
+                      className="search-input"
+                      value={editBaseUrl}
+                      onChange={(e) => setEditBaseUrl(e.target.value)}
+                      placeholder="https://api.openai.com/v1"
+                      required
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: "var(--font-sm)",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--line)",
+                        background: "var(--surface-input)",
+                        color: "var(--text-primary)",
+                        width: "100%",
+                      }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+                    <label htmlFor="custom-transport" style={{ fontSize: "var(--font-xs)", fontWeight: "600", color: "var(--text-secondary)" }}>Transport Mode</label>
+                    <select
+                      id="custom-transport"
+                      className="search-input"
+                      value={editTransportMode}
+                      onChange={(e) => setEditTransportMode(e.target.value as "responses" | "chat_completions")}
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: "var(--font-sm)",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--line)",
+                        background: "var(--surface-input)",
+                        color: "var(--text-primary)",
+                        width: "100%",
+                      }}
+                    >
+                      <option value="responses">Responses API (/responses)</option>
+                      <option value="chat_completions">Chat Completions (/chat/completions)</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "var(--space-2)" }}>
+                    <button 
+                      type="submit" 
+                      className="button-primary"
+                      disabled={isSaving}
+                    >
+                      {isSaving ? "Saving..." : "Save Configuration"}
+                    </button>
+                  </div>
+                </form>
+              </SurfaceCard>
+            )}
+
             <ConnectionsCard
               provider={provider}
-              accounts={accounts}
+              accounts={orderedAccounts}
               accountsLoading={accountsLoading}
               accountsError={accountsError}
               onAddAccount={handleAddAccount}
               onEditAccount={handleEditAccount}
               onTestAccount={handleTestAccount}
               onUpdateRoutingMode={handleUpdateRoutingMode}
-              onRefreshAccount={handleRefreshAccount}
+              onReorderAccount={handleReorderAccount}
               onDeleteAccount={handleDeleteAccount}
               getTestResult={getTestResult}
               isTestingAccount={isTestingAccount}
-              isAccountLoading={isAccountLoading}
-              getAccountOperation={getAccountOperation}
             />
-            <ModelsCard provider={provider} />
-          </div>
-
-          <div className="provider-detail-sidebar">
-            <SurfaceCard title="Health Status" description="Real-time provider health">
-              <div className="health-status-content">
-                <div className="health-status-main">
-                  <div className="health-status-header">
-                    <StatusBadge
-                      variant={formatHealthStatus(currentHealthStatus).severity === "success" ? "success" :
-                              formatHealthStatus(currentHealthStatus).severity === "warning" ? "warning" : "danger"}
-                      size="lg"
-                    >
-                      {formatHealthStatus(currentHealthStatus).label}
-                    </StatusBadge>
-                    <HealthStatusIndicator providerId={provider.id} />
-                  </div>
-                  <div className="health-message">{currentHealthMessage}</div>
-                </div>
-
-                {hasHealthData && (
-                  <div className="health-check-info">
-                    <div className="health-last-check">
-                      Last checked: {healthUpdate?.lastHealthCheckAt ?
-                        new Date(healthUpdate.lastHealthCheckAt).toLocaleString() :
-                        'Never'
-                      }
-                    </div>
-                    {getHealthAge() && (
-                      <div className={`health-age ${getHealthAge()?.isStale ? 'stale' : ''}`}>
-                        {getHealthAge()?.ageMinutes < 60 ?
-                          `${getHealthAge()?.ageMinutes}m ago` :
-                          `${getHealthAge()?.ageHours}h ago`
-                        }
-                        {getHealthAge()?.isStale && ' (stale)'}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {healthUpdate?.issues && healthUpdate.issues.length > 0 && (
-                  <div className="health-issues">
-                    <h4>Issues Detected:</h4>
-                    <ul>
-                      {healthUpdate.issues.map((issue, index) => (
-                        <li key={index}>{issue}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {healthUpdate?.suggestedFixes && healthUpdate.suggestedFixes.length > 0 && (
-                  <div className="health-fixes">
-                    <h4>Suggested Fixes:</h4>
-                    <ul>
-                      {healthUpdate.suggestedFixes.map((fix, index) => (
-                        <li key={index}>{fix}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {(healthError || isCheckingHealth) && (
-                  <div className="health-status-actions">
-                    {isCheckingHealth && (
-                      <div className="health-checking">
-                        <span>Checking health...</span>
-                      </div>
-                    )}
-                    {healthError && (
-                      <div className="health-error">
-                        <AlertIcon className="error-icon" />
-                        <span>{healthError}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </SurfaceCard>
-
-            {quotaStatus && currentQuota && (
-              <SurfaceCard title="Quota Status" description="Real-time usage and limits">
-                <div className="quota-status-content">
-                  <div className="quota-usage">
-                    <div className="quota-percent-large">{currentQuota.usagePercent?.toFixed(1)}%</div>
-                    <div className="quota-usage-text">
-                      {currentQuota.used?.toLocaleString()} / {currentQuota.limit?.toLocaleString()} {currentQuota.quotaType}
-                    </div>
-                  </div>
-                  <div className="quota-bar-large">
-                    <div
-                      className="quota-fill"
-                      style={{
-                        width: `${Math.min(currentQuota.usagePercent || 0, 100)}%`,
-                        backgroundColor: quotaStatus.status === "exhausted" ? '#ff6961' :
-                                        quotaStatus.status === "critical" ? '#ffd60a' : '#30d158'
-                      }}
-                    />
-                  </div>
-                  {currentQuota.resetAt && (
-                    <div className="quota-reset-info">
-                      Resets: {new Date(currentQuota.resetAt).toLocaleString()}
-                    </div>
-                  )}
-                  {currentQuota.remaining !== undefined && (
-                    <div className="quota-remaining-info">
-                      Remaining: {currentQuota.remaining.toLocaleString()}
-                    </div>
-                  )}
-                </div>
-              </SurfaceCard>
-            )}
-
-            <SurfaceCard title="Account Health" description="Account status summary">
-              <div className="account-health-content">
-                <div className="health-stats">
-                  <div className="health-stat">
-                    <span className="stat-value">{healthSummary.healthy}</span>
-                    <span className="stat-label">Healthy</span>
-                  </div>
-                  <div className="health-stat">
-                    <span className="stat-value">{healthSummary.warning}</span>
-                    <span className="stat-label">Warning</span>
-                  </div>
-                  <div className="health-stat">
-                    <span className="stat-value">{healthSummary.critical}</span>
-                    <span className="stat-label">Critical</span>
-                  </div>
-                </div>
-                {hasHealthIssues && (
-                  <div className="health-issues">
-                    <AlertIcon className="health-warning-icon" />
-                    <span>{needsAttentionAccounts.length} account(s) need attention</span>
-                  </div>
-                )}
-              </div>
-            </SurfaceCard>
-
-            {eligibility && (
-              <SurfaceCard title="Fallback Eligibility" description="Routing readiness">
-                <div className="eligibility-content">
-                  <div className="eligibility-status">
-                    <StatusBadge
-                      variant={eligibility.eligible ? "success" : "warning"}
-                      size="lg"
-                    >
-                      {eligibility.eligible ? "Eligible" : "Not Eligible"}
-                    </StatusBadge>
-                    <div className="eligibility-score">
-                      Score: {eligibility.score}/100
-                    </div>
-                  </div>
-                  {eligibility.issues.length > 0 && (
-                    <div className="eligibility-issues">
-                      <h4>Issues:</h4>
-                      <ul>
-                        {eligibility.issues.map((issue, index) => (
-                          <li key={index}>{issue}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              </SurfaceCard>
-            )}
+            <ModelsCard models={dynamicModels} loading={modelsLoading} />
           </div>
         </div>
       </div>

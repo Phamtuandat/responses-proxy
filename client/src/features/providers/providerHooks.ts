@@ -1,8 +1,8 @@
 // React hooks for provider data management with real-time health monitoring
 import { useState, useEffect, useCallback, useMemo } from "react";
 import type { Provider, ProviderFilters, ProviderTierSummary } from "./providerTypes";
-import { fetchProviders, fetchProviderById, testProvider, refreshProviderHealth } from "./providerApi";
-import { getProvidersByTier, getTierSummary } from "./providerCatalog";
+import { fetchProviders, testProvider, refreshProviderHealth } from "./providerApi";
+import { PROVIDER_CATALOG, getProviderById, getTierSummary } from "./providerCatalog";
 import { healthWebSocketClient, type HealthMessage, type HealthUpdateMessage, type HealthSummaryMessage } from "../../utils/healthWebSocket";
 
 // Provider health metrics from WebSocket
@@ -58,7 +58,46 @@ export function useProviders() {
       setLoading(true);
       setError(null);
       const data = await fetchProviders();
-      setProviders(data);
+      
+      const merged = PROVIDER_CATALOG.map(catalogEntry => {
+        const backendProvider = data.find(p => p.id === catalogEntry.id || p.name === catalogEntry.name);
+        if (backendProvider) {
+          return {
+            ...backendProvider,
+            displayName: catalogEntry.displayName,
+            description: catalogEntry.description,
+            tier: catalogEntry.tier,
+            serviceKinds: catalogEntry.serviceKinds,
+            authTypes: catalogEntry.authTypes,
+            preferredAuthType: catalogEntry.preferredAuthType,
+            riskNotice: catalogEntry.riskNotice
+          };
+        }
+        
+        return {
+          id: catalogEntry.id,
+          name: catalogEntry.name,
+          displayName: catalogEntry.displayName,
+          description: catalogEntry.description,
+          tier: catalogEntry.tier,
+          serviceKinds: catalogEntry.serviceKinds,
+          authTypes: catalogEntry.authTypes,
+          preferredAuthType: catalogEntry.preferredAuthType,
+          enabled: true,
+          configured: false,
+          healthStatus: 'not_configured' as const,
+          priority: catalogEntry.popularity || 3,
+          fallbackEligible: false,
+          accounts: [],
+          models: [],
+          riskNotice: catalogEntry.riskNotice
+        };
+      });
+      
+      const catalogIds = new Set(PROVIDER_CATALOG.map(c => c.id));
+      const extraProviders = data.filter(p => !catalogIds.has(p.id));
+      
+      setProviders([...merged, ...extraProviders]);
       setLastRefresh(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load providers');
@@ -175,14 +214,68 @@ export function useProvider(id: string | null) {
       return;
     }
 
+    const buildCatalogFallback = (catalogEntry: ReturnType<typeof getProviderById>): Provider | null => {
+      if (!catalogEntry) return null;
+      return {
+        id: catalogEntry.id,
+        name: catalogEntry.name,
+        displayName: catalogEntry.displayName,
+        description: catalogEntry.description,
+        tier: catalogEntry.tier,
+        serviceKinds: catalogEntry.serviceKinds,
+        authTypes: catalogEntry.authTypes,
+        preferredAuthType: catalogEntry.preferredAuthType,
+        enabled: true,
+        configured: false,
+        healthStatus: 'not_configured' as const,
+        priority: catalogEntry.popularity || 3,
+        fallbackEligible: false,
+        accounts: [],
+        models: [],
+        riskNotice: catalogEntry.riskNotice
+      };
+    };
+
     const loadProvider = async () => {
       try {
         setLoading(true);
         setError(null);
-        const data = await fetchProviderById(id);
-        setProvider(data);
+
+        // Use the providers list endpoint to avoid 404s for catalog-only providers
+        const allProviders = await fetchProviders();
+        const backendProvider = allProviders.find(p => p.id === id || p.name === id);
+
+        if (backendProvider) {
+          // Found in backend — merge with catalog metadata
+          const catalogEntry = getProviderById(id);
+          setProvider({
+            ...backendProvider,
+            ...(catalogEntry ? {
+              displayName: catalogEntry.displayName,
+              description: catalogEntry.description,
+              tier: catalogEntry.tier,
+              serviceKinds: catalogEntry.serviceKinds,
+              authTypes: catalogEntry.authTypes,
+              preferredAuthType: catalogEntry.preferredAuthType,
+              riskNotice: catalogEntry.riskNotice
+            } : {})
+          });
+        } else {
+          // Not in backend — use catalog data only
+          const fallback = buildCatalogFallback(getProviderById(id));
+          if (fallback) {
+            setProvider(fallback);
+          } else {
+            setError('Provider not found');
+          }
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load provider');
+        const fallback = buildCatalogFallback(getProviderById(id));
+        if (fallback) {
+          setProvider(fallback);
+        } else {
+          setError(err instanceof Error ? err.message : 'Failed to load provider');
+        }
       } finally {
         setLoading(false);
       }
@@ -194,13 +287,60 @@ export function useProvider(id: string | null) {
   const refresh = useCallback(async () => {
     if (!id) return;
 
+    const buildFallback = (catalogEntry: ReturnType<typeof getProviderById>): Provider | null => {
+      if (!catalogEntry) return null;
+      return {
+        id: catalogEntry.id,
+        name: catalogEntry.name,
+        displayName: catalogEntry.displayName,
+        description: catalogEntry.description,
+        tier: catalogEntry.tier,
+        serviceKinds: catalogEntry.serviceKinds,
+        authTypes: catalogEntry.authTypes,
+        preferredAuthType: catalogEntry.preferredAuthType,
+        enabled: true,
+        configured: false,
+        healthStatus: 'not_configured' as const,
+        priority: catalogEntry.popularity || 3,
+        fallbackEligible: false,
+        accounts: [],
+        models: [],
+        riskNotice: catalogEntry.riskNotice
+      };
+    };
+
     try {
       setLoading(true);
       setError(null);
-      const data = await fetchProviderById(id);
-      setProvider(data);
+      const allProviders = await fetchProviders();
+      const backendProvider = allProviders.find(p => p.id === id || p.name === id);
+      if (backendProvider) {
+        const catalogEntry = getProviderById(id);
+        setProvider({
+          ...backendProvider,
+          ...(catalogEntry ? {
+            displayName: catalogEntry.displayName,
+            description: catalogEntry.description,
+            tier: catalogEntry.tier,
+            serviceKinds: catalogEntry.serviceKinds,
+            authTypes: catalogEntry.authTypes,
+            preferredAuthType: catalogEntry.preferredAuthType,
+            riskNotice: catalogEntry.riskNotice
+          } : {})
+        });
+      } else {
+        const fallback = buildFallback(getProviderById(id));
+        if (fallback) {
+          setProvider(fallback);
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh provider');
+      const fallback = buildFallback(getProviderById(id));
+      if (fallback) {
+        setProvider(fallback);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to refresh provider');
+      }
     } finally {
       setLoading(false);
     }
@@ -310,7 +450,25 @@ export function useFilteredProviders(providers: Provider[], filters?: ProviderFi
   }, [providers, filters]);
 
   const providersByTier = useMemo(() => {
-    return getProvidersByTier(filteredProviders);
+    const grouped = {
+      subscription: [] as Provider[],
+      cheap: [] as Provider[],
+      free: [] as Provider[],
+      custom: [] as Provider[]
+    };
+
+    (filteredProviders || []).forEach(provider => {
+      if (provider) {
+        const tier = provider.tier;
+        if (tier && tier in grouped) {
+          grouped[tier as keyof typeof grouped].push(provider);
+        } else {
+          grouped.custom.push(provider);
+        }
+      }
+    });
+
+    return grouped;
   }, [filteredProviders]);
 
   const tierSummaries = useMemo(() => {

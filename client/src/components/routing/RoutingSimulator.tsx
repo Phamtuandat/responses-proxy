@@ -39,7 +39,7 @@ export function RoutingSimulator({
   getSimulationResult,
   isSimulating
 }: RoutingSimulatorProps) {
-  const [selectedRoute, setSelectedRoute] = useState<ClientRoute>(combo.clientRoutes[0] || 'chat');
+  const [selectedRoute, setSelectedRoute] = useState<ClientRoute>((combo.clientRoutes || [])[0] || 'chat');
   const [simulationParams, setSimulationParams] = useState({
     model: 'claude-3-5-sonnet-20241022',
     tokenCount: 1000,
@@ -72,8 +72,8 @@ export function RoutingSimulator({
     }
   }, [combo.id, selectedRoute, simulationParams, onSimulate]);
 
-  const enabledTiers = combo.tiers.filter(tier => tier.isEnabled);
-  const totalProviders = combo.tiers.reduce((sum, tier) => sum + tier.providers.length, 0);
+  const enabledTiers = (combo.tiers || []).filter(tier => tier && tier.isEnabled);
+  const totalProviders = (combo.tiers || []).reduce((sum, tier) => sum + (tier?.providers || []).length, 0);
 
   return (
     <div className="routing-simulator">
@@ -98,7 +98,7 @@ export function RoutingSimulator({
                 value={selectedRoute}
                 onChange={(e) => setSelectedRoute(e.target.value as ClientRoute)}
               >
-                {combo.clientRoutes.map(route => (
+                {(combo.clientRoutes || []).map(route => (
                   <option key={route} value={route}>{route}</option>
                 ))}
                 <option value="chat">chat</option>
@@ -245,17 +245,17 @@ export function RoutingSimulator({
               </div>
               <div className="overview-stat">
                 <span className="stat-label">Client Routes</span>
-                <span className="stat-value">{combo.clientRoutes.length}</span>
+                <span className="stat-value">{(combo.clientRoutes || []).length}</span>
               </div>
             </div>
 
             <div className="tier-summary">
               {enabledTiers.map((tier, index) => (
-                <div key={tier.id} className="tier-summary-item">
-                  <span className="tier-priority">#{tier.priority}</span>
-                  <span className="tier-name">{tier.name}</span>
+                <div key={tier?.id || index} className="tier-summary-item">
+                  <span className="tier-priority">#{tier?.priority}</span>
+                  <span className="tier-name">{tier?.name}</span>
                   <StatusBadge variant="neutral" size="xs">
-                    {tier.providers.length}p
+                    {(tier?.providers || []).length}p
                   </StatusBadge>
                   {tier.fallbackDelay && (
                     <span className="tier-delay">{tier.fallbackDelay}ms</span>

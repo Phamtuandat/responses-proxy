@@ -17,6 +17,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { useAsyncResource } from "../hooks/useAsyncResource";
 import { formatDateTime, formatNumber, formatPercent, formatUnknown, isRecord } from "../lib/format";
+import { AlertIcon } from "../components/icons";
 
 type LiveUsageState =
   | { status: "idle" | "loading"; data?: LiveUsageResponse; error?: undefined }
@@ -161,9 +162,15 @@ export function UsageScreen() {
           actions={<RefreshButton label="Refresh live" onClick={refreshLiveUsage} />}
         />
         <SurfaceCard>
-          <div className="table-empty">
-            <strong>No usage data yet</strong>
-            <p>Usage summaries will appear after requests are processed and session logs are available.</p>
+          <div className="table-empty" style={{ padding: "var(--space-6) var(--space-4)", textAlign: "center" }}>
+            <AlertIcon className="status-icon status-warning" style={{ width: "48px", height: "48px", marginBottom: "var(--space-3)", color: "var(--warning)", display: "inline-block" }} />
+            <h3 style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--font-lg)" }}>No Usage Data Yet</h3>
+            <p style={{ margin: "0 0 var(--space-4) 0", color: "var(--text-secondary)", fontSize: "var(--font-sm)", maxWidth: "480px", marginLeft: "auto", marginRight: "auto" }}>
+              The local proxy has not recorded any requests yet. To generate traffic, configure your AI clients or CLI using the setup variables and start running commands.
+            </p>
+            <a href="#/endpoint" className="button-primary" style={{ display: "inline-block", textDecoration: "none" }}>
+              Configure Local Clients
+            </a>
           </div>
         </SurfaceCard>
         <LiveUsagePanel

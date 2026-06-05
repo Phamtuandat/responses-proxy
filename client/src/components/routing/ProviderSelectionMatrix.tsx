@@ -39,13 +39,16 @@ export function ProviderSelectionMatrix({
 
   // Group providers by tier for easier selection
   const providersByTier = useMemo(() => {
-    return providers.reduce((acc, provider) => {
-      if (!acc[provider.tier]) {
-        acc[provider.tier] = [];
+    return (providers || []).reduce((acc, provider) => {
+      if (provider) {
+        const tier = provider.tier || 'custom';
+        if (!acc[tier]) {
+          acc[tier] = [];
+        }
+        acc[tier].push(provider);
       }
-      acc[provider.tier].push(provider);
       return acc;
-    }, {} as Record<ProviderTier, Provider[]>);
+    }, {} as Record<string, Provider[]>);
   }, [providers]);
 
   // Get available providers for a tier (not already assigned)

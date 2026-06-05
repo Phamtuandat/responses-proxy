@@ -103,9 +103,9 @@ export function AuthScreen() {
   return (
     <div className="screen-stack">
       <PageHeader
-        eyebrow="Auth"
-        title="Account auth management"
-        description="Manage connected account availability for provider routing. OAuth connect flow remains on the Accounts screen."
+        eyebrow="Settings"
+        title="Settings & Security"
+        description="Manage connected account auth sessions, API security, and general settings."
         actions={<RefreshButton onClick={retry} />}
       />
 

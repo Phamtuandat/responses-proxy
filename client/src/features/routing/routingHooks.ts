@@ -54,9 +54,9 @@ export function useRoutingCombos() {
   // Combo statistics
   const stats = useMemo(() => {
     const total = combos.length;
-    const active = combos.filter(combo => combo.isActive).length;
-    const defaultCombo = combos.find(combo => combo.isDefault);
-    const totalClientRoutes = combos.reduce((sum, combo) => sum + combo.clientRoutes.length, 0);
+    const active = combos.filter(combo => combo?.isActive).length;
+    const defaultCombo = combos.find(combo => combo?.isDefault);
+    const totalClientRoutes = combos.reduce((sum, combo) => sum + (combo?.clientRoutes || []).length, 0);
 
     return {
       total,
@@ -64,7 +64,7 @@ export function useRoutingCombos() {
       inactive: total - active,
       defaultComboId: defaultCombo?.id,
       totalClientRoutes,
-      averageTiersPerCombo: total > 0 ? combos.reduce((sum, combo) => sum + combo.tiers.length, 0) / total : 0
+      averageTiersPerCombo: total > 0 ? combos.reduce((sum, combo) => sum + (combo?.tiers || []).length, 0) / total : 0
     };
   }, [combos]);
 
@@ -341,30 +341,34 @@ export function useRoutingComboBuilder(initialCombo?: RoutingCombo) {
   const [combo, setCombo] = useState<RoutingComboInput>(() => {
     if (initialCombo) {
       return {
-        name: initialCombo.name,
-        description: initialCombo.description,
-        clientRoutes: initialCombo.clientRoutes,
-        tiers: initialCombo.tiers.map(tier => ({
-          name: tier.name,
-          tier: tier.tier,
-          providers: tier.providers.map(provider => ({
-            providerId: provider.providerId,
-            weight: provider.weight,
+        name: initialCombo.name || '',
+        description: initialCombo.description || '',
+        clientRoutes: initialCombo.clientRoutes || [],
+        tiers: (initialCombo.tiers || []).map(tier => ({
+          name: tier.name || '',
+          tier: tier.tier || 'custom',
+          providers: (tier.providers || []).map(provider => ({
+            providerId: provider.providerId || '',
+            weight: provider.weight || 0,
             modelOverride: provider.modelOverride,
-            isEnabled: provider.isEnabled,
+            isEnabled: provider.isEnabled !== false,
             conditions: provider.conditions || [],
             costMultiplier: provider.costMultiplier,
             maxConcurrency: provider.maxConcurrency
           })),
-          healthThreshold: tier.healthThreshold,
-          fallbackDelay: tier.fallbackDelay,
-          maxRetries: tier.maxRetries,
-          isEnabled: tier.isEnabled,
-          priority: tier.priority
+          healthThreshold: tier.healthThreshold || [],
+          fallbackDelay: tier.fallbackDelay || 1000,
+          maxRetries: tier.maxRetries || 2,
+          isEnabled: tier.isEnabled !== false,
+          priority: tier.priority || 1
         })),
-        policies: initialCombo.policies,
-        isActive: initialCombo.isActive,
-        isDefault: initialCombo.isDefault
+        policies: initialCombo.policies || {
+          loadBalancing: 'health_based',
+          failoverStrategy: 'delayed',
+          tokenBudgetMode: 'per_route'
+        },
+        isActive: initialCombo.isActive !== false,
+        isDefault: !!initialCombo.isDefault
       };
     }
 
@@ -523,8 +527,15 @@ export function useProvidersForRouting(providers: Provider[]) {
       custom: [] as Provider[]
     };
 
-    providers.forEach(provider => {
-      grouped[provider.tier].push(provider);
+    (providers || []).forEach(provider => {
+      if (provider) {
+        const tier = provider.tier;
+        if (tier && tier in grouped) {
+          grouped[tier as keyof typeof grouped].push(provider);
+        } else {
+          grouped.custom.push(provider);
+        }
+      }
     });
 
     return grouped;

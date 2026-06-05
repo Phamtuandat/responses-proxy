@@ -19,6 +19,8 @@ import { StatCard } from "../components/StatCard";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { useAsyncResource } from "../hooks/useAsyncResource";
 import { formatNumber, formatPercent, formatUnknown, isRecord } from "../lib/format";
+import { SkillsIcon } from "../components/icons";
+import { StatusBadge } from "../components/StatusBadge";
 
 type RtkScreenData = {
   providers: ProvidersResponse;
@@ -215,6 +217,34 @@ function renderRtkTelemetry(label: string, bucket: UsageStatsBucket) {
 }
 
 export function RtkScreen() {
+  const isSkillsRoute = window.location.hash.includes("skills");
+
+  if (isSkillsRoute) {
+    return (
+      <div className="screen-stack">
+        <PageHeader
+          icon={SkillsIcon}
+          title="Skills Hub"
+          description="Cognitive abilities, tool registries, and agentic workflows"
+        />
+        <SurfaceCard title="Feature Coming Soon" description="Advanced cognitive skills registry" tone="info">
+          <div style={{ padding: "var(--space-6) var(--space-4)", textAlign: "center" }}>
+            <span style={{ fontSize: "3rem" }}>🧠</span>
+            <h3 style={{ margin: "var(--space-3) 0 var(--space-2) 0", fontSize: "var(--font-lg)" }}>Cognitive & Agentic Skills</h3>
+            <p style={{ margin: "0 auto var(--space-4) auto", color: "var(--text-secondary)", fontSize: "var(--font-sm)", maxWidth: "540px", lineHeight: "1.6" }}>
+              Skills Hub will enable configuring advanced prompt injections, system instructions, and tool schemas directly inside responses-proxy. Developers can register and deploy cognitive behaviors that are injected dynamically into client sessions based on model compatibility.
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", justifyContent: "center" }}>
+              <StatusBadge variant="accent">Prompt Injectors</StatusBadge>
+              <StatusBadge variant="accent">Tool Schemas</StatusBadge>
+              <StatusBadge variant="accent">Context Trimming</StatusBadge>
+            </div>
+          </div>
+        </SurfaceCard>
+      </div>
+    );
+  }
+
   const loadRtk = useCallback(
     async () => {
       const [providers, usage] = await Promise.all([getProviders(), getUsageStats()]);

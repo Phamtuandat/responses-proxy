@@ -35,8 +35,7 @@ import {
   useRoutingSimulation,
   useRoutingComboTemplates
 } from "../features/routing/routingHooks";
-import { useProviders } from "../features/providers/providerHooks";
-import { useAutoHealthMonitoring } from "../features/health/healthHooks";
+import { useProviders, useAutoHealthMonitoring } from "../features/providers/providerHooks";
 
 interface CombosScreenProps {
   comboId?: string;
@@ -97,6 +96,37 @@ export function CombosScreen({ comboId }: CombosScreenProps) {
       } catch (error) {
         console.error('Failed to delete combo:', error);
       }
+    }
+  };
+
+  const handleDuplicateCombo = async (combo: RoutingCombo) => {
+    try {
+      const duplicateInput: RoutingComboInput = {
+        name: `${combo.name} Copy`,
+        description: combo.description || `Copy of ${combo.name}`,
+        isActive: false,
+        tiers: (combo.tiers || []).map(t => ({
+          name: t.name,
+          isEnabled: t.isEnabled,
+          priority: t.priority,
+          fallbackDelay: t.fallbackDelay,
+          providers: (t.providers || []).map((p: any) => ({
+            providerId: p.providerId,
+            weight: p.weight,
+            isEnabled: p.isEnabled !== false
+          }))
+        })),
+        policies: {
+          loadBalancing: combo.policies.loadBalancing || "priority",
+          failoverStrategy: combo.policies.failoverStrategy || "linear",
+          tokenBudgetMode: combo.policies.tokenBudgetMode || "strict"
+        },
+        clientRoutes: []
+      };
+      await createCombo(duplicateInput);
+      await refreshCombos();
+    } catch (error) {
+      console.error('Failed to duplicate combo:', error);
     }
   };
 
@@ -304,6 +334,7 @@ export function CombosScreen({ comboId }: CombosScreenProps) {
                     <ComboCard
                       key={combo.id}
                       combo={combo}
+                      providers={providers}
                       isSelected={selectedComboId === combo.id}
                       onSelect={() => handleSelectCombo(combo)}
                       onEdit={() => handleEditCombo(combo)}
@@ -312,6 +343,7 @@ export function CombosScreen({ comboId }: CombosScreenProps) {
                         setSelectedComboId(combo.id);
                         setShowSimulator(true);
                       }}
+                      onDuplicate={() => handleDuplicateCombo(combo)}
                     />
                   ))}
                 </div>
@@ -350,17 +382,43 @@ export function CombosScreen({ comboId }: CombosScreenProps) {
   );
 }
 
+// Helper function to validate combo provider configurations
+function validateComboProviders(combo: RoutingCombo, providers: any[]) {
+  const issues: string[] = [];
+  if (!combo || !combo.tiers) return issues;
+  combo.tiers.forEach(tier => {
+    if (!tier || !tier.providers) return;
+    tier.providers.forEach(prov => {
+      if (!prov || !prov.providerId) return;
+      const liveProv = (providers || []).find(p => p && p.id === prov.providerId);
+      if (!liveProv) {
+        issues.push(`Provider ID "${prov.providerId}" in tier "${tier.name}" does not exist.`);
+      } else if (!liveProv.configured) {
+        issues.push(`Provider "${liveProv.displayName}" in tier "${tier.name}" is unconfigured.`);
+      } else if (liveProv.healthStatus !== "healthy") {
+        issues.push(`Provider "${liveProv.displayName}" in tier "${tier.name}" is ${liveProv.healthStatus}.`);
+      }
+    });
+  });
+  return issues;
+}
+
 // Combo card component
 interface ComboCardProps {
   combo: RoutingCombo;
+  providers: any[];
   isSelected: boolean;
   onSelect: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onSimulate: () => void;
+  onDuplicate: () => void;
 }
 
-function ComboCard({ combo, isSelected, onSelect, onEdit, onDelete, onSimulate }: ComboCardProps) {
+function ComboCard({ combo, providers, isSelected, onSelect, onEdit, onDelete, onSimulate, onDuplicate }: ComboCardProps) {
+  const validationIssues = validateComboProviders(combo, providers || []);
+  const hasIssues = validationIssues.length > 0;
+
   return (
     <div className={`combo-card ${isSelected ? 'selected' : ''}`} onClick={onSelect}>
       <div className="combo-card-header">
@@ -379,6 +437,15 @@ function ComboCard({ combo, isSelected, onSelect, onEdit, onDelete, onSimulate }
               >
                 {combo.isActive ? "Active" : "Inactive"}
               </StatusBadge>
+              {hasIssues && (
+                <span 
+                  title={`Warnings:\n${validationIssues.join("\n")}`} 
+                  style={{ color: "var(--danger)", cursor: "help", display: "inline-flex", alignItems: "center" }}
+                  aria-label="Combo configuration warnings"
+                >
+                  ⚠️
+                </span>
+              )}
             </div>
           </div>
           {combo.description && (
@@ -391,33 +458,33 @@ function ComboCard({ combo, isSelected, onSelect, onEdit, onDelete, onSimulate }
         <div className="combo-stats">
           <div className="combo-stat">
             <span className="stat-label">Tiers</span>
-            <span className="stat-value">{combo.tiers.length}</span>
+            <span className="stat-value">{(combo.tiers || []).length}</span>
           </div>
           <div className="combo-stat">
             <span className="stat-label">Providers</span>
             <span className="stat-value">
-              {combo.tiers.reduce((sum, tier) => sum + tier.providers.length, 0)}
+              {(combo.tiers || []).reduce((sum, tier) => sum + (tier.providers || []).length, 0)}
             </span>
           </div>
           <div className="combo-stat">
             <span className="stat-label">Routes</span>
-            <span className="stat-value">{combo.clientRoutes.length}</span>
+            <span className="stat-value">{(combo.clientRoutes || []).length}</span>
           </div>
         </div>
 
         <div className="combo-tiers-preview">
-          {combo.tiers.slice(0, 3).map((tier, index) => (
-            <div key={tier.id} className="tier-preview">
+          {(combo.tiers || []).slice(0, 3).map((tier, index) => (
+            <div key={tier.id || index} className="tier-preview">
               <StatusBadge variant="neutral" size="xs">
                 {tier.name}
               </StatusBadge>
               <span className="tier-provider-count">
-                {tier.providers.length}p
+                {(tier.providers || []).length}p
               </span>
             </div>
           ))}
-          {combo.tiers.length > 3 && (
-            <span className="tier-more">+{combo.tiers.length - 3} more</span>
+          {(combo.tiers || []).length > 3 && (
+            <span className="tier-more">+{(combo.tiers || []).length - 3} more</span>
           )}
         </div>
       </div>
@@ -429,6 +496,14 @@ function ComboCard({ combo, isSelected, onSelect, onEdit, onDelete, onSimulate }
           title="Test routing"
         >
           <TestIcon className="button-icon" />
+        </button>
+        <button
+          className="button-secondary button-sm"
+          onClick={onDuplicate}
+          title="Duplicate combo"
+          style={{ fontSize: "1.05rem" }}
+        >
+          🗐
         </button>
         <button
           className="button-secondary button-sm"
@@ -460,8 +535,11 @@ interface ComboDetailCardProps {
 }
 
 function ComboDetailCard({ combo, providers, onEdit, onSimulate }: ComboDetailCardProps) {
-  const enabledTiers = combo.tiers.filter(tier => tier.isEnabled);
-  const totalProviders = combo.tiers.reduce((sum, tier) => sum + tier.providers.length, 0);
+  const enabledTiers = (combo.tiers || []).filter(tier => tier && tier.isEnabled);
+  const totalProviders = (combo.tiers || []).reduce((sum, tier) => sum + (tier?.providers || []).length, 0);
+
+  const validationIssues = validateComboProviders(combo, providers || []);
+  const hasIssues = validationIssues.length > 0;
 
   return (
     <SurfaceCard
@@ -482,12 +560,29 @@ function ComboDetailCard({ combo, providers, onEdit, onSimulate }: ComboDetailCa
       }
     >
       <div className="combo-detail-content">
+        {hasIssues && (
+          <div className="combo-validation-warning" style={{
+            background: "var(--danger-soft)",
+            border: "1px solid var(--danger)",
+            borderRadius: "var(--radius-md)",
+            padding: "var(--space-3)",
+            marginBottom: "var(--space-4)",
+            color: "var(--danger)"
+          }}>
+            <h4 style={{ margin: 0, fontSize: "var(--font-sm)", fontWeight: "bold" }}>Configuration Warnings</h4>
+            <ul style={{ margin: "var(--space-1) 0 0 0", paddingLeft: "var(--space-4)", fontSize: "var(--font-xs)" }}>
+              {validationIssues.map((issue, idx) => (
+                <li key={idx}>{issue}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {/* Combo Overview */}
         <div className="combo-overview">
           <div className="overview-stats">
             <div className="overview-stat">
               <span className="stat-label">Total Tiers</span>
-              <span className="stat-value">{combo.tiers.length}</span>
+              <span className="stat-value">{(combo.tiers || []).length}</span>
             </div>
             <div className="overview-stat">
               <span className="stat-label">Enabled Tiers</span>
@@ -499,7 +594,7 @@ function ComboDetailCard({ combo, providers, onEdit, onSimulate }: ComboDetailCa
             </div>
             <div className="overview-stat">
               <span className="stat-label">Client Routes</span>
-              <span className="stat-value">{combo.clientRoutes.length}</span>
+              <span className="stat-value">{(combo.clientRoutes || []).length}</span>
             </div>
           </div>
 
@@ -510,19 +605,19 @@ function ComboDetailCard({ combo, providers, onEdit, onSimulate }: ComboDetailCa
               <div className="policy-item">
                 <span className="policy-label">Load Balancing</span>
                 <StatusBadge variant="neutral" size="xs">
-                  {combo.policies.loadBalancing.replace('_', ' ')}
+                  {(combo.policies?.loadBalancing || 'weighted').replace('_', ' ')}
                 </StatusBadge>
               </div>
               <div className="policy-item">
                 <span className="policy-label">Failover Strategy</span>
                 <StatusBadge variant="neutral" size="xs">
-                  {combo.policies.failoverStrategy.replace('_', ' ')}
+                  {(combo.policies?.failoverStrategy || 'immediate').replace('_', ' ')}
                 </StatusBadge>
               </div>
               <div className="policy-item">
                 <span className="policy-label">Token Budget</span>
                 <StatusBadge variant="neutral" size="xs">
-                  {combo.policies.tokenBudgetMode.replace('_', ' ')}
+                  {(combo.policies?.tokenBudgetMode || 'per_route').replace('_', ' ')}
                 </StatusBadge>
               </div>
             </div>
@@ -533,10 +628,11 @@ function ComboDetailCard({ combo, providers, onEdit, onSimulate }: ComboDetailCa
         <div className="combo-tiers-detail">
           <h4>Routing Tiers</h4>
           <div className="tiers-list">
-            {combo.tiers
+            {(combo.tiers || [])
+              .slice()
               .sort((a, b) => a.priority - b.priority)
               .map((tier, index) => (
-                <div key={tier.id} className="tier-detail-item">
+                <div key={tier.id || index} className="tier-detail-item">
                   <div className="tier-header">
                     <div className="tier-info">
                       <span className="tier-priority">#{tier.priority}</span>
@@ -550,7 +646,7 @@ function ComboDetailCard({ combo, providers, onEdit, onSimulate }: ComboDetailCa
                     </div>
                     <div className="tier-stats">
                       <span className="tier-stat">
-                        {tier.providers.length} provider{tier.providers.length !== 1 ? 's' : ''}
+                        {(tier.providers || []).length} provider{(tier.providers || []).length !== 1 ? 's' : ''}
                       </span>
                       {tier.fallbackDelay && (
                         <span className="tier-stat">
@@ -561,8 +657,8 @@ function ComboDetailCard({ combo, providers, onEdit, onSimulate }: ComboDetailCa
                   </div>
 
                   <div className="tier-providers">
-                    {tier.providers.map((provider, pIndex) => {
-                      const providerInfo = providers.find(p => p.id === provider.providerId);
+                    {(tier.providers || []).map((provider, pIndex) => {
+                      const providerInfo = (providers || []).find(p => p && p.id === provider.providerId);
                       return (
                         <div key={pIndex} className="provider-item">
                           <span className="provider-name">
@@ -584,11 +680,11 @@ function ComboDetailCard({ combo, providers, onEdit, onSimulate }: ComboDetailCa
         </div>
 
         {/* Client Routes */}
-        {combo.clientRoutes.length > 0 && (
+        {(combo.clientRoutes || []).length > 0 && (
           <div className="combo-client-routes">
             <h4>Assigned Client Routes</h4>
             <div className="client-routes-list">
-              {combo.clientRoutes.map(route => (
+              {(combo.clientRoutes || []).map(route => (
                 <StatusBadge key={route} variant="accent" size="sm">
                   {route}
                 </StatusBadge>

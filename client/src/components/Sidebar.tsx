@@ -5,7 +5,6 @@ import {
   type FunctionalNavGroup
 } from "../navigation/FunctionalNavigation";
 import { useNavigationState } from "../hooks/useNavigationState";
-import { PowerIcon } from "./icons";
 
 type SidebarProps = {
   currentRoute: NavRoute;
@@ -14,42 +13,25 @@ type SidebarProps = {
 function ProductHeader() {
   return (
     <header className="sidebar-product-header">
-      {/* macOS-style window dots */}
-      <div className="window-dots" aria-hidden="true">
-        <div className="window-dot window-dot-close"></div>
-        <div className="window-dot window-dot-minimize"></div>
-        <div className="window-dot window-dot-maximize"></div>
-      </div>
-
       <div className="product-info">
         <div className="product-mark" aria-hidden="true">
           RP
         </div>
         <div className="product-details">
           <h1 className="product-name">Responses Proxy</h1>
-          <p className="product-version">v0.1.0</p>
+          <span className="product-version">v0.1.0</span>
         </div>
       </div>
     </header>
   );
 }
 
-function ShutdownButton() {
-  const handleShutdown = () => {
-    // TODO: Implement shutdown functionality
-    console.log('Shutdown requested');
-  };
-
+function ServerStatusFooter() {
   return (
-    <button
-      className="shutdown-button"
-      onClick={handleShutdown}
-      title="Shutdown server"
-      aria-label="Shutdown server"
-    >
-      <PowerIcon />
-      <span>Shutdown</span>
-    </button>
+    <div className="server-status-footer" title="Responses Proxy is running and listening.">
+      <span className="pulse-indicator-dot" />
+      <span className="status-text">Proxy Active</span>
+    </div>
   );
 }
 
@@ -145,7 +127,7 @@ export function Sidebar({ currentRoute }: SidebarProps) {
       </nav>
 
       <div className="sidebar-footer">
-        <ShutdownButton />
+        <ServerStatusFooter />
       </div>
     </aside>
   );

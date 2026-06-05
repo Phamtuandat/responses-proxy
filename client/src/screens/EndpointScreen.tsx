@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { PageHeader } from "../components/PageHeader";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { StatCard } from "../components/StatCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { RefreshButton } from "../components/RefreshButton";
-import { EndpointIcon, ProvidersIcon, CheckCircleIcon, AlertIcon } from "../components/icons";
+import { EndpointIcon, AlertIcon } from "../components/icons";
 import { getHealth, getUsageStats } from "../api/client";
 import type { HealthResponse, UsageStatsResponse } from "../api/types";
 import { useProviders, useAutoHealthMonitoring } from "../features/providers/providerHooks";
@@ -17,7 +17,7 @@ function renderSyntaxHighlightedCommand(cmd: string, type: "claude" | "cursor" |
     return cmd.split("\n").map((line, idx) => {
       if (line.trim().startsWith("//")) {
         return (
-          <div key={idx} style={{ color: "rgba(255, 255, 255, 0.44)", fontStyle: "italic" }}>
+          <div key={idx} className="terminal-comment">
             {line}
           </div>
         );
@@ -28,12 +28,12 @@ function renderSyntaxHighlightedCommand(cmd: string, type: "claude" | "cursor" |
         const val = parts.slice(1).join(":");
         return (
           <div key={idx}>
-            <span style={{ color: "#ff8c00" }}>{key}</span>:
-            <span style={{ color: "#64a8ff" }}>{val}</span>
+            <span className="terminal-key">{key}</span>:
+            <span className="terminal-value">{val}</span>
           </div>
         );
       }
-      return <div key={idx} style={{ color: "rgba(255, 255, 255, 0.6)" }}>{line}</div>;
+      return <div key={idx} className="terminal-text">{line}</div>;
     });
   } else {
     return cmd.split("\n").map((line, idx) => {
@@ -45,7 +45,7 @@ function renderSyntaxHighlightedCommand(cmd: string, type: "claude" | "cursor" |
           <div key={idx}>
             <span className="command-highlight">export</span>{" "}
             <span className="variable-highlight">{variable.replace("export ", "")}</span>=
-            <span style={{ color: "#64a8ff" }}>{value}</span>
+            <span className="terminal-value">{value}</span>
           </div>
         );
       }
@@ -63,11 +63,19 @@ interface ServerStatusCardProps {
 
 function ServerStatusCard({ health, loading, endpointUrl, onRefresh }: ServerStatusCardProps) {
   const isRunning = health?.ok ?? false;
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(endpointUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <SurfaceCard
       title="Server Status"
       description="Local router server health and information"
-      actions={<RefreshButton onClick={onRefresh} loading={loading} />}
+      actions={<RefreshButton onClick={onRefresh} isRefreshing={loading} />}
     >
       <div className="endpoint-status-grid">
         <div className="status-item">
@@ -96,7 +104,7 @@ function ServerStatusCard({ health, loading, endpointUrl, onRefresh }: ServerSta
         <div className="status-item">
           <div className="status-details">
             <div className="status-label">Status</div>
-            <div className="status-value">Online</div>
+            <div className="status-value">{isRunning ? "Online" : "Offline"}</div>
           </div>
         </div>
 
@@ -114,10 +122,10 @@ function ServerStatusCard({ health, loading, endpointUrl, onRefresh }: ServerSta
           <code className="endpoint-url">{endpointUrl}</code>
           <button
             className="copy-button"
-            onClick={() => navigator.clipboard.writeText(endpointUrl)}
+            onClick={handleCopy}
             title="Copy endpoint URL"
           >
-            Copy
+            {copied ? "Copied!" : "Copy"}
           </button>
         </div>
       </div>
@@ -138,49 +146,23 @@ function ActiveProviderCard({ health, providers }: ActiveProviderCardProps) {
   const tier = activeProvider?.tier || "n/a";
   const status = activeProvider?.healthStatus || "unknown";
   
-  // Find an enabled model or a default model for this provider
   const activeModel = activeProvider?.models?.[0]?.id || 
                       (activeProvider as any)?.capabilities?.defaultModels?.[0] ||
                       "auto";
 
-  // Dynamic vendor-specific HSL styling attributes
-  const vendorStyles = (() => {
+  // Class tone mappings and icons for vendors
+  const { cardClass, icon } = (() => {
     const id = activeProviderId?.toLowerCase() || "";
     if (id.includes("claude") || id.includes("anthropic")) {
-      return {
-        bg: "rgba(245, 166, 35, 0.06)",
-        border: "rgba(245, 166, 35, 0.22)",
-        text: "var(--warning)",
-        icon: "🦉"
-      };
+      return { cardClass: "active-provider-card-anthropic", icon: "🦉" };
     } else if (id.includes("openai") || id.includes("codex") || id.includes("gpt")) {
-      return {
-        bg: "rgba(48, 209, 88, 0.06)",
-        border: "rgba(48, 209, 88, 0.22)",
-        text: "var(--success)",
-        icon: "🧠"
-      };
+      return { cardClass: "active-provider-card-openai", icon: "🧠" };
     } else if (id.includes("gemini") || id.includes("google")) {
-      return {
-        bg: "rgba(10, 132, 255, 0.06)",
-        border: "rgba(10, 132, 255, 0.22)",
-        text: "var(--accent)",
-        icon: "✨"
-      };
+      return { cardClass: "active-provider-card-google", icon: "✨" };
     } else if (id.includes("kiro")) {
-      return {
-        bg: "rgba(111, 91, 255, 0.06)",
-        border: "rgba(111, 91, 255, 0.22)",
-        text: "var(--accent-2)",
-        icon: "⚡"
-      };
+      return { cardClass: "active-provider-card-kiro", icon: "⚡" };
     } else {
-      return {
-        bg: "var(--neutral-soft)",
-        border: "var(--line)",
-        text: "var(--text-secondary)",
-        icon: "🔌"
-      };
+      return { cardClass: "active-provider-card-default", icon: "🔌" };
     }
   })();
 
@@ -188,37 +170,32 @@ function ActiveProviderCard({ health, providers }: ActiveProviderCardProps) {
     <SurfaceCard
       title="Active Provider"
       description="Currently selected provider for new requests"
-      style={{
-        border: `1px solid ${vendorStyles.border}`,
-        background: vendorStyles.bg,
-        transition: "all var(--animation-normal) var(--animation-easing)",
-      }}
+      className={cardClass}
     >
       <div className="active-provider-info">
-        <div className="provider-header" style={{ display: "flex", alignItems: "center" }}>
-          <div className="provider-vendor-icon" style={{ fontSize: "2rem", marginRight: "12px" }}>
-            {vendorStyles.icon}
+        <div className="provider-header-row">
+          <div className="provider-vendor-icon">
+            {icon}
           </div>
-          <div className="provider-details" style={{ flex: 1 }}>
-            <div className="provider-name" style={{ color: vendorStyles.text, fontWeight: "600", fontSize: "1.1rem" }}>
+          <div className="provider-details-wrapper">
+            <div className="provider-name">
               {displayName}
             </div>
-            <div className="provider-meta" style={{ marginTop: "4px" }}>
-              <StatusBadge variant="accent" size="sm">
+            <div className="provider-meta-row">
+              <StatusBadge variant="accent">
                 {tier}
               </StatusBadge>
               <StatusBadge 
                 variant={status === "healthy" ? "success" : status === "degraded" ? "warning" : "danger"} 
-                size="sm"
               >
                 {status}
               </StatusBadge>
             </div>
           </div>
         </div>
-        <div className="provider-model" style={{ marginTop: "16px" }}>
-          <div className="model-label" style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Active Model</div>
-          <code className="model-name" style={{ display: "block", marginTop: "4px" }}>{activeModel}</code>
+        <div className="provider-model-wrapper">
+          <div className="model-label">Active Model</div>
+          <code className="model-name">{activeModel}</code>
         </div>
       </div>
     </SurfaceCard>
@@ -237,7 +214,6 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
     const configuredProviders = tierProviders.filter(p => p.configured);
     const healthyCount = configuredProviders.filter(p => p.healthStatus === "healthy").length;
     
-    // Status of the tier
     let status: "healthy" | "warning" | "not_configured" = "not_configured";
     if (configuredProviders.length > 0) {
       status = healthyCount > 0 ? "healthy" : "warning";
@@ -246,15 +222,6 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
     const usagePercent = configuredProviders.length > 0
       ? (healthyCount / configuredProviders.length) * 100
       : 0;
-
-    let barColor = "var(--neutral-soft)";
-    if (configuredProviders.length > 0) {
-      barColor = usagePercent === 100
-        ? "var(--success)"
-        : usagePercent > 0
-          ? "var(--warning)"
-          : "var(--danger)";
-    }
 
     const tierLabels = {
       subscription: "Subscription",
@@ -267,8 +234,7 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
       providers: configuredProviders.length,
       healthy: healthyCount,
       status,
-      usagePercent,
-      barColor
+      usagePercent
     };
   });
 
@@ -279,10 +245,10 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
     >
       <div className="fallback-tiers-list">
         {tierData.map((tier) => (
-          <div key={tier.tier} className="fallback-tier-item" style={{ marginBottom: "16px" }}>
-            <div className="tier-info" style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-              <div className="tier-name" style={{ fontWeight: "500" }}>{tier.tier}</div>
-              <div className="tier-stats" style={{ fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>
+          <div key={tier.tier} className="fallback-tier-item">
+            <div className="tier-header">
+              <div className="tier-name">{tier.tier}</div>
+              <div className="tier-stats">
                 {tier.providers > 0 ? (
                   `${tier.healthy}/${tier.providers} healthy`
                 ) : (
@@ -290,29 +256,26 @@ function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
                 )}
               </div>
             </div>
+
             {tier.providers > 0 ? (
               <>
                 <div className="tier-progress-container">
                   <div 
-                    className="tier-progress-fill" 
-                    style={{ 
-                      width: `${tier.usagePercent}%`, 
-                      backgroundColor: tier.barColor 
-                    }} 
+                    className={`tier-progress-fill tier-progress-fill-${tier.status}`} 
+                    style={{ width: `${tier.usagePercent}%` }} 
                   />
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
+                <div className="tier-footer">
                   <StatusBadge
                     variant={tier.status === "healthy" ? "success" : "warning"}
-                    size="xs"
                   >
                     {tier.status === "healthy" ? "Ready" : "Warning"}
                   </StatusBadge>
                 </div>
               </>
             ) : (
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
-                <StatusBadge variant="neutral" size="xs">
+              <div className="tier-footer">
+                <StatusBadge variant="neutral">
                   Disabled
                 </StatusBadge>
               </div>
@@ -358,12 +321,12 @@ function RoutingPipelineCard({ health, providers, endpointUrl }: RoutingPipeline
             <div className="step-indicator-premium">
               {index + 1}
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: "600", fontSize: "var(--text-sm)" }}>{step.step}</div>
-              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>{step.description}</div>
+            <div className="pipeline-step-info">
+              <div className="pipeline-step-title">{step.step}</div>
+              <div className="pipeline-step-desc">{step.description}</div>
             </div>
             <div className="step-status">
-              <StatusBadge variant={step.active ? "success" : "neutral"} size="xs">
+              <StatusBadge variant={step.active ? "success" : "neutral"}>
                 {step.active ? "Active" : "Pending"}
               </StatusBadge>
             </div>
@@ -438,16 +401,6 @@ function QuickSetupCard({ endpointUrl }: { endpointUrl: string }) {
           <button
             className="copy-command-button"
             onClick={() => copyCommand(currentSetup.command)}
-            style={{
-              background: "rgba(255, 255, 255, 0.08)",
-              border: "1px solid rgba(255, 255, 255, 0.12)",
-              borderRadius: "var(--radius-sm)",
-              padding: "4px 8px",
-              fontSize: "var(--text-xs)",
-              color: "rgba(255, 255, 255, 0.8)",
-              cursor: "pointer",
-              transition: "all var(--animation-fast) var(--animation-easing)",
-            }}
           >
             {copied ? "Copied!" : "Copy"}
           </button>
@@ -471,12 +424,12 @@ export function EndpointScreen() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStatsResponse | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [errorStats, setErrorStats] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const loadStats = useCallback(async () => {
     try {
       setLoadingStats(true);
-      setErrorStats(null);
+      setError(null);
       const [healthData, usageData] = await Promise.all([
         getHealth(),
         getUsageStats(),
@@ -484,7 +437,8 @@ export function EndpointScreen() {
       setHealth(healthData);
       setUsageStats(usageData);
     } catch (err) {
-      setErrorStats(err instanceof Error ? err.message : "Failed to load telemetry");
+      console.error("Failed to load telemetry", err);
+      setError(err instanceof Error ? err.message : "Failed to connect to local proxy. Make sure it is running.");
     } finally {
       setLoadingStats(false);
     }
@@ -514,20 +468,45 @@ export function EndpointScreen() {
 
   return (
     <div className="screen-stack">
-      <PremiumStyles />
       <PageHeader
         icon={EndpointIcon}
         title="Endpoint"
         description="Local OpenAI-compatible endpoint and router status"
         actions={
           <div className="page-actions">
-            <RefreshButton onClick={handleRefresh} loading={isScreenLoading} />
+            <RefreshButton onClick={handleRefresh} isRefreshing={isScreenLoading} />
           </div>
         }
       />
 
       <div className="endpoint-screen-layout">
-        {/* Top row - Server status and active provider */}
+        {error && (
+          <div className="error-banner" style={{
+            background: "var(--danger-soft)",
+            border: "1px solid var(--danger)",
+            borderRadius: "var(--radius-md)",
+            padding: "var(--space-4)",
+            marginBottom: "var(--space-5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "var(--space-4)"
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+              <AlertIcon className="status-icon status-error" style={{ width: "24px", height: "24px" }} />
+              <div>
+                <h3 style={{ margin: 0, color: "var(--danger)", fontSize: "var(--font-md)" }}>Connection Offline</h3>
+                <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--font-sm)", color: "var(--text-secondary)" }}>
+                  Failed to connect to local proxy: {error}. Check if your service is active.
+                </p>
+              </div>
+            </div>
+            <button className="button-secondary" style={{ whiteSpace: "nowrap" }} onClick={handleRefresh}>
+              Retry Connection
+            </button>
+          </div>
+        )}
+
         <div className="endpoint-top-row">
           <ServerStatusCard 
             health={health} 
@@ -538,47 +517,39 @@ export function EndpointScreen() {
           <ActiveProviderCard health={health} providers={providers} />
         </div>
 
-        {/* Middle row - Usage stats */}
         <div className="endpoint-stats-row">
           <StatCard
-            title="Requests Today"
+            label="Requests Today"
             value={formatNumber(requestsToday)}
             caption="API requests processed"
-            trend={requestsToday > 0 ? "up" : "neutral"}
           />
           <StatCard
-            title="Tokens Today"
+            label="Tokens Today"
             value={formatNumber(tokensToday)}
             caption="Input + cached tokens"
-            trend={tokensToday > 0 ? "up" : "neutral"}
           />
           <StatCard
-            title="RTK Applied"
+            label="RTK Applied"
             value={formatNumber(rtkApplied)}
             caption="Reduced context requests"
-            trend={rtkApplied > 0 ? "up" : "neutral"}
           />
           <StatCard
-            title="Cache Hit Rate"
+            label="Cache Hit Rate"
             value={formatPercent(cacheHitRate)}
             caption="Prompt cache efficiency"
-            trend={cacheHitRate > 0.5 ? "up" : "neutral"}
           />
           <StatCard
-            title="Average Savings"
+            label="Average Savings"
             value={formatPercent(avgSavings)}
             caption="Tokens saved ratio"
-            trend={avgSavings > 0.3 ? "up" : "neutral"}
           />
         </div>
 
-        {/* Bottom row - Fallback tiers and routing pipeline */}
         <div className="endpoint-bottom-row">
           <FallbackTiersCard providers={providers} />
           <RoutingPipelineCard health={health} providers={providers} endpointUrl={endpointUrl} />
         </div>
 
-        {/* Quick setup section */}
         <div className="endpoint-setup-row">
           <QuickSetupCard endpointUrl={endpointUrl} />
         </div>

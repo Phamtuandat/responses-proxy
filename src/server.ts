@@ -279,6 +279,11 @@ export const app = Fastify({
   }
 })();
 
+app.addHook("onClose", async () => {
+  providerHealthService.stopHealthMonitoring();
+  healthWebSocketManager.shutdown();
+});
+
 const DASHBOARD_SESSION_COOKIE = "responses_proxy_dashboard_session";
 
 app.addHook("onRequest", async (request, reply) => {
@@ -600,6 +605,29 @@ app.get("/api/debug/prompt-cache/latest", async (request) => {
       ? latestPromptCacheObservationByProvider.get(providerId) ?? null
       : latestPromptCacheObservation ?? null,
   };
+});
+
+app.get("/api/debug/audit-logs", async (request, reply) => {
+  if (!isOperatorRequest(request)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+  const query = request.query as { limit?: string; event?: string; subjectId?: string } | undefined;
+  const limit = query?.limit ? parseInt(query.limit, 10) : 100;
+  const event = typeof query?.event === "string" && query.event.trim() ? query.event.trim() as any : undefined;
+  const subjectId = typeof query?.subjectId === "string" && query.subjectId.trim() ? query.subjectId.trim() : undefined;
+
+  try {
+    const logs = auditLogRepository.listEvents({ limit, event, subjectId });
+    return reply.send({
+      ok: true,
+      logs,
+    });
+  } catch (error) {
+    return reply.code(500).send({
+      error: "Failed to fetch audit logs",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 app.get("/api/analytics/cost-summary", async (request, reply) => {
@@ -3532,6 +3560,14 @@ app.post("/v1/responses", async (request, reply) =>
   handleResponsesRequest(request, reply, "/v1/responses"),
 );
 
+app.post("/v1/chat/completions", async (request, reply) =>
+  handleResponsesRequest(request, reply, "/v1/chat/completions"),
+);
+
+app.post("/v1/completions", async (request, reply) =>
+  handleResponsesRequest(request, reply, "/v1/completions"),
+);
+
 app.post("/v1/messages", async (request, reply) =>
   handleAnthropicMessagesRequest(request, reply, false),
 );
@@ -4516,7 +4552,12 @@ function resolveHttpRateLimitPolicy(
   authorizationHeader: unknown,
 ): { scope: string; maxRequests: number } | undefined {
   const pathname = url.split("?", 1)[0] || "/";
-  if (pathname === "/v1/responses" || pathname.startsWith("/v1/messages")) {
+  if (
+    pathname === "/v1/responses" ||
+    pathname === "/v1/chat/completions" ||
+    pathname === "/v1/completions" ||
+    pathname.startsWith("/v1/messages")
+  ) {
     return {
       scope: "responses",
       maxRequests: readBearerToken(authorizationHeader)
