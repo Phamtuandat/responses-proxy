@@ -27,14 +27,32 @@ export const CODEWHISPERER_GENERATE_PATH = "/generateAssistantResponse";
 export const DEFAULT_KIRO_MODEL_ALIASES: Record<string, string> = {
   auto: "auto",
   "kiro-auto": "auto",
-  "kiro-claude-sonnet-4": "claude-sonnet-4",
+  // Base Claude variants
   "claude-sonnet-4": "claude-sonnet-4",
-  "kiro-claude-sonnet-4-5": "claude-sonnet-4-5",
+  "kiro-claude-sonnet-4": "claude-sonnet-4",
   "claude-sonnet-4-5": "claude-sonnet-4-5",
-  "kiro-claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-sonnet-4.5": "claude-sonnet-4-5",
+  "kiro-claude-sonnet-4-5": "claude-sonnet-4-5",
   "claude-sonnet-4-6": "claude-sonnet-4-6",
-  "kiro-claude-haiku-4-5": "claude-haiku-4.5",
+  "kiro-claude-sonnet-4-6": "claude-sonnet-4-6",
   "claude-haiku-4-5": "claude-haiku-4.5",
+  "claude-haiku-4.5": "claude-haiku-4.5",
+  "kiro-claude-haiku-4-5": "claude-haiku-4.5",
+  // Non-Claude models available via Kiro
+  "deepseek-3.2": "deepseek-3.2",
+  "qwen3-coder-next": "qwen3-coder-next",
+  "glm-5": "glm-5",
+  "MiniMax-M2.5": "MiniMax-M2.5",
+  "minimax-m2.5": "MiniMax-M2.5",
+  // Thinking variants
+  "claude-sonnet-4.5-thinking": "claude-sonnet-4.5-thinking",
+  "claude-haiku-4.5-thinking": "claude-haiku-4.5-thinking",
+  // Agentic variants
+  "claude-sonnet-4.5-agentic": "claude-sonnet-4.5-agentic",
+  "claude-haiku-4.5-agentic": "claude-haiku-4.5-agentic",
+  // Thinking + Agentic variants
+  "claude-sonnet-4.5-thinking-agentic": "claude-sonnet-4.5-thinking-agentic",
+  "claude-haiku-4.5-thinking-agentic": "claude-haiku-4.5-thinking-agentic",
 };
 
 /** `auto` lets CodeWhisperer pick the model; safest default matching 9router. */
