@@ -1168,9 +1168,21 @@ export class RuntimeProviderRepository {
 export const KIRO_PROVIDER_ID = "account-kiro";
 
 export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderPreset[] {
-  const primaryIdentity = inferProviderIdentity(config.UPSTREAM_BASE_URL, "");
-  const presets: RuntimeProviderPreset[] = [
-    {
+  const presets: RuntimeProviderPreset[] = [];
+
+  // Only seed a primary upstream provider if the URL is a real endpoint
+  // (skip .invalid, .example, .test reserved domains per RFC 2606)
+  const upstreamHostname = (() => {
+    try { return new URL(config.UPSTREAM_BASE_URL).hostname.toLowerCase(); } catch { return ""; }
+  })();
+  const isPlaceholder = upstreamHostname.endsWith(".invalid") ||
+    upstreamHostname.endsWith(".example") ||
+    upstreamHostname.endsWith(".test") ||
+    upstreamHostname === "";
+
+  if (!isPlaceholder) {
+    const primaryIdentity = inferProviderIdentity(config.UPSTREAM_BASE_URL, "");
+    presets.push({
       id: primaryIdentity.id,
       name: primaryIdentity.name,
       baseUrl: config.UPSTREAM_BASE_URL,
@@ -1179,8 +1191,9 @@ export function buildBuiltinProviderPresets(config: AppConfig): RuntimeProviderP
       providerApiKeys: normalizeApiKeys(config.UPSTREAM_API_KEY ? [config.UPSTREAM_API_KEY] : []),
       clientApiKeys: [],
       capabilities: buildDefaultCapabilitiesFromConfig(config),
-    },
-  ];
+    });
+  }
+
   if (config.KIRO_ENABLED) {
     presets.push(buildKiroProviderPreset(config));
   }
