@@ -399,6 +399,49 @@ app.get("/api/dashboard-auth/session", async (request) => {
   };
 });
 
+// Simple password login — no Telegram required
+app.post("/api/dashboard-auth/login", async (request, reply) => {
+  const body = request.body as { password?: string } | undefined;
+  const password = typeof body?.password === "string" ? body.password : "";
+
+  if (!password) {
+    return reply.code(400).send({ error: { code: "PASSWORD_REQUIRED", message: "Password is required." } });
+  }
+
+  // Check against configured dashboard password
+  const configuredPassword = config.DASHBOARD_PASSWORD;
+  if (!configuredPassword) {
+    return reply.code(503).send({ error: { code: "PASSWORD_NOT_CONFIGURED", message: "Dashboard password is not configured. Set DASHBOARD_PASSWORD env var." } });
+  }
+
+  // Simple comparison (plain text or bcrypt-style in the future)
+  const inputHash = createHash("sha256").update(password).digest("hex");
+  const configHash = createHash("sha256").update(configuredPassword).digest("hex");
+
+  if (inputHash !== configHash) {
+    return reply.code(401).send({ error: { code: "INVALID_PASSWORD", message: "Invalid password." } });
+  }
+
+  // Create a session
+  const { token, session } = dashboardAuthRepository.createSession({
+    telegramUserId: "admin",
+    ttlMs: config.DASHBOARD_AUTH_SESSION_TTL_MS,
+  });
+
+  // Set session cookie
+  const maxAge = Math.floor(config.DASHBOARD_AUTH_SESSION_TTL_MS / 1000);
+  reply.header("Set-Cookie", serializeCookie(DASHBOARD_SESSION_COOKIE, token, { maxAgeSeconds: maxAge }));
+
+  return reply.send({
+    ok: true,
+    session: {
+      telegramUserId: session.telegramUserId,
+      role: session.role,
+      expiresAt: session.expiresAt,
+    },
+  });
+});
+
 app.post("/api/dashboard-auth/request-approval", async (_request, reply) => {
   const adminUserIds = Array.from(dashboardAdminUserIds);
   if (adminUserIds.length === 0) {

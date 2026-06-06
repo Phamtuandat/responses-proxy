@@ -116,6 +116,7 @@ const server = spawn(process.execPath, [serverPath], {
     TELEGRAM_BOT_TOKEN: "",
     TELEGRAM_OWNER_USER_IDS: "",
     TELEGRAM_ADMIN_USER_IDS: "",
+    DASHBOARD_PASSWORD: process.env.DASHBOARD_PASSWORD || "admin",
   },
 });
 

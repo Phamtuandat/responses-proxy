@@ -225,6 +225,7 @@ const envSchema = z.object({
     .default("429,500,502,503,504")
     .transform(parseFallbackStatusCodes),
   RESPONSES_PROXY_CLIENT_API_KEY: z.string().optional(),
+  DASHBOARD_PASSWORD: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_OWNER_USER_IDS: z.string().optional().transform(parseIdList),
   TELEGRAM_ADMIN_USER_IDS: z.string().optional().transform(parseIdList),
