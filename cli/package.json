@@ -1,6 +1,6 @@
 {
   "name": "responses-proxy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI routing proxy with multi-provider fallback, RTK token saver, and web dashboard",
   "bin": {
     "responses-proxy": "./cli.js"
@@ -8,11 +8,13 @@
   "files": [
     "cli.js",
     "dist",
+    "hooks",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "node scripts/build-cli.js",
+    "postinstall": "node hooks/postinstall.js",
     "prepublishOnly": "npm run build"
   },
   "engines": {

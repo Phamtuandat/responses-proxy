@@ -39,6 +39,7 @@ const distPkg = {
   name: "responses-proxy-runtime",
   version: rootPkg.version,
   private: true,
+  type: "module",
   dependencies: prodDeps,
 };
 fs.writeFileSync(

@@ -61,6 +61,23 @@ if (!fs.existsSync(serverPath)) {
   process.exit(1);
 }
 
+// Check if deps are installed
+const nodeModulesPath = path.join(__dirname, "dist", "node_modules");
+if (!fs.existsSync(path.join(nodeModulesPath, "fastify"))) {
+  console.log("📦 Runtime deps missing. Installing...");
+  const { execSync } = require("child_process");
+  try {
+    execSync("npm install --omit=dev --no-audit --no-fund --loglevel=error", {
+      cwd: path.join(__dirname, "dist"),
+      stdio: "inherit",
+      timeout: 120000,
+    });
+  } catch {
+    console.error("Failed to install deps. Run: cd " + path.join(__dirname, "dist") + " && npm install --omit=dev");
+    process.exit(1);
+  }
+}
+
 // Data directory
 const dataDir = path.join(os.homedir(), ".responses-proxy");
 fs.mkdirSync(path.join(dataDir, "sessions"), { recursive: true });
@@ -83,12 +100,22 @@ const server = spawn(process.execPath, [serverPath], {
   stdio: "inherit",
   env: {
     ...process.env,
+    NODE_PATH: nodeModulesPath,
     PORT: String(port),
     HOST: host,
+    UPSTREAM_BASE_URL: process.env.UPSTREAM_BASE_URL || "https://placeholder.invalid",
+    UPSTREAM_API_KEY: process.env.UPSTREAM_API_KEY || "",
     APP_DB_PATH: path.join(dataDir, "app.sqlite"),
     SESSION_LOG_DIR: path.join(dataDir, "sessions"),
     CUSTOMER_KEY_DB_PATH: path.join(dataDir, "telegram-bot.sqlite"),
     KIRO_DB_PATH: path.join(dataDir, "kiro.sqlite"),
+    KIRO_ENABLED: process.env.KIRO_ENABLED || "false",
+    QUICK_APPLY_HERMES_CONFIG_PATH: path.join(os.homedir(), ".hermes", "config.yaml"),
+    QUICK_APPLY_CODEX_CONFIG_PATH: path.join(os.homedir(), ".codex", "config.toml"),
+    QUICK_APPLY_CODEX_AUTH_PATH: path.join(os.homedir(), ".codex", "auth.json"),
+    TELEGRAM_BOT_TOKEN: "",
+    TELEGRAM_OWNER_USER_IDS: "",
+    TELEGRAM_ADMIN_USER_IDS: "",
   },
 });
 

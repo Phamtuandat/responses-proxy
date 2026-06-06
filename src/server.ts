@@ -346,6 +346,11 @@ app.addHook("onRequest", async (request, reply) => {
     return;
   }
 
+  // Playground mode: skip auth when no Telegram admins are configured (standalone CLI)
+  if (dashboardAdminUserIds.size === 0) {
+    return;
+  }
+
   const sessionToken = readCookie(request.headers.cookie, DASHBOARD_SESSION_COOKIE);
   const session = dashboardAuthRepository.getSessionByToken(sessionToken);
   if (session) {
@@ -369,6 +374,18 @@ app.addHook("onRequest", async (request, reply) => {
 });
 
 app.get("/api/dashboard-auth/session", async (request) => {
+  // Playground mode: auto-authenticate when no admins configured
+  if (dashboardAdminUserIds.size === 0) {
+    return {
+      authenticated: true,
+      session: {
+        telegramUserId: "playground",
+        role: "admin",
+        expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    };
+  }
+
   const session = dashboardAuthRepository.getSessionByToken(readCookie(request.headers.cookie, DASHBOARD_SESSION_COOKIE));
   return {
     authenticated: Boolean(session),
