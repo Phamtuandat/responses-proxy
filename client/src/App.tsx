@@ -12,6 +12,7 @@ import { CacheScreen } from "./screens/CacheScreen";
 import { ConsoleLogScreen } from "./screens/ConsoleLogScreen";
 import { ClientsScreen } from "./screens/ClientsScreen";
 import { ModelCombosScreen } from "./screens/ModelCombosScreen";
+import { CliToolsScreen } from "./screens/CliToolsScreen";
 import { ConfigHelperScreen } from "./screens/ConfigHelperScreen";
 import { DashboardScreen } from "./screens/DashboardScreen";
 import { EnhancedDashboardScreen } from "./screens/EnhancedDashboardScreen";
@@ -225,7 +226,7 @@ function renderScreen(routeState: RouteState) {
     case "mitm":
       return <CacheScreen />;
     case "cli-tools":
-      return <ConfigHelperScreen />;
+      return <CliToolsScreen />;
     case "media-providers":
       return <MediaProvidersScreen />;
     case "proxy-pools":

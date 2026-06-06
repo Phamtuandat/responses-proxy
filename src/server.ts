@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import type { FastifyBaseLogger } from "fastify";
 import { createHash, randomInt, randomUUID } from "node:crypto";
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import readline from "node:readline";
@@ -716,11 +716,12 @@ app.get("/api/provider-models", async (request, reply) => {
       : providerRepository.getActiveProviderId();
 
   // Kiro providers: return the static model aliases (no upstream model-list API)
+  // Only return kr/ prefixed canonical names to avoid duplication in combos UI
   const isKiroProvider = providerId === "account-kiro" || providerId === "kiro-ide" ||
     providerId === "kiro-free" || providerId?.startsWith("kiro-");
   if (isKiroProvider) {
     const { DEFAULT_KIRO_MODEL_ALIASES } = await import("./kiro-codewhisperer.js");
-    const models = Object.keys(DEFAULT_KIRO_MODEL_ALIASES).filter(k => k !== "auto" && !k.startsWith("kiro-"));
+    const models = Object.keys(DEFAULT_KIRO_MODEL_ALIASES).filter(k => k.startsWith("kr/"));
     return reply.send({
       ok: true,
       providerId,
@@ -2019,6 +2020,93 @@ app.post("/api/client-configs/apply", async (request, reply) => {
     status: buildQuickApplyClientStatus(client, requestedBaseUrl),
     clientRoutes: providerRepository.getClientRoutesForUi(),
   });
+});
+
+// ─── CLI Tool Auto-Apply: Claude Code settings ──────────────────────────────
+
+app.get("/api/cli-tools/claude-settings", async (_request, reply) => {
+  const settingsPath = path.join(process.env.HOME || "", ".claude", "settings.json");
+  try {
+    if (!existsSync(settingsPath)) {
+      return reply.send({ installed: false, path: settingsPath });
+    }
+    const raw = readFileSync(settingsPath, "utf8");
+    const data = JSON.parse(raw);
+    const env = data.env || {};
+    const has9Router = !!env.ANTHROPIC_BASE_URL && env.ANTHROPIC_BASE_URL.includes(String(config.PORT));
+    return reply.send({
+      installed: true,
+      path: settingsPath,
+      has9Router,
+      settings: { env },
+    });
+  } catch (error) {
+    return reply.send({ installed: false, path: settingsPath, error: error instanceof Error ? error.message : "read failed" });
+  }
+});
+
+app.post("/api/cli-tools/claude-settings", async (request, reply) => {
+  const body = request.body as { env?: Record<string, string> } | undefined;
+  const envVars = body?.env;
+  if (!envVars || typeof envVars !== "object") {
+    return reply.code(400).send({ error: "env object is required" });
+  }
+
+  const settingsPath = path.join(process.env.HOME || "", ".claude", "settings.json");
+  const settingsDir = path.dirname(settingsPath);
+  const backupDir = quickApplyPaths.backupDir;
+
+  try {
+    mkdirSync(settingsDir, { recursive: true });
+
+    let currentData: Record<string, unknown> = {};
+    if (existsSync(settingsPath)) {
+      try {
+        currentData = JSON.parse(readFileSync(settingsPath, "utf8"));
+      } catch { /* start fresh */ }
+    }
+
+    // Merge env vars
+    const currentEnv = (currentData.env && typeof currentData.env === "object") ? currentData.env as Record<string, string> : {};
+    const mergedEnv = { ...currentEnv, ...envVars };
+    const nextData = { ...currentData, env: mergedEnv, hasCompletedOnboarding: true };
+    const nextRaw = JSON.stringify(nextData, null, 2) + "\n";
+
+    const writeResult = writeQuickConfigFile(settingsPath, nextRaw, { backupDir });
+
+    return reply.send({
+      ok: true,
+      changed: writeResult.changed,
+      backupCreated: writeResult.backupCreated,
+    });
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Failed to apply settings" });
+  }
+});
+
+app.delete("/api/cli-tools/claude-settings", async (_request, reply) => {
+  const settingsPath = path.join(process.env.HOME || "", ".claude", "settings.json");
+  try {
+    if (!existsSync(settingsPath)) {
+      return reply.send({ ok: true, changed: false });
+    }
+    const raw = readFileSync(settingsPath, "utf8");
+    const data = JSON.parse(raw);
+    const env = data.env || {};
+    // Remove 9router-injected keys
+    delete env.ANTHROPIC_BASE_URL;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    delete env.ANTHROPIC_MODEL;
+    delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
+    delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
+    delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+    data.env = env;
+    const nextRaw = JSON.stringify(data, null, 2) + "\n";
+    const writeResult = writeQuickConfigFile(settingsPath, nextRaw, { backupDir: quickApplyPaths.backupDir });
+    return reply.send({ ok: true, changed: writeResult.changed, backupCreated: writeResult.backupCreated });
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Failed to reset settings" });
+  }
 });
 
 app.get("/api/customer/codex/setup.sh", async (request, reply) => {

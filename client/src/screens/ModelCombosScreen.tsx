@@ -487,7 +487,26 @@ function ModelSelectModal({
           const data = await getProviderModels(provider.id);
           if (!cancelled && data.models) {
             const prefix = providerShortPrefix(provider);
-            results[provider.id] = data.models.map((m) => `${prefix}/${m}`);
+            // Deduplicate: produce only "prefix/model" form.
+            // API may return both "claude-sonnet-4.5" and "kr/claude-sonnet-4.5".
+            // We normalize all to "prefix/model" and deduplicate.
+            const seen = new Set<string>();
+            const normalized: string[] = [];
+            for (const m of data.models) {
+              // If model already has a slash prefix, use it as-is
+              // (it's already in "prefix/model" form like "kr/claude-sonnet-4.5")
+              let canonical: string;
+              if (m.includes("/")) {
+                canonical = m;
+              } else {
+                canonical = `${prefix}/${m}`;
+              }
+              if (!seen.has(canonical)) {
+                seen.add(canonical);
+                normalized.push(canonical);
+              }
+            }
+            results[provider.id] = normalized;
           }
         } catch { /* skip */ }
       }
