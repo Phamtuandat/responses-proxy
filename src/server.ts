@@ -708,6 +708,20 @@ app.get("/api/provider-models", async (request, reply) => {
     typeof query?.providerId === "string" && query.providerId.trim()
       ? query.providerId.trim()
       : providerRepository.getActiveProviderId();
+
+  // Kiro providers: return the static model aliases (no upstream model-list API)
+  const isKiroProvider = providerId === "account-kiro" || providerId === "kiro-ide" ||
+    providerId === "kiro-free" || providerId?.startsWith("kiro-");
+  if (isKiroProvider) {
+    const { DEFAULT_KIRO_MODEL_ALIASES } = await import("./kiro-codewhisperer.js");
+    const models = Object.keys(DEFAULT_KIRO_MODEL_ALIASES).filter(k => k !== "auto" && !k.startsWith("kiro-"));
+    return reply.send({
+      ok: true,
+      providerId,
+      models,
+    });
+  }
+
   const provider = providerRepository.getProvider(providerId);
 
   if (!provider) {
@@ -1606,6 +1620,71 @@ app.delete("/api/kiro/accounts/:accountId", async (request, reply) => {
       },
     });
   }
+});
+
+app.get("/api/kiro/model-aliases", async (_request, reply) => {
+  const kiroProvider = providerRepository.getProvider("account-kiro");
+  const aliases = kiroProvider?.capabilities.modelAliases ?? {};
+  return reply.send({ ok: true, aliases });
+});
+
+app.put("/api/kiro/model-aliases", async (request, reply) => {
+  const body = request.body as { alias?: unknown; target?: unknown } | undefined;
+  const alias = typeof body?.alias === "string" ? body.alias.trim() : "";
+  const target = typeof body?.target === "string" ? body.target.trim() : "";
+
+  if (!alias) {
+    return reply.code(400).send({
+      error: { type: "validation_error", code: "INVALID_ALIAS", message: "alias is required" },
+    });
+  }
+  if (!target) {
+    return reply.code(400).send({
+      error: { type: "validation_error", code: "INVALID_TARGET", message: "target model ID is required" },
+    });
+  }
+
+  const kiroProvider = providerRepository.getProvider("account-kiro");
+  if (!kiroProvider) {
+    return reply.code(404).send({
+      error: { type: "not_found", code: "KIRO_PROVIDER_NOT_FOUND", message: "Kiro provider not found" },
+    });
+  }
+
+  const updatedAliases = { ...(kiroProvider.capabilities.modelAliases ?? {}), [alias]: target };
+  providerRepository.updateProvider("account-kiro", {
+    ...kiroProvider,
+    capabilities: { ...kiroProvider.capabilities, modelAliases: updatedAliases },
+  });
+
+  return reply.send({ ok: true, aliases: updatedAliases });
+});
+
+app.delete("/api/kiro/model-aliases/:alias", async (request, reply) => {
+  const params = request.params as { alias?: string };
+  const alias = params.alias?.trim() ?? "";
+
+  if (!alias) {
+    return reply.code(400).send({
+      error: { type: "validation_error", code: "INVALID_ALIAS", message: "alias is required" },
+    });
+  }
+
+  const kiroProvider = providerRepository.getProvider("account-kiro");
+  if (!kiroProvider) {
+    return reply.code(404).send({
+      error: { type: "not_found", code: "KIRO_PROVIDER_NOT_FOUND", message: "Kiro provider not found" },
+    });
+  }
+
+  const updatedAliases = { ...(kiroProvider.capabilities.modelAliases ?? {}) };
+  delete updatedAliases[alias];
+  providerRepository.updateProvider("account-kiro", {
+    ...kiroProvider,
+    capabilities: { ...kiroProvider.capabilities, modelAliases: updatedAliases },
+  });
+
+  return reply.send({ ok: true, aliases: updatedAliases });
 });
 
 app.post("/api/kiro/import", async (request, reply) => {

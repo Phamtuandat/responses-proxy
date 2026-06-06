@@ -38,11 +38,10 @@ export function AccountConnectionFlow({
   validationResult = null,
   validating = false
 }: AccountConnectionFlowProps) {
-  const [step, setStep] = useState<'start' | 'authorize' | 'callback' | 'kiro_import' | 'device_login' | 'complete'>('start');
+  const [step, setStep] = useState<'start' | 'authorize' | 'callback' | 'device_login' | 'complete'>('start');
   const [callbackUrl, setCallbackUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [apiKeyName, setApiKeyName] = useState('');
-  const [kiroSourcePath, setKiroSourcePath] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -62,6 +61,23 @@ export function AccountConnectionFlow({
   // Kiro providers are connected by importing accounts from the 9router database
   // rather than running a live OAuth/API-key flow.
   const isKiro = connectionFlow?.type === 'kiro';
+
+  // For API key providers, skip the "start" step and go directly to the input
+  // when the connectionFlow is already initialized (the parent already started it).
+  // For Kiro providers, skip directly to device login (no more 9router import option).
+  useEffect(() => {
+    if (step === 'start' && connectionFlow) {
+      if (isKiro) {
+        // Go straight to device login — no intermediate start screen
+        setDeviceLoginPhase('picker');
+        setStep('device_login');
+      } else if (authType === 'api_key' && connectionFlow.type === 'api_key') {
+        setStep('callback');
+      } else if (authType === 'oauth' && connectionFlow.type === 'oauth') {
+        setStep('authorize');
+      }
+    }
+  }, [step, connectionFlow, authType, isKiro]);
 
   // Clean up polling interval when step changes or component unmounts
   useEffect(() => {
@@ -160,10 +176,11 @@ export function AccountConnectionFlow({
   const handleStartConnection = useCallback(async () => {
     try {
       setLocalError(null);
-      // The connection flow is already started before this component renders, so for
-      // Kiro we just advance to the import step instead of re-initiating the flow.
+      // For Kiro providers, the auto-advance effect handles routing to device_login.
+      // This fallback handles the case where the effect hasn't fired yet.
       if (isKiro) {
-        setStep('kiro_import');
+        setStep('device_login');
+        setDeviceLoginPhase('picker');
         return;
       }
       await onStartConnection(authType);
@@ -216,45 +233,15 @@ export function AccountConnectionFlow({
     }
   }, [apiKey, apiKeyName, onCompleteConnection]);
 
-  const handleCompleteKiroImport = useCallback(async () => {
-    try {
-      setSubmitting(true);
-      setLocalError(null);
-      await onCompleteConnection({
-        kiroImport: true,
-        sourcePath: kiroSourcePath.trim() || undefined
-      });
-      setStep('complete');
-    } catch (err) {
-      console.error('Failed to import Kiro accounts:', err);
-      setLocalError(err instanceof Error ? err.message : 'Failed to import Kiro accounts');
-    } finally {
-      setSubmitting(false);
-    }
-  }, [kiroSourcePath, onCompleteConnection]);
-
   const renderStartStep = () => (
     <div className="connection-flow-step">
       <div className="step-header">
-        <h3>{isKiro ? 'Connect Kiro Account' : 'Connect New Account'}</h3>
-        <p>
-          {isKiro
-            ? 'Import your Kiro accounts from a 9router database to connect this provider.'
-            : `Add a new ${authType === 'oauth' ? 'OAuth' : 'API key'} account to this provider.`}
-        </p>
+        <h3>Connect New Account</h3>
+        <p>{`Add a new ${authType === 'oauth' ? 'OAuth' : 'API key'} account to this provider.`}</p>
       </div>
 
       <div className="step-content">
-        {isKiro && (
-          <div className="auth-info">
-            <div className="auth-type-badge">
-              <StatusBadge variant="accent" size="sm">9router Import</StatusBadge>
-            </div>
-            <p>{connectionFlow?.instructions || 'Kiro accounts are imported from a 9router database. The proxy then owns token refresh.'}</p>
-          </div>
-        )}
-
-        {!isKiro && authType === 'oauth' && (
+        {authType === 'oauth' && (
           <div className="auth-info">
             <div className="auth-type-badge">
               <StatusBadge variant="accent" size="sm">OAuth</StatusBadge>
@@ -263,7 +250,7 @@ export function AccountConnectionFlow({
           </div>
         )}
 
-        {!isKiro && authType === 'api_key' && (
+        {authType === 'api_key' && (
           <div className="auth-info">
             <div className="auth-type-badge">
               <StatusBadge variant="neutral" size="sm">API Key</StatusBadge>
@@ -288,74 +275,12 @@ export function AccountConnectionFlow({
         >
           Cancel
         </button>
-        {isKiro && (
-          <button
-            className="button-secondary"
-            onClick={() => {
-              setDeviceLoginPhase('picker');
-              setDeviceError(null);
-              setStep('device_login');
-            }}
-            disabled={connecting}
-          >
-            Sign In with Device Code
-          </button>
-        )}
         <button
           className="button-primary"
           onClick={handleStartConnection}
           disabled={connecting}
         >
-          {connecting ? 'Starting...' : isKiro ? 'Continue to Import' : 'Start Connection'}
-        </button>
-      </div>
-    </div>
-  );
-
-  const renderKiroImportStep = () => (
-    <div className="connection-flow-step">
-      <div className="step-header">
-        <h3>Import Kiro Accounts</h3>
-        <p>Import Kiro accounts from a 9router database. Leave the path empty to use the default location.</p>
-      </div>
-
-      <div className="step-content">
-        <div className="form-group">
-          <label htmlFor="kiroSourcePath">Source Database Path (Optional)</label>
-          <input
-            id="kiroSourcePath"
-            type="text"
-            className="form-input"
-            placeholder="~/.9router/db/data.sqlite"
-            value={kiroSourcePath}
-            onChange={(e) => setKiroSourcePath(e.target.value)}
-            disabled={submitting}
-          />
-          <small className="form-help">Default: ~/.9router/db/data.sqlite</small>
-        </div>
-
-        {(error || localError) && (
-          <div className="connection-error">
-            <AlertIcon className="error-icon" />
-            <span>{error || localError}</span>
-          </div>
-        )}
-      </div>
-
-      <div className="step-actions">
-        <button
-          className="button-secondary"
-          onClick={() => setStep('start')}
-          disabled={submitting}
-        >
-          Back
-        </button>
-        <button
-          className="button-primary"
-          onClick={handleCompleteKiroImport}
-          disabled={submitting}
-        >
-          {submitting ? 'Importing...' : 'Import Accounts'}
+          {connecting ? 'Starting...' : 'Start Connection'}
         </button>
       </div>
     </div>
@@ -926,7 +851,6 @@ export function AccountConnectionFlow({
         {step === 'start' && renderStartStep()}
         {step === 'authorize' && renderAuthorizeStep()}
         {step === 'callback' && renderCallbackStep()}
-        {step === 'kiro_import' && renderKiroImportStep()}
         {step === 'device_login' && renderDeviceLoginStep()}
         {step === 'complete' && renderCompleteStep()}
       </div>

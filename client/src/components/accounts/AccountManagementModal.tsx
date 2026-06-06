@@ -1,7 +1,7 @@
 // Account Management Modal Component
 // Unified interface for adding, editing, and managing provider accounts
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { StatusBadge } from "../StatusBadge";
 import { AccountConnectionFlow } from "./AccountConnectionFlow";
 import { CheckCircleIcon, AlertIcon, TrashIcon, RefreshIcon } from "../icons";
@@ -235,62 +235,228 @@ export function AccountManagementModal({
     }
   }, [deleteAccount, onAccountsChanged, mode, onClose]);
 
-  const renderAddAccountMode = () => (
-    <div className="account-modal-content">
-      <div className="modal-header">
-        <h2>Add Account to {providerName}</h2>
-        <p>Connect a new account to enable this provider for routing.</p>
-      </div>
+  // ─── 9router-style single-screen Add API Key form ───
+  const [addKeyName, setAddKeyName] = useState('');
+  const [addKeyValue, setAddKeyValue] = useState('');
+  const [addKeyValidation, setAddKeyValidation] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
+  const [addKeySaving, setAddKeySaving] = useState(false);
+  const [addKeyError, setAddKeyError] = useState<string | null>(null);
 
-      {!connectionFlow ? (
-        <div className="auth-type-selection">
-          <div className="auth-types">
-            <h3>Select Authentication Method</h3>
+  // Reset add-key form when modal opens
+  useEffect(() => {
+    if (isOpen && mode === 'add') {
+      setAddKeyName('');
+      setAddKeyValue('');
+      setAddKeyValidation('idle');
+      setAddKeySaving(false);
+      setAddKeyError(null);
+    }
+  }, [isOpen, mode]);
+
+  const handleAddKeySave = useCallback(async () => {
+    if (!addKeyValue.trim()) return;
+    setAddKeySaving(true);
+    setAddKeyError(null);
+    try {
+      await handleCompleteConnection({
+        apiKey: addKeyValue.trim(),
+        keyName: addKeyName.trim() || 'API Key'
+      });
+      // Don't close immediately — let the user see the result and dismiss manually.
+      // The parent's onAccountsChanged already refreshed the account list.
+    } catch (err) {
+      setAddKeyError(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setAddKeySaving(false);
+    }
+  }, [addKeyValue, addKeyName, handleCompleteConnection]);
+
+  // Determine if this provider uses only api_key auth (most providers)
+  const isApiKeyOnly = supportedAuthTypes.length === 1 && supportedAuthTypes[0] === 'api_key';
+  // Determine if this provider is Kiro/OAuth-based (needs the wizard flow)
+  const needsWizardFlow = supportedAuthTypes.includes('oauth') || connectionFlow?.type === 'kiro';
+
+  // Auto-start connection for OAuth/Kiro providers
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (isOpen && mode === 'add' && needsWizardFlow && !connectionFlow && !autoStarted.current) {
+      autoStarted.current = true;
+      handleStartConnection(supportedAuthTypes.includes('oauth') ? 'oauth' : supportedAuthTypes[0]);
+    }
+    if (!isOpen) {
+      autoStarted.current = false;
+    }
+  }, [isOpen, mode, needsWizardFlow, supportedAuthTypes, connectionFlow, handleStartConnection]);
+
+  const renderAddAccountMode = () => {
+    // ── API Key only: 9router-style single-screen form ──
+    if (isApiKeyOnly) {
+      // After successful save, show confirmation
+      if (!addKeySaving && !addKeyError && validationResult) {
+        return (
+          <div className="account-modal-content">
+            <div className="modal-header">
+              <h2>Account Added</h2>
+            </div>
+            <div className="step-content">
+              <div className={`add-key-badge ${validationResult.status === 'success' ? 'valid' : 'warning'}`}>
+                {validationResult.status === 'success'
+                  ? <><CheckCircleIcon className="success-icon" /> Connected{validationResult.latencyMs ? ` (${validationResult.latencyMs}ms)` : ''}</>
+                  : <><AlertIcon className="error-icon" /> Saved — {validationResult.errorMessage || 'verify manually'}</>
+                }
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="button-primary" onClick={onClose}>Done</button>
+            </div>
+          </div>
+        );
+      }
+
+      if (validating) {
+        return (
+          <div className="account-modal-content">
+            <div className="modal-header">
+              <h2>Verifying...</h2>
+            </div>
+            <div className="connection-validating" style={{ padding: 'var(--space-4)', justifyContent: 'center' }}>
+              <span className="login-spinner" aria-hidden="true" />
+              <span>Verifying connection...</span>
+            </div>
+            <div className="modal-actions">
+              <button className="button-secondary" onClick={onClose}>Done</button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="account-modal-content">
+          <div className="modal-header">
+            <h2>Add {providerName} API Key</h2>
+          </div>
+
+          <div className="add-key-form">
+            <div className="form-group">
+              <label htmlFor="add-key-name" className="form-label">Name</label>
+              <input
+                id="add-key-name"
+                type="text"
+                className="form-input"
+                placeholder="Production Key"
+                value={addKeyName}
+                onChange={(e) => setAddKeyName(e.target.value)}
+                disabled={addKeySaving}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="add-key-value" className="form-label">API Key</label>
+              <div className="form-input-row">
+                <input
+                  id="add-key-value"
+                  type="password"
+                  className="form-input"
+                  placeholder="sk-..."
+                  value={addKeyValue}
+                  onChange={(e) => { setAddKeyValue(e.target.value); setAddKeyValidation('idle'); }}
+                  disabled={addKeySaving}
+                />
+              </div>
+            </div>
+
+            {addKeyValidation === 'valid' && (
+              <div className="add-key-badge valid">
+                <CheckCircleIcon className="success-icon" /> Valid
+              </div>
+            )}
+            {addKeyValidation === 'invalid' && (
+              <div className="add-key-badge invalid">
+                <AlertIcon className="error-icon" /> Invalid
+              </div>
+            )}
+
+            {addKeyError && (
+              <div className="connection-error">
+                <AlertIcon className="error-icon" />
+                <span>{addKeyError}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="modal-actions">
+            <button className="button-secondary" onClick={onClose} disabled={addKeySaving}>
+              Cancel
+            </button>
+            <button
+              className="button-primary"
+              onClick={handleAddKeySave}
+              disabled={!addKeyValue.trim() || addKeySaving}
+            >
+              {addKeySaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Multi-auth or OAuth/Kiro: use the wizard flow ──
+    if (!connectionFlow) {
+      // Multi-auth picker (rare case — e.g. provider supports both OAuth and API key)
+      if (supportedAuthTypes.length > 1 && !needsWizardFlow) {
+        return (
+          <div className="account-modal-content">
+            <div className="modal-header">
+              <h2>Add Account to {providerName}</h2>
+              <p>Choose how to connect.</p>
+            </div>
             <div className="auth-type-options">
-              {supportedAuthTypes.map(authType => (
+              {supportedAuthTypes.map(at => (
                 <button
-                  key={authType}
-                  className={`auth-type-option ${selectedAuthType === authType ? 'selected' : ''}`}
-                  onClick={() => setSelectedAuthType(authType)}
+                  key={at}
+                  className={`auth-type-option ${selectedAuthType === at ? 'selected' : ''}`}
+                  onClick={() => setSelectedAuthType(at)}
                 >
                   <div className="auth-type-info">
-                    <StatusBadge
-                      variant={authType === 'oauth' ? 'accent' : 'neutral'}
-                      size="sm"
-                    >
-                      {authType === 'oauth' ? 'OAuth' : 'API Key'}
+                    <StatusBadge variant={at === 'oauth' ? 'accent' : 'neutral'} size="sm">
+                      {at === 'oauth' ? 'OAuth' : 'API Key'}
                     </StatusBadge>
                     <div className="auth-type-description">
-                      {authType === 'oauth' && 'Secure OAuth authentication'}
-                      {authType === 'api_key' && 'Direct API key authentication'}
+                      {at === 'oauth' && 'Secure OAuth authentication'}
+                      {at === 'api_key' && 'Direct API key authentication'}
                     </div>
                   </div>
                 </button>
               ))}
             </div>
-          </div>
-
-          {(connectionError || operationError) && (
-            <div className="modal-error">
-              <AlertIcon className="error-icon" />
-              <span>{connectionError || operationError}</span>
+            <div className="modal-actions">
+              <button className="button-secondary" onClick={onClose}>Cancel</button>
+              <button
+                className="button-primary"
+                onClick={() => handleStartConnection(selectedAuthType)}
+                disabled={connecting}
+              >
+                {connecting ? 'Starting...' : 'Continue'}
+              </button>
             </div>
-          )}
+          </div>
+        );
+      }
 
-          <div className="modal-actions">
-            <button className="button-secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              className="button-primary"
-              onClick={() => handleStartConnection(selectedAuthType)}
-              disabled={connecting}
-            >
-              {connecting ? 'Starting...' : 'Continue'}
-            </button>
+      // Waiting for auto-start to kick in
+      return (
+        <div className="account-modal-content">
+          <div className="connection-validating" style={{ padding: 'var(--space-6)', justifyContent: 'center' }}>
+            <span className="login-spinner" aria-hidden="true" />
+            <span>Preparing connection...</span>
           </div>
         </div>
-      ) : (
+      );
+    }
+
+    // Wizard flow active (OAuth / Kiro device login)
+    return (
+      <div className="account-modal-content">
         <AccountConnectionFlow
           providerId={providerId}
           authType={selectedAuthType}
@@ -303,9 +469,9 @@ export function AccountManagementModal({
           validating={validating}
           validationResult={validationResult}
         />
-      )}
-    </div>
-  );
+      </div>
+    );
+  };
 
   const renderEditAccountMode = () => {
     if (!editingAccount) return null;

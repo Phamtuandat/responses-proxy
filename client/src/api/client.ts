@@ -261,6 +261,18 @@ export function importKiroAccounts(input?: KiroImportInput) {
   return apiSend<KiroImportResponse>("/api/kiro/import", "POST", input);
 }
 
+export function getKiroModelAliases() {
+  return apiGet<{ ok: boolean; aliases: Record<string, string> }>("/api/kiro/model-aliases");
+}
+
+export function addKiroModelAlias(alias: string, target: string) {
+  return apiSend<{ ok: boolean; aliases: Record<string, string> }>("/api/kiro/model-aliases", "PUT", { alias, target });
+}
+
+export function deleteKiroModelAlias(alias: string) {
+  return apiSend<{ ok: boolean; aliases: Record<string, string> }>(`/api/kiro/model-aliases/${encodeURIComponent(alias)}`, "DELETE");
+}
+
 export function getAuditLogs(params?: { limit?: number; event?: string; subjectId?: string }) {
   const query = new URLSearchParams();
   if (params?.limit) query.append("limit", String(params.limit));

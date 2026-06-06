@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from "react";
-import { updateProvider, deleteProvider, getProviderModels } from "../api/client";
+import { updateProvider, deleteProvider, getProviderModels, addKiroModelAlias, deleteKiroModelAlias } from "../api/client";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { RefreshButton } from "../components/RefreshButton";
@@ -394,14 +394,46 @@ function ConnectionsCard({
   );
 }
 
-function ModelsCard({ models, loading }: { models: ProviderModel[]; loading?: boolean }) {
+function ModelsCard({ models, loading, onRefresh, isKiro }: { models: ProviderModel[]; loading?: boolean; onRefresh?: () => void; isKiro?: boolean }) {
   const enabledModels = models.filter(m => m.enabled);
   const [copiedModel, setCopiedModel] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newAlias, setNewAlias] = useState('');
+  const [newTarget, setNewTarget] = useState('');
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const copyModelId = (modelId: string) => {
     navigator.clipboard.writeText(modelId);
     setCopiedModel(modelId);
     setTimeout(() => setCopiedModel(null), 1500);
+  };
+
+  const handleAddAlias = async () => {
+    if (!newAlias.trim() || !newTarget.trim()) return;
+    setAddSaving(true);
+    setAddError(null);
+    try {
+      await addKiroModelAlias(newAlias.trim(), newTarget.trim());
+      setNewAlias('');
+      setNewTarget('');
+      setShowAddForm(false);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : 'Failed to add alias');
+    } finally {
+      setAddSaving(false);
+    }
+  };
+
+  const handleDeleteAlias = async (alias: string) => {
+    if (!window.confirm(`Remove model alias "${alias}"?`)) return;
+    try {
+      await deleteKiroModelAlias(alias);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to delete alias:', err);
+    }
   };
 
   return (
@@ -410,9 +442,11 @@ function ModelsCard({ models, loading }: { models: ProviderModel[]; loading?: bo
       description={loading ? "Loading models..." : `${enabledModels.length} enabled • ${models.length} total`}
       actions={
         <div className="pd9-models-actions">
-          <button className="pd9-disable-all" title="Disable all models" disabled>
-            ⊘ Disable All
-          </button>
+          {onRefresh && (
+            <button className="pd9-test-onebyone" onClick={onRefresh} disabled={loading}>
+              {loading ? "Loading..." : "⟳ Fetch Models"}
+            </button>
+          )}
         </div>
       }
     >
@@ -435,15 +469,55 @@ function ModelsCard({ models, loading }: { models: ProviderModel[]; loading?: bo
               >
                 {copiedModel === model.id ? "✓" : <CopyMini />}
               </button>
+              {isKiro && (
+                <button
+                  className="pd9-model-copy"
+                  onClick={() => handleDeleteAlias(model.id)}
+                  title="Remove alias"
+                  style={{ color: 'var(--danger)' }}
+                >
+                  ✕
+                </button>
+              )}
             </div>
           ))}
 
-          <button className="pd9-add-model" title="Add a custom model" disabled>
-            <PlusIcon className="pd9-btn-icon" />
-            Add Model
-          </button>
+          {showAddForm ? (
+            <div className="pd9-add-model-form">
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Alias (e.g. claude-4)"
+                value={newAlias}
+                onChange={(e) => setNewAlias(e.target.value)}
+                disabled={addSaving}
+              />
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Target (e.g. claude-sonnet-4)"
+                value={newTarget}
+                onChange={(e) => setNewTarget(e.target.value)}
+                disabled={addSaving}
+              />
+              <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                <button className="button-primary" onClick={handleAddAlias} disabled={!newAlias.trim() || !newTarget.trim() || addSaving}>
+                  {addSaving ? '...' : 'Add'}
+                </button>
+                <button className="button-secondary" onClick={() => { setShowAddForm(false); setAddError(null); }}>
+                  Cancel
+                </button>
+              </div>
+              {addError && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{addError}</span>}
+            </div>
+          ) : (
+            <button className="pd9-add-model" onClick={() => setShowAddForm(true)}>
+              <PlusIcon className="pd9-btn-icon" />
+              Add Model Alias
+            </button>
+          )}
 
-          {models.length === 0 && (
+          {models.length === 0 && !showAddForm && (
             <div className="pd9-models-empty">
               No models available yet.
             </div>
@@ -467,15 +541,14 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
   // Fetch provider data from real API
   const { provider, loading: providerLoading, error: providerError, refresh: refreshProvider } = useProvider(providerId || null);
 
-  // Only fetch accounts from real API when provider has a backend record
-  const isConfigured = provider?.configured ?? false;
+  // Always fetch accounts — fetchProviderAccounts handles missing providers gracefully
   const {
     accounts,
     loading: accountsLoading,
     error: accountsError,
     stats: accountStats,
     refresh: refreshAccounts
-  } = useProviderAccounts(isConfigured ? (providerId || null) : null);
+  } = useProviderAccounts(providerId || null);
 
   // Local ordering for the connections list so reorder arrows give immediate
   // feedback (mirrors 9router). Synced whenever the source accounts change.
@@ -542,10 +615,13 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
   }, [provider]);
 
   const fetchDynamicModels = useCallback(async () => {
-    if (!providerId || !isConfigured) return;
+    if (!providerId) return;
     try {
       setModelsLoading(true);
-      const res = await getProviderModels(providerId);
+      // For Kiro catalog entries, use 'account-kiro' as the backend provider ID
+      const isKiro = providerId === 'kiro-ide' || providerId === 'kiro-free' || providerId.startsWith('kiro-');
+      const modelProviderId = isKiro ? 'account-kiro' : providerId;
+      const res = await getProviderModels(modelProviderId);
       if (res && Array.isArray(res.models)) {
         setDynamicModels(res.models.map((m: any) => {
           const modelId = typeof m === 'string' ? m : m.id || '';
@@ -568,13 +644,13 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
     } finally {
       setModelsLoading(false);
     }
-  }, [providerId, isConfigured]);
+  }, [providerId]);
 
   useEffect(() => {
-    if (providerId && isConfigured) {
+    if (providerId) {
       fetchDynamicModels();
     }
-  }, [providerId, isConfigured, fetchDynamicModels]);
+  }, [providerId, fetchDynamicModels]);
 
   // Compute provider eligibility and quota status
   const eligibility = provider ? checkProviderEligibility(provider) : null;
@@ -649,6 +725,7 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
 
   const handleAccountsChanged = () => {
     refreshAccounts();
+    refreshProvider();
   };
 
   const handleReorderAccount = (index: number, direction: "up" | "down") => {
@@ -868,6 +945,18 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
               </SurfaceCard>
             )}
 
+            {provider.tier !== "custom" && provider.configured && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-3)' }}>
+                <button
+                  className="button-danger"
+                  onClick={handleDeleteCustomProvider}
+                  style={{ fontSize: "var(--font-xs)", padding: "4px var(--space-3)" }}
+                >
+                  🗑 Remove Provider
+                </button>
+              </div>
+            )}
+
             <ConnectionsCard
               provider={provider}
               accounts={orderedAccounts}
@@ -882,7 +971,7 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
               getTestResult={getTestResult}
               isTestingAccount={isTestingAccount}
             />
-            <ModelsCard models={dynamicModels} loading={modelsLoading} />
+            <ModelsCard models={dynamicModels} loading={modelsLoading} onRefresh={fetchDynamicModels} isKiro={providerId === 'kiro-ide' || providerId === 'kiro-free' || providerId?.startsWith('kiro-') || false} />
           </div>
         </div>
       </div>
