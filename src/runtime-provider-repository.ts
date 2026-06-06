@@ -819,7 +819,7 @@ export class RuntimeProviderRepository {
       providerApiKeys: validated.providerApiKeys,
       clientApiKeys: validated.clientApiKeys,
       capabilities: validated.capabilities,
-      enabled: validated.enabled ?? true,
+      enabled: validated.enabled ?? false,
       createdAt: now,
       updatedAt: now,
     };
@@ -1214,6 +1214,7 @@ function buildKiroProviderPreset(config: AppConfig): RuntimeProviderPreset {
     baseUrl,
     responsesUrl: `${baseUrl}${CODEWHISPERER_GENERATE_PATH}`,
     authMode: "kiro",
+    enabled: false,
     providerApiKeys: [],
     clientApiKeys: [],
     capabilities: {
@@ -1395,7 +1396,7 @@ function ensureSchema(db: Database): void {
   ensureProvidersColumn(db, "system_managed", "INTEGER NOT NULL DEFAULT 0");
   ensureProvidersColumn(db, "account_platform", "TEXT");
   ensureProvidersColumn(db, "account_pool_required", "INTEGER NOT NULL DEFAULT 0");
-  ensureProvidersColumn(db, "enabled", "INTEGER NOT NULL DEFAULT 1");
+  ensureProvidersColumn(db, "enabled", "INTEGER NOT NULL DEFAULT 0");
   ensureSharedApiKeyTable(db, "provider_api_keys");
   ensureSharedApiKeyTable(db, "client_api_keys");
 }
