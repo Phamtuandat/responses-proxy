@@ -9,3 +9,6 @@ npm-debug.log*
 logs/
 *.sqlite
 *.db
+
+# CLI build output
+cli/dist/

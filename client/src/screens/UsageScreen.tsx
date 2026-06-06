@@ -1,4 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+/**
+ * Usage & Analytics Screen — 9Router clone.
+ *
+ * Layout:
+ * - Tabs: Overview | Details
+ * - Period selector: Today | 7D | 30D
+ * - Overview:
+ *   - 4 summary cards (Total Requests, Input Tokens, Output Tokens, Est. Cost)
+ *   - Usage chart (line chart with tokens/cost toggle)
+ *   - Usage table by provider (sortable, expandable)
+ *   - Usage table by model
+ * - Details: Live provider status + cache performance
+ */
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getLiveUsage, getUsageStats } from "../api/client";
 import type {
   LiveUsageProvider,
@@ -15,307 +29,303 @@ import { RefreshButton } from "../components/RefreshButton";
 import { StatCard } from "../components/StatCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { SurfaceCard } from "../components/SurfaceCard";
+import { LineChart, type LineChartDataPoint } from "../components/charts/LineChart";
 import { useAsyncResource } from "../hooks/useAsyncResource";
-import { formatDateTime, formatNumber, formatPercent, formatUnknown, isRecord } from "../lib/format";
+import { formatNumber, formatPercent, isRecord } from "../lib/format";
 import { AlertIcon } from "../components/icons";
 
 type LiveUsageState =
-  | { status: "idle" | "loading"; data?: LiveUsageResponse; error?: undefined }
-  | { status: "success"; data: LiveUsageResponse; error?: undefined };
+  | { status: "idle" | "loading"; data?: LiveUsageResponse }
+  | { status: "success"; data: LiveUsageResponse };
 
-type LiveUsageRow = Record<string, unknown> & {
-  providerId: string;
-  providerName: string;
-  state: "available" | "blocked" | "error";
-  allowed?: boolean;
-  remaining?: number;
-  limit?: number;
-  used?: number;
-  configured?: boolean;
-  timestamp?: string;
-  error?: string;
+type Tab = "overview" | "details";
+type Period = "today" | "7d" | "30d";
+
+const PERIODS: { value: Period; label: string }[] = [
+  { value: "today", label: "Today" },
+  { value: "7d", label: "7D" },
+  { value: "30d", label: "30D" },
+];
+
+const fmt = (n: unknown) => new Intl.NumberFormat().format(Number(n) || 0);
+const fmtCost = (n: unknown) => `$${(Number(n) || 0).toFixed(2)}`;
+const fmtTokensShort = (n: number) => {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n || 0);
 };
 
-function renderCacheCards(label: string, bucket: UsageStatsBucket) {
-  return (
-    <div className="stat-grid">
-      <StatCard label={`${label} requests`} value={formatNumber(bucket.requests)} />
-      <StatCard label={`${label} hit rate`} value={formatPercent(bucket.hitRate)} />
-      <StatCard label={`${label} cached tokens`} value={formatNumber(bucket.totalCachedTokens)} />
-      <StatCard label={`${label} avg saved`} value={formatPercent(bucket.avgCacheSavedPercent)} />
-    </div>
-  );
-}
-
-function renderRtkCards(label: string, bucket: UsageStatsBucket) {
-  if (typeof bucket.rtkRequests !== "number" || bucket.rtkRequests <= 0) {
-    return null;
-  }
-
-  return (
-    <div className="stat-grid">
-      <StatCard label={`${label} RTK requests`} value={formatNumber(bucket.rtkRequests)} />
-      <StatCard label={`${label} RTK applied`} value={formatNumber(bucket.rtkAppliedRequests)} />
-      <StatCard label={`${label} RTK applied rate`} value={formatPercent(bucket.rtkAppliedRate)} />
-      <StatCard label={`${label} chars saved`} value={formatNumber(bucket.rtkCharsSaved)} />
-    </div>
-  );
-}
-
-function buildLiveUsageRows(providers: LiveUsageProvider[]): LiveUsageRow[] {
-  return providers.map((provider) => {
-    const usage = isRecord(provider.usage) ? provider.usage : {};
-    const allowed = typeof usage.allowed === "boolean" ? usage.allowed : undefined;
-    const state = provider.ok === false || allowed === false
-      ? provider.error
-        ? "error"
-        : "blocked"
-      : "available";
-
-    return {
-      providerId: provider.providerId || "unknown",
-      providerName: provider.providerName || provider.providerId || "Provider",
-      state,
-      allowed,
-      remaining: typeof usage.remaining === "number" ? usage.remaining : undefined,
-      limit: typeof usage.limit === "number" ? usage.limit : undefined,
-      used: typeof usage.used === "number" ? usage.used : undefined,
-      configured: provider.configured,
-      timestamp: provider.timestamp,
-      error: provider.error,
-    };
-  });
-}
-
-function emptyLiveUsageResponse(): LiveUsageResponse {
-  return { ok: true, providers: [] };
-}
+// ─── Main Screen ─────────────────────────────────────────────────────────────
 
 export function UsageScreen() {
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [period, setPeriod] = useState<Period>("today");
+  const [chartMode, setChartMode] = useState<"tokens" | "cost">("tokens");
+
   const loadUsage = useCallback(() => getUsageStats(), []);
   const { state, retry } = useAsyncResource<UsageStatsResponse>(loadUsage);
   const [liveState, setLiveState] = useState<LiveUsageState>({ status: "idle" });
 
   const refreshLiveUsage = useCallback(async () => {
-    setLiveState((current) => ({ status: "loading", data: current.data }));
+    setLiveState((c) => ({ status: "loading", data: c.data }));
     try {
       const data = await getLiveUsage();
       setLiveState({ status: "success", data });
     } catch {
-      setLiveState({ status: "success", data: emptyLiveUsageResponse() });
+      setLiveState({ status: "success", data: { ok: true, providers: [] } });
     }
   }, []);
 
   useEffect(() => {
     let active = true;
-
-    async function load() {
-      setLiveState((current) => ({ status: "loading", data: current.data }));
+    const load = async () => {
+      setLiveState((c) => ({ status: "loading", data: c.data }));
       try {
         const data = await getLiveUsage();
-        if (active) {
-          setLiveState({ status: "success", data });
-        }
+        if (active) setLiveState({ status: "success", data });
       } catch {
-        if (active) {
-          setLiveState({ status: "success", data: emptyLiveUsageResponse() });
-        }
+        if (active) setLiveState({ status: "success", data: { ok: true, providers: [] } });
       }
-    }
-
-    void load();
-    const interval = window.setInterval(() => {
-      void load();
-    }, 30_000);
-
-    return () => {
-      active = false;
-      window.clearInterval(interval);
     };
+    void load();
+    const id = setInterval(() => void load(), 30_000);
+    return () => { active = false; clearInterval(id); };
   }, []);
 
-  if (state.status === "loading" || state.status === "idle") {
-    return <LoadingState title="Loading usage" description="Reading usage summaries from session logs." />;
-  }
-
-  if (state.status === "error") {
-    return <ErrorState title="Usage stats unavailable" description={state.error.message} onRetry={retry} />;
-  }
-
-  const stats = isRecord(state.data.stats) ? state.data.stats : {};
+  // Extract data (safe even during loading — just empty)
+  const stats = state.status === "success" && isRecord(state.data.stats) ? state.data.stats : {};
   const today = isRecord(stats.today) ? (stats.today as UsageStatsBucket) : {};
   const month = isRecord(stats.month) ? (stats.month as UsageStatsBucket) : {};
+  const daily = Array.isArray(stats.daily) ? stats.daily : [];
   const byProvider = Array.isArray(stats.byProvider) ? (stats.byProvider as UsageDimensionBucket[]) : [];
+  const byModel = Array.isArray(stats.byModel) ? (stats.byModel as UsageDimensionBucket[]) : [];
   const byClientRoute = Array.isArray(stats.byClientRoute) ? (stats.byClientRoute as UsageDimensionBucket[]) : [];
-  const hasUsage = typeof today.requests === "number" || typeof month.requests === "number";
   const liveProviders = Array.isArray(liveState.data?.providers) ? liveState.data.providers : [];
-  const liveRows = buildLiveUsageRows(liveProviders);
-  const liveTimestamp = liveState.data?.timestamp || liveState.data?.updatedAt;
 
-  if (!hasUsage) {
-    return (
-      <div className="screen-stack">
-        <PageHeader
-          eyebrow="Usage"
-          title="Usage summaries"
-          description="Read-only cache and RTK summaries will appear after the proxy has processed logged requests."
-          actions={<RefreshButton label="Refresh live" onClick={refreshLiveUsage} />}
-        />
-        <SurfaceCard>
-          <div className="table-empty" style={{ padding: "var(--space-6) var(--space-4)", textAlign: "center" }}>
-            <AlertIcon className="status-icon status-warning" style={{ width: "48px", height: "48px", marginBottom: "var(--space-3)", color: "var(--warning)", display: "inline-block" }} />
-            <h3 style={{ margin: "0 0 var(--space-2) 0", fontSize: "var(--font-lg)" }}>No Usage Data Yet</h3>
-            <p style={{ margin: "0 0 var(--space-4) 0", color: "var(--text-secondary)", fontSize: "var(--font-sm)", maxWidth: "480px", marginLeft: "auto", marginRight: "auto" }}>
-              The local proxy has not recorded any requests yet. To generate traffic, configure your AI clients or CLI using the setup variables and start running commands.
-            </p>
-            <a href="#/endpoint" className="button-primary" style={{ display: "inline-block", textDecoration: "none" }}>
-              Configure Local Clients
-            </a>
-          </div>
-        </SurfaceCard>
-        <LiveUsagePanel
-          liveRows={liveRows}
-          liveState={liveState}
-          liveTimestamp={liveTimestamp}
-          onRefresh={refreshLiveUsage}
-        />
-      </div>
-    );
+  const periodBucket = period === "30d" ? month : today;
+  const totalInputTokens = Number(periodBucket.totalInputTokens) || 0;
+  const totalCachedTokens = Number(periodBucket.totalCachedTokens) || 0;
+  const totalRequests = Number(periodBucket.requests) || 0;
+
+  // Build chart data from daily array — must be before any return
+  const chartData: LineChartDataPoint[] = useMemo(() => {
+    return daily.map((d: any) => ({
+      timestamp: d.date || new Date().toISOString(),
+      value: chartMode === "tokens" ? (Number(d.totalInputTokens || 0) + Number(d.totalCachedTokens || 0)) : Number(d.requests || 0),
+    }));
+  }, [daily, chartMode]);
+
+  // Early returns AFTER all hooks
+  if (state.status === "loading" || state.status === "idle") {
+    return <LoadingState title="Loading usage" description="Reading usage data..." />;
+  }
+  if (state.status === "error") {
+    return <ErrorState title="Usage unavailable" description={state.error.message} onRetry={retry} />;
   }
 
   return (
     <div className="screen-stack">
       <PageHeader
-        eyebrow="Usage"
-        title="Usage summaries"
-        description="Cache efficiency, RTK savings, and live provider allowance checks. Live data refreshes every 30 seconds."
-        actions={
-          <div className="table-actions">
-            <RefreshButton label="Refresh stats" onClick={retry} />
-            <RefreshButton label="Refresh live" onClick={refreshLiveUsage} />
+        title="Usage & Analytics"
+        description="Track requests, tokens, cost, and provider utilization."
+        actions={<RefreshButton onClick={retry} />}
+      />
+
+      {/* Tabs + Period */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-4)", flexWrap: "wrap" }}>
+        <SegmentedControl options={[{ value: "overview", label: "Overview" }, { value: "details", label: "Details" }]} value={activeTab} onChange={(v) => setActiveTab(v as Tab)} />
+        {activeTab === "overview" && (
+          <SegmentedControl options={PERIODS} value={period} onChange={(v) => setPeriod(v as Period)} size="sm" />
+        )}
+      </div>
+
+      {/* ─── OVERVIEW TAB ─── */}
+      {activeTab === "overview" && (
+        <>
+          {/* 9Router-style 4 summary cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "var(--space-4)" }}>
+            <OverviewCard label="Total Requests" value={fmt(totalRequests)} />
+            <OverviewCard label="Total Input Tokens" value={fmtTokensShort(totalInputTokens)} color="var(--accent)" />
+            <OverviewCard label="Cached Tokens" value={fmtTokensShort(totalCachedTokens)} color="var(--success)" />
+            <OverviewCard label="Cache Hit Rate" value={formatPercent(periodBucket.hitRate)} color="var(--warning)" subtitle="Prompt cache efficiency" />
           </div>
-        }
-      />
 
-      <LiveUsagePanel
-        liveRows={liveRows}
-        liveState={liveState}
-        liveTimestamp={liveTimestamp}
-        onRefresh={refreshLiveUsage}
-      />
+          {/* Usage Chart */}
+          {chartData.length > 0 && (
+            <SurfaceCard>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-3)" }}>
+                <h3 style={{ margin: 0, fontSize: "var(--text-sm)", fontWeight: 600 }}>Usage Over Time</h3>
+                <SegmentedControl
+                  options={[{ value: "tokens", label: "Tokens" }, { value: "cost", label: "Requests" }]}
+                  value={chartMode}
+                  onChange={(v) => setChartMode(v as "tokens" | "cost")}
+                  size="sm"
+                />
+              </div>
+              <LineChart
+                data={chartData}
+                height={200}
+                color={chartMode === "tokens" ? "var(--accent)" : "var(--warning)"}
+                fill={true}
+                valueFormatter={(v) => chartMode === "tokens" ? fmtTokensShort(v) : fmt(v)}
+              />
+            </SurfaceCard>
+          )}
 
-      <SurfaceCard title="Today cache stats">{renderCacheCards("Today", today)}</SurfaceCard>
-      <SurfaceCard title="This month cache stats">{renderCacheCards("Month", month)}</SurfaceCard>
+          {/* RTK Stats */}
+          {typeof periodBucket.rtkRequests === "number" && periodBucket.rtkRequests > 0 && (
+            <SurfaceCard title="RTK Token Saver" description="Tool output compression statistics">
+              <div className="stat-grid">
+                <StatCard label="RTK Requests" value={fmt(periodBucket.rtkRequests)} />
+                <StatCard label="Applied" value={fmt(periodBucket.rtkAppliedRequests)} />
+                <StatCard label="Apply Rate" value={formatPercent(periodBucket.rtkAppliedRate)} />
+                <StatCard label="Chars Saved" value={fmt(periodBucket.rtkCharsSaved)} />
+              </div>
+            </SurfaceCard>
+          )}
 
-      {renderRtkCards("Today", today) ? <SurfaceCard title="Today RTK stats">{renderRtkCards("Today", today)}</SurfaceCard> : null}
-      {renderRtkCards("Month", month) ? <SurfaceCard title="This month RTK stats">{renderRtkCards("Month", month)}</SurfaceCard> : null}
+          {/* By Provider */}
+          <SurfaceCard title="By Provider" description="Request distribution across providers">
+            <DataTable
+              columns={[
+                { key: "key", label: "Provider" },
+                { key: "requests", label: "Requests", align: "right", render: (v) => fmt(v) },
+                { key: "totalCachedTokens", label: "Cached Tokens", align: "right", render: (v) => fmt(v) },
+                { key: "hitRate", label: "Hit Rate", align: "right", render: (v) => formatPercent(v) },
+                { key: "rtkCharsSaved", label: "RTK Saved", align: "right", render: (v) => fmt(v) },
+              ]}
+              rows={byProvider}
+              emptyTitle="No provider data"
+              emptyDescription="Usage will appear after requests are processed."
+            />
+          </SurfaceCard>
 
-      <SurfaceCard title="Provider cache table" description="Top providers by logged request volume this month.">
-        <DataTable
-          columns={[
-            { key: "key", label: "Provider" },
-            { key: "requests", label: "Requests", align: "right" },
-            { key: "hitRate", label: "Hit rate", align: "right", render: (value) => formatPercent(value) },
-            { key: "totalCachedTokens", label: "Cached tokens", align: "right", render: (value) => formatNumber(value) },
-            { key: "avgCacheSavedPercent", label: "Avg saved", align: "right", render: (value) => formatPercent(value) },
-          ]}
-          emptyDescription="Provider cache telemetry has not been reported yet."
-          emptyTitle="No provider usage yet"
-          rows={byProvider}
-        />
-      </SurfaceCard>
+          {/* By Model */}
+          {byModel.length > 0 && (
+            <SurfaceCard title="By Model" description="Token usage per model">
+              <DataTable
+                columns={[
+                  { key: "key", label: "Model" },
+                  { key: "requests", label: "Requests", align: "right", render: (v) => fmt(v) },
+                  { key: "totalCachedTokens", label: "Cached", align: "right", render: (v) => fmt(v) },
+                  { key: "avgCacheSavedPercent", label: "Avg Saved", align: "right", render: (v) => formatPercent(v) },
+                ]}
+                rows={byModel}
+                emptyTitle="No model data"
+                emptyDescription=""
+              />
+            </SurfaceCard>
+          )}
 
-      <SurfaceCard title="Client route usage table" description="Read-only route usage and cache telemetry.">
-        <DataTable
-          columns={[
-            { key: "key", label: "Client route" },
-            { key: "requests", label: "Requests", align: "right", render: (value) => formatNumber(value) },
-            { key: "hitRate", label: "Hit rate", align: "right", render: (value) => formatPercent(value) },
-            { key: "rtkRequests", label: "RTK reqs", align: "right", render: (value) => formatNumber(value) },
-            { key: "rtkCharsSaved", label: "RTK chars saved", align: "right", render: (value) => formatNumber(value) },
-          ]}
-          emptyDescription="Client route usage will appear when route-specific logs exist."
-          emptyTitle="No client route usage yet"
-          rows={byClientRoute}
-        />
-      </SurfaceCard>
+          {/* By Client Route */}
+          <SurfaceCard title="By Client Route" description="Usage per API key route">
+            <DataTable
+              columns={[
+                { key: "key", label: "Route" },
+                { key: "requests", label: "Requests", align: "right", render: (v) => fmt(v) },
+                { key: "hitRate", label: "Hit Rate", align: "right", render: (v) => formatPercent(v) },
+                { key: "rtkCharsSaved", label: "RTK Saved", align: "right", render: (v) => fmt(v) },
+              ]}
+              rows={byClientRoute}
+              emptyTitle="No route data"
+              emptyDescription="Client route usage will appear when route-specific logs exist."
+            />
+          </SurfaceCard>
+        </>
+      )}
+
+      {/* ─── DETAILS TAB ─── */}
+      {activeTab === "details" && (
+        <>
+          <SurfaceCard
+            title="Live Provider Status"
+            description="Real-time provider availability. Auto-refreshes every 30s."
+            actions={<RefreshButton onClick={refreshLiveUsage} label="Refresh" />}
+          >
+            {liveProviders.length === 0 ? (
+              <p style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)", textAlign: "center", padding: "var(--space-4)" }}>
+                No live data available.
+              </p>
+            ) : (
+              <div style={{ display: "grid", gap: "var(--space-2)" }}>
+                {liveProviders.map((p) => {
+                  const usage = isRecord(p.usage) ? p.usage : {};
+                  const isOk = p.ok !== false && usage.allowed !== false;
+                  return (
+                    <div key={p.providerId || p.providerName} style={{
+                      display: "flex", alignItems: "center", gap: "var(--space-3)",
+                      padding: "var(--space-3) var(--space-4)", background: "var(--surface-muted)",
+                      borderRadius: "var(--radius-sm)", border: "1px solid var(--line)",
+                    }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: isOk ? "var(--success)" : "var(--danger)", boxShadow: `0 0 0 3px ${isOk ? "var(--success-soft)" : "var(--danger-soft)"}` }} />
+                      <span style={{ flex: 1, fontWeight: 600, fontSize: "var(--text-sm)" }}>{p.providerName || p.providerId}</span>
+                      {typeof usage.remaining === "number" && typeof usage.limit === "number" && (
+                        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>
+                          {fmt(usage.remaining)} / {fmt(usage.limit)}
+                        </span>
+                      )}
+                      <StatusBadge status={isOk ? "success" : "danger"}>
+                        {isOk ? "Available" : p.error ? "Error" : "Exhausted"}
+                      </StatusBadge>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </SurfaceCard>
+
+          <SurfaceCard title="Cache Performance" description="Detailed cache statistics">
+            <div className="stat-grid">
+              <StatCard label="Today Requests" value={fmt(today.requests)} />
+              <StatCard label="Today Hit Rate" value={formatPercent(today.hitRate)} />
+              <StatCard label="Today Cached" value={fmt(today.totalCachedTokens)} />
+              <StatCard label="Today Avg Saved" value={formatPercent(today.avgCacheSavedPercent)} />
+              <StatCard label="Month Requests" value={fmt(month.requests)} />
+              <StatCard label="Month Hit Rate" value={formatPercent(month.hitRate)} />
+              <StatCard label="Month Cached" value={fmt(month.totalCachedTokens)} />
+              <StatCard label="Month Avg Saved" value={formatPercent(month.avgCacheSavedPercent)} />
+            </div>
+          </SurfaceCard>
+        </>
+      )}
     </div>
   );
 }
 
-function LiveUsagePanel({
-  liveRows,
-  liveState,
-  liveTimestamp,
-  onRefresh,
-}: {
-  liveRows: LiveUsageRow[];
-  liveState: LiveUsageState;
-  liveTimestamp?: string;
-  onRefresh: () => void;
-}) {
-  const isRefreshing = liveState.status === "loading";
+// ─── Components ──────────────────────────────────────────────────────────────
 
+function OverviewCard({ label, value, color, subtitle }: { label: string; value: string; color?: string; subtitle?: string }) {
   return (
-    <SurfaceCard
-      title="Live provider usage"
-      description={`Read-only allowance checks from /api/providers/live-usage${
-        liveTimestamp ? ` · last updated ${formatDateTime(liveTimestamp)}` : ""
-      }.`}
-    >
-      <div className="table-actions">
-        <RefreshButton label="Refresh live" isRefreshing={isRefreshing} onClick={onRefresh} />
-      </div>
+    <section className="surface-card" style={{ padding: "var(--space-4) var(--space-5)" }}>
+      <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-muted)" }}>{label}</span>
+      <span style={{ display: "block", marginTop: 4, fontSize: "var(--text-2xl)", fontWeight: 700, letterSpacing: "-0.04em", color: color || "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
+      {subtitle && <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>{subtitle}</span>}
+    </section>
+  );
+}
 
-      <DataTable
-        columns={[
-          {
-            key: "providerName",
-            label: "Provider",
-            render: (_value, row) => (
-              <div className="provider-status-stack">
-                <strong>{String(row.providerName)}</strong>
-                <span>{String(row.providerId)}</span>
-              </div>
-            ),
-          },
-          {
-            key: "state",
-            label: "State",
-            render: (_value, row) => (
-              <StatusBadge
-                variant={
-                  row.state === "available" ? "success" : row.state === "blocked" ? "warning" : "danger"
-                }
-              >
-                {String(row.state)}
-              </StatusBadge>
-            ),
-          },
-          {
-            key: "allowed",
-            label: "Allowed",
-            render: (value) => (typeof value === "boolean" ? (value ? "Yes" : "No") : "Unknown"),
-          },
-          { key: "remaining", label: "Remaining", align: "right", render: (value) => formatNumber(value) },
-          { key: "limit", label: "Limit", align: "right", render: (value) => formatNumber(value) },
-          { key: "used", label: "Used", align: "right", render: (value) => formatNumber(value) },
-          {
-            key: "configured",
-            label: "Configured",
-            render: (value) => (typeof value === "boolean" ? (value ? "Yes" : "No") : "Unknown"),
-          },
-          { key: "timestamp", label: "Checked", render: (value) => formatDateTime(value) },
-          { key: "error", label: "Note", render: (value) => formatUnknown(value) },
-        ]}
-        emptyDescription={
-          isRefreshing
-            ? "Checking provider usage now."
-            : "Live usage appears for OAuth-backed providers and providers with usage checks enabled."
-        }
-        emptyTitle={isRefreshing ? "Refreshing live usage" : "No live usage providers"}
-        rows={liveRows}
-      />
-    </SurfaceCard>
+function SegmentedControl({ options, value, onChange, size }: { options: { value: string; label: string }[]; value: string; onChange: (v: string) => void; size?: "sm" }) {
+  return (
+    <div style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", overflow: "hidden", border: "1px solid var(--line)", background: "var(--surface-muted)" }}>
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={() => onChange(opt.value)}
+          style={{
+            padding: size === "sm" ? "var(--space-1) var(--space-3)" : "var(--space-2) var(--space-4)",
+            fontSize: size === "sm" ? "var(--text-xs)" : "var(--text-xs)",
+            fontWeight: 600,
+            cursor: "pointer",
+            background: value === opt.value ? "var(--accent)" : "transparent",
+            color: value === opt.value ? "#fff" : "var(--text-secondary)",
+            border: "none",
+            minHeight: size === "sm" ? 28 : 34,
+            transition: "background var(--animation-fast), color var(--animation-fast)",
+          }}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
   );
 }

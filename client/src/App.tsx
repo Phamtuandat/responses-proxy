@@ -24,6 +24,8 @@ import { ProviderDetailScreen } from "./screens/ProviderDetailScreen";
 import { ProviderNewScreen } from "./screens/ProviderNewScreen";
 import { RtkScreen } from "./screens/RtkScreen";
 import { UsageScreen } from "./screens/UsageScreen";
+import { QuotaTrackerScreen } from "./screens/QuotaTrackerScreen";
+import { MitmScreen } from "./screens/MitmScreen";
 import { flatNavItems, routerFlatNavItems, routeAliases, resolveRouteAlias } from "./navigation/FunctionalNavigation";
 
 export type AppRoute =
@@ -222,9 +224,9 @@ function renderScreen(routeState: RouteState) {
     case "combos":
       return <ModelCombosScreen />;
     case "quota-tracker":
-      return <UsageScreen />;
+      return <QuotaTrackerScreen />;
     case "mitm":
-      return <CacheScreen />;
+      return <MitmScreen />;
     case "cli-tools":
       return <CliToolsScreen />;
     case "media-providers":

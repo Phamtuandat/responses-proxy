@@ -2192,6 +2192,39 @@ app.delete("/api/cli-tools/codex-settings", async (_request, reply) => {
   }
 });
 
+// ─── MITM Server Status (stub — requires host-mode deployment) ──────────────
+
+app.get("/api/cli-tools/mitm-status", async (_request, reply) => {
+  // MITM requires running directly on host (not Docker) with root privileges.
+  // Return stub status indicating MITM is not available in this deployment mode.
+  return reply.send({
+    running: false,
+    certExists: false,
+    certTrusted: false,
+    dnsStatus: {},
+    available: false,
+    reason: "MITM requires host-mode deployment with root privileges (port 443 + DNS + cert trust). Not available in Docker mode.",
+  });
+});
+
+app.post("/api/cli-tools/mitm-start", async (_request, reply) => {
+  return reply.code(501).send({
+    error: "MITM server is not available in Docker deployment mode. Run the proxy directly on the host with root privileges.",
+  });
+});
+
+app.post("/api/cli-tools/mitm-stop", async (_request, reply) => {
+  return reply.code(501).send({
+    error: "MITM server is not available in Docker deployment mode.",
+  });
+});
+
+app.post("/api/cli-tools/mitm-dns", async (_request, reply) => {
+  return reply.code(501).send({
+    error: "DNS interception is not available in Docker deployment mode.",
+  });
+});
+
 app.get("/api/customer/codex/setup.sh", async (request, reply) => {
   const routingApiKey = readBearerToken(request.headers.authorization);
   if (!routingApiKey) {
@@ -3362,6 +3395,7 @@ app.get("/api/providers/live-usage", async (request, reply) => {
   const requestId = randomUUID();
   const providers = providerRepository.listProviders().filter((provider) =>
     isOpenAiCodexOAuthProvider(provider) ||
+    provider.authMode === "kiro" ||
     (provider.capabilities.usageCheckEnabled === true && Boolean(provider.capabilities.usageCheckUrl)),
   );
   const entries = (await Promise.all(
@@ -6239,6 +6273,28 @@ async function buildLiveProviderUsageEntry(
   }
 
   if (!provider.capabilities.usageCheckEnabled || !provider.capabilities.usageCheckUrl) {
+    // For Kiro providers, report account pool status
+    if (provider.authMode === "kiro" && kiroTokenStore) {
+      const accounts = kiroTokenStore.listAccounts();
+      const active = accounts.filter((a) => a.isActive);
+      const healthy = active.filter((a) => {
+        if (!a.expiresAt) return !!a.accessToken;
+        return new Date(a.expiresAt).getTime() > Date.now();
+      });
+      return {
+        ...base,
+        source: "kiro_account_pool",
+        configured: true,
+        ok: healthy.length > 0,
+        usage: {
+          allowed: healthy.length > 0,
+          remaining: healthy.length,
+          limit: active.length,
+          used: active.length - healthy.length,
+        },
+      };
+    }
+
     return {
       ...base,
       source: "custom_provider_usage_check",

@@ -1,0 +1,39 @@
+{
+  "name": "responses-proxy",
+  "version": "0.1.0",
+  "description": "AI routing proxy with multi-provider fallback, RTK token saver, and web dashboard",
+  "bin": {
+    "responses-proxy": "./cli.js"
+  },
+  "files": [
+    "cli.js",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build-cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "ai",
+    "proxy",
+    "router",
+    "openai",
+    "anthropic",
+    "claude",
+    "codex",
+    "rtk",
+    "token-saver",
+    "llm",
+    "fallback"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phamtuandat/responses-proxy"
+  }
+}

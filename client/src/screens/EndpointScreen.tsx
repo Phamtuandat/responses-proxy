@@ -4,6 +4,7 @@ import { SurfaceCard } from "../components/SurfaceCard";
 import { StatCard } from "../components/StatCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { RefreshButton } from "../components/RefreshButton";
+import { ApiKeyManager } from "../components/ApiKeyManager";
 import { EndpointIcon, AlertIcon } from "../components/icons";
 import { getHealth, getUsageStats } from "../api/client";
 import type { HealthResponse, UsageStatsResponse } from "../api/types";
@@ -553,6 +554,8 @@ export function EndpointScreen() {
         <div className="endpoint-setup-row">
           <QuickSetupCard endpointUrl={endpointUrl} />
         </div>
+
+        <ApiKeyManager />
       </div>
     </div>
   );
