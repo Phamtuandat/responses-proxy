@@ -26,6 +26,10 @@ import type {
   KiroImportResponse,
   KiroStatus,
   LiveUsageResponse,
+  ModelComboDeleteResponse,
+  ModelComboInput,
+  ModelComboResponse,
+  ModelCombosResponse,
   ProviderDeleteResponse,
   ProviderModelsResponse,
   ProviderMutationInput,
@@ -297,4 +301,27 @@ export function startKiroDeviceLogin(input: KiroDeviceStartInput) {
 
 export function pollKiroDeviceLogin(sessionId: string) {
   return apiSend<KiroDevicePollResponse>("/api/kiro/device/poll", "POST", { sessionId });
+}
+
+// ─── Model Combos (9Router-style) ────────────────────────────────────────────
+
+export function getModelCombos(kind?: string) {
+  const search = kind !== undefined ? `?kind=${encodeURIComponent(kind)}` : "";
+  return apiGet<ModelCombosResponse>(`/api/model-combos${search}`);
+}
+
+export function getModelCombo(id: string) {
+  return apiGet<ModelComboResponse>(`/api/model-combos/${encodeURIComponent(id)}`);
+}
+
+export function createModelCombo(input: ModelComboInput) {
+  return apiSend<ModelComboResponse>("/api/model-combos", "POST", input);
+}
+
+export function updateModelCombo(id: string, input: Partial<ModelComboInput>) {
+  return apiSend<ModelComboResponse>(`/api/model-combos/${encodeURIComponent(id)}`, "PUT", input);
+}
+
+export function deleteModelCombo(id: string) {
+  return apiSend<ModelComboDeleteResponse>(`/api/model-combos/${encodeURIComponent(id)}`, "DELETE");
 }

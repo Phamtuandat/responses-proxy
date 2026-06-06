@@ -629,3 +629,34 @@ export type KiroDevicePollResponse = {
   account?: { id: string; name: string };
   error?: { code: string; message: string };
 };
+
+// ─── Model Combos (9Router-style) ────────────────────────────────────────────
+
+export type ModelCombo = {
+  id: string;
+  name: string;
+  kind: string | null;
+  models: string[];
+  roundRobin: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ModelComboInput = {
+  name: string;
+  kind?: string | null;
+  models?: string[];
+  roundRobin?: boolean;
+};
+
+export type ModelCombosResponse = {
+  combos: ModelCombo[];
+};
+
+export type ModelComboResponse = {
+  combo: ModelCombo;
+};
+
+export type ModelComboDeleteResponse = {
+  ok: true;
+};

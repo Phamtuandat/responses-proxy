@@ -11,7 +11,7 @@ import { AuthScreen } from "./screens/AuthScreen";
 import { CacheScreen } from "./screens/CacheScreen";
 import { ConsoleLogScreen } from "./screens/ConsoleLogScreen";
 import { ClientsScreen } from "./screens/ClientsScreen";
-import { CombosScreen } from "./screens/CombosScreen";
+import { ModelCombosScreen } from "./screens/ModelCombosScreen";
 import { ConfigHelperScreen } from "./screens/ConfigHelperScreen";
 import { DashboardScreen } from "./screens/DashboardScreen";
 import { EnhancedDashboardScreen } from "./screens/EnhancedDashboardScreen";
@@ -219,7 +219,7 @@ function renderScreen(routeState: RouteState) {
     case "endpoint":
       return <EndpointScreen />;
     case "combos":
-      return <CombosScreen />;
+      return <ModelCombosScreen />;
     case "quota-tracker":
       return <UsageScreen />;
     case "mitm":

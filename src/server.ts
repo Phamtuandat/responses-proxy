@@ -113,6 +113,11 @@ import {
 import { RoutingComboRepository } from "./routing-combo-repository.js";
 import { RoutingEngine } from "./routing-engine.js";
 import { RoutingSimulationEngine } from "./routing-simulation-engine.js";
+import {
+  ModelComboRepository,
+  ModelComboValidationError,
+  ModelComboNotFoundError,
+} from "./model-combo-repository.js";
 import { ProviderHealthService } from "./provider-health-service.js";
 import { HealthWebSocketManager } from "./health-websocket-manager.js";
 import {
@@ -182,6 +187,7 @@ setInterval(() => deviceLoginService.pruneExpiredSessions(), 60_000).unref();
 
 // Initialize routing services after all stores are available
 const routingComboRepository = new RoutingComboRepository(providerRepository.getDatabase());
+const modelComboRepository = new ModelComboRepository(providerRepository.getDatabase());
 const routingEngine = new RoutingEngine(providerRepository);
 const routingSimulationEngine = new RoutingSimulationEngine(routingEngine, providerRepository);
 const providerHealthService = new ProviderHealthService(
@@ -2717,6 +2723,94 @@ app.post("/api/routing/combos/:id/set-default", async (request, reply) => {
       message: error instanceof Error ? error.message : String(error)
     });
   }
+});
+
+// ─── Model Combos (9Router-style simple combos) ────────────────────────────────
+
+app.get("/api/model-combos", async (request, reply) => {
+  try {
+    const query = request.query as { kind?: string };
+    const kind = query.kind;
+    const combos = kind !== undefined
+      ? modelComboRepository.getAll(kind || null)
+      : modelComboRepository.getLlmCombos();
+    return reply.send({ combos });
+  } catch (error) {
+    console.error("Failed to fetch model combos:", error);
+    return reply.code(500).send({ error: { message: "Failed to fetch model combos" } });
+  }
+});
+
+app.get("/api/model-combos/:id", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+  if (!id) {
+    return reply.code(400).send({ error: { message: "Missing combo ID" } });
+  }
+  const combo = modelComboRepository.getById(id);
+  if (!combo) {
+    return reply.code(404).send({ error: { message: "Model combo not found" } });
+  }
+  return reply.send({ combo });
+});
+
+app.post("/api/model-combos", async (request, reply) => {
+  const body = request.body as any;
+  try {
+    const combo = modelComboRepository.create({
+      name: body.name,
+      kind: body.kind ?? null,
+      models: body.models ?? [],
+      roundRobin: body.roundRobin ?? false,
+    });
+    return reply.code(201).send({ combo });
+  } catch (error) {
+    if (error instanceof ModelComboValidationError) {
+      return reply.code(400).send({ error: { message: error.message } });
+    }
+    console.error("Failed to create model combo:", error);
+    return reply.code(500).send({ error: { message: "Failed to create model combo" } });
+  }
+});
+
+app.put("/api/model-combos/:id", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+  if (!id) {
+    return reply.code(400).send({ error: { message: "Missing combo ID" } });
+  }
+  const body = request.body as any;
+  try {
+    const combo = modelComboRepository.update(id, {
+      name: body.name,
+      kind: body.kind,
+      models: body.models,
+      roundRobin: body.roundRobin,
+    });
+    return reply.send({ combo });
+  } catch (error) {
+    if (error instanceof ModelComboValidationError) {
+      return reply.code(400).send({ error: { message: error.message } });
+    }
+    if (error instanceof ModelComboNotFoundError) {
+      return reply.code(404).send({ error: { message: "Model combo not found" } });
+    }
+    console.error("Failed to update model combo:", error);
+    return reply.code(500).send({ error: { message: "Failed to update model combo" } });
+  }
+});
+
+app.delete("/api/model-combos/:id", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+  if (!id) {
+    return reply.code(400).send({ error: { message: "Missing combo ID" } });
+  }
+  const deleted = modelComboRepository.delete(id);
+  if (!deleted) {
+    return reply.code(404).send({ error: { message: "Model combo not found" } });
+  }
+  return reply.send({ ok: true });
 });
 
 // Provider Health API
