@@ -8,6 +8,7 @@ services:
       - ${RESPONSES_PROXY_HOST_LOGS_DIR:-./logs}:/app/logs
       - ${RESPONSES_PROXY_HOST_HOME:-${HOME}}/.hermes/config.yaml:/host-home/.hermes/config.yaml
       - ${RESPONSES_PROXY_HOST_HOME:-${HOME}}/.codex:/host-home/.codex
+      - ${RESPONSES_PROXY_HOST_HOME:-${HOME}}/.claude:/host-home/.claude
     environment:
       PORT: "8318"
       HOST: "0.0.0.0"

@@ -1,9 +1,13 @@
 /**
- * CLI Tools Screen — 9Router-style tool configuration grid.
+ * CLI Tools Screen — Cloned from 9Router's cli-tools UX.
  *
- * Shows a grid of supported CLI tools with connection status.
- * Each tool card shows: name, icon/color, status badge, and links
- * to a detail panel with setup instructions.
+ * Each tool is an expandable card showing:
+ * - Connection status (Connected / Not configured / Not installed)
+ * - Endpoint URL field
+ * - API Key selector
+ * - Model input with picker
+ * - Apply / Reset buttons that write config files on the host
+ * - Manual Config fallback
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -14,6 +18,7 @@ import { RefreshButton } from "../components/RefreshButton";
 import {
   getProviders,
   getClientConfigsStatus,
+  getProviderModels,
 } from "../api/client";
 import type {
   ClientRouteSummary,
@@ -21,104 +26,96 @@ import type {
   ProviderSummary,
 } from "../api/types";
 
-// ─── CLI Tool Definitions (mirroring 9Router's cliTools.js) ──────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
-type CliToolDef = {
+type ToolStatus = {
+  installed: boolean;
+  has9Router?: boolean;
+  path?: string;
+  settings?: { env?: Record<string, string> };
+  config?: string;
+  error?: string;
+};
+
+type ToolMessage = { type: "success" | "error"; text: string } | null;
+
+// ─── Tool Registry ───────────────────────────────────────────────────────────
+
+type ToolDef = {
   id: string;
   name: string;
   color: string;
   description: string;
-  configType: "env" | "custom" | "guide";
-  envVars?: Record<string, string>;
-  guideSteps?: { step: number; title: string; desc?: string; value?: string; copyable?: boolean }[];
-  codeBlock?: { language: string; code: string };
+  statusEndpoint: string;
+  applyEndpoint: string;
+  resetEndpoint: string;
+  installCmd?: string;
+  models?: { alias: string; name: string; envKey?: string; defaultValue?: string }[];
 };
 
-const CLI_TOOLS: Record<string, CliToolDef> = {
-  claude: {
+const TOOLS: ToolDef[] = [
+  {
     id: "claude",
     name: "Claude Code",
     color: "#D97757",
     description: "Anthropic Claude Code CLI",
-    configType: "env",
-    envVars: { baseUrl: "ANTHROPIC_BASE_URL", apiKey: "ANTHROPIC_API_KEY" },
+    statusEndpoint: "/api/cli-tools/claude-settings",
+    applyEndpoint: "/api/cli-tools/claude-settings",
+    resetEndpoint: "/api/cli-tools/claude-settings",
+    installCmd: "npm install -g @anthropic-ai/claude-code",
+    models: [
+      { alias: "opus", name: "Opus Model", envKey: "ANTHROPIC_DEFAULT_OPUS_MODEL", defaultValue: "kr/claude-opus-4-7" },
+      { alias: "sonnet", name: "Sonnet Model", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", defaultValue: "kr/claude-sonnet-4.5" },
+      { alias: "haiku", name: "Haiku Model", envKey: "ANTHROPIC_DEFAULT_HAIKU_MODEL", defaultValue: "kr/claude-haiku-4.5" },
+    ],
   },
-  codex: {
+  {
     id: "codex",
     name: "OpenAI Codex",
     color: "#10A37F",
     description: "OpenAI Codex CLI / App",
-    configType: "custom",
+    statusEndpoint: "/api/cli-tools/codex-settings",
+    applyEndpoint: "/api/cli-tools/codex-settings",
+    resetEndpoint: "/api/cli-tools/codex-settings",
+    installCmd: "npm install -g @openai/codex",
   },
-  cursor: {
+  {
     id: "cursor",
     name: "Cursor",
-    color: "#000000",
-    description: "Cursor AI Code Editor",
-    configType: "guide",
-    guideSteps: [
-      { step: 1, title: "Open Settings", desc: "Go to Settings → Models" },
-      { step: 2, title: "Enable OpenAI API", desc: 'Enable "OpenAI API key" option' },
-      { step: 3, title: "Base URL", value: "{{baseUrl}}", copyable: true },
-      { step: 4, title: "API Key", value: "{{apiKey}}", copyable: true },
-      { step: 5, title: "Add Custom Model", desc: 'Click "View All Model" → "Add Custom Model"' },
-    ],
+    color: "#6366F1",
+    description: "Cursor AI Code Editor — manual config via Settings → Models",
+    statusEndpoint: "",
+    applyEndpoint: "",
+    resetEndpoint: "",
   },
-  cline: {
+  {
     id: "cline",
     name: "Cline",
     color: "#00D1B2",
-    description: "Cline AI Coding Assistant (VSCode)",
-    configType: "guide",
-    guideSteps: [
-      { step: 1, title: "Open Cline Settings", desc: "Select API Provider → OpenAI Compatible" },
-      { step: 2, title: "Base URL", value: "{{baseUrl}}", copyable: true },
-      { step: 3, title: "API Key", value: "{{apiKey}}", copyable: true },
-      { step: 4, title: "Model", value: "auto", copyable: true },
-    ],
+    description: "Cline AI Coding Assistant (VSCode extension)",
+    statusEndpoint: "",
+    applyEndpoint: "",
+    resetEndpoint: "",
   },
-  hermes: {
-    id: "hermes",
-    name: "Hermes Agent",
-    color: "#8B5CF6",
-    description: "Nous Research Hermes AI agent",
-    configType: "custom",
-  },
-  opencode: {
+  {
     id: "opencode",
     name: "OpenCode",
     color: "#E87040",
     description: "OpenCode AI Terminal Assistant",
-    configType: "guide",
-    guideSteps: [
-      { step: 1, title: "Open Config", desc: "Edit ~/.opencode/config.json" },
-      { step: 2, title: "Set Provider", desc: 'Set provider to "openai"' },
-      { step: 3, title: "Base URL", value: "{{baseUrl}}", copyable: true },
-      { step: 4, title: "API Key", value: "{{apiKey}}", copyable: true },
-    ],
+    statusEndpoint: "",
+    applyEndpoint: "",
+    resetEndpoint: "",
   },
-  kilo: {
+  {
     id: "kilo",
     name: "Kilo Code",
     color: "#FF6B6B",
-    description: "Kilo Code AI Assistant (VSCode)",
-    configType: "guide",
-    guideSteps: [
-      { step: 1, title: "Open Settings", desc: "Go to Kilo Code settings" },
-      { step: 2, title: "Select Provider", desc: "Choose API Provider → OpenAI Compatible" },
-      { step: 3, title: "Base URL", value: "{{baseUrl}}", copyable: true },
-      { step: 4, title: "API Key", value: "{{apiKey}}", copyable: true },
-    ],
+    description: "Kilo Code AI Assistant (VSCode extension)",
+    statusEndpoint: "",
+    applyEndpoint: "",
+    resetEndpoint: "",
   },
-  "openai-sdk": {
-    id: "openai-sdk",
-    name: "OpenAI SDK",
-    color: "#10A37F",
-    description: "Python / Node.js OpenAI SDK",
-    configType: "env",
-    envVars: { baseUrl: "OPENAI_BASE_URL", apiKey: "OPENAI_API_KEY" },
-  },
-};
+];
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
@@ -126,17 +123,19 @@ export function CliToolsScreen() {
   const [loading, setLoading] = useState(true);
   const [clientRoutes, setClientRoutes] = useState<ClientRouteSummary[]>([]);
   const [configStatus, setConfigStatus] = useState<ClientConfigsStatusResponse | null>(null);
-  const [selectedTool, setSelectedTool] = useState<string | null>(null);
-  const [selectedApiKey, setSelectedApiKey] = useState("");
+  const [expandedTool, setExpandedTool] = useState<string | null>(null);
+  const [toolStatuses, setToolStatuses] = useState<Record<string, ToolStatus>>({});
+  const [providers, setProviders] = useState<ProviderSummary[]>([]);
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [providers, configs] = await Promise.all([
+      const [providersData, configs] = await Promise.all([
         getProviders(),
         getClientConfigsStatus().catch(() => null),
       ]);
-      setClientRoutes(providers.clientRoutes || []);
+      setClientRoutes(providersData.clientRoutes || []);
+      setProviders(providersData.providerOptions || providersData.providers || []);
       setConfigStatus(configs);
     } catch (error) {
       console.error("Failed to fetch CLI tools data:", error);
@@ -147,43 +146,28 @@ export function CliToolsScreen() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Fetch statuses for tools that have endpoints
+  useEffect(() => {
+    TOOLS.forEach(async (tool) => {
+      if (!tool.statusEndpoint) return;
+      try {
+        const res = await fetch(tool.statusEndpoint);
+        if (res.ok) {
+          const data = await res.json();
+          setToolStatuses((prev) => ({ ...prev, [tool.id]: data }));
+        }
+      } catch { /* skip */ }
+    });
+  }, []);
+
   const apiKeyOptions = useMemo(() => {
     return clientRoutes.flatMap((route) => {
       const keys = Array.isArray(route.apiKeys) ? route.apiKeys.filter(Boolean) : [];
-      return keys.map((apiKey, index) => ({
-        apiKey,
-        routeKey: route.key,
-        label: `${route.key}${keys.length > 1 ? ` (${index + 1})` : ""} • ••••${apiKey.slice(-4)}`,
-      }));
+      return keys.map((apiKey) => ({ apiKey, routeKey: route.key }));
     });
   }, [clientRoutes]);
 
-  useEffect(() => {
-    if (apiKeyOptions.length > 0 && !selectedApiKey) {
-      setSelectedApiKey(apiKeyOptions[0].apiKey);
-    }
-  }, [apiKeyOptions, selectedApiKey]);
-
   const endpointUrl = configStatus?.proxyBaseUrl || `${window.location.origin}/v1`;
-  const activeApiKey = selectedApiKey || "your-api-key";
-
-  // Derive tool statuses from config status
-  const toolStatuses = useMemo(() => {
-    const statuses: Record<string, { configured: boolean; label: string }> = {};
-    const clients = configStatus?.clients || {};
-    if (clients.hermes?.configured) statuses.hermes = { configured: true, label: "Configured" };
-    if (clients.codex?.configured) statuses.codex = { configured: true, label: "Configured" };
-    // For other tools, we don't have config detection, so show "Ready" if we have API keys
-    const hasKeys = apiKeyOptions.length > 0;
-    for (const toolId of Object.keys(CLI_TOOLS)) {
-      if (!statuses[toolId]) {
-        statuses[toolId] = hasKeys
-          ? { configured: false, label: "Ready" }
-          : { configured: false, label: "No API keys" };
-      }
-    }
-    return statuses;
-  }, [configStatus, apiKeyOptions]);
 
   if (loading) {
     return <LoadingState title="Loading CLI tools" description="Checking tool configurations..." cards={6} />;
@@ -193,51 +177,24 @@ export function CliToolsScreen() {
     <div className="screen-stack">
       <PageHeader
         title="CLI Tools"
-        description="Connect your AI coding tools to route through responses-proxy."
+        description="Connect your AI coding tools to route through responses-proxy. Click a tool to configure."
         actions={<RefreshButton onClick={fetchData} />}
       />
 
-      {/* API Key Selector */}
-      <SurfaceCard>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)", flexWrap: "wrap" }}>
-          <label className="field-label" style={{ margin: 0, whiteSpace: "nowrap" }}>API Key:</label>
-          <select
-            value={selectedApiKey}
-            onChange={(e) => setSelectedApiKey(e.target.value)}
-            style={{ flex: 1, minWidth: 240, maxWidth: 400 }}
-          >
-            {apiKeyOptions.length === 0 && <option value="">No API keys found</option>}
-            {apiKeyOptions.map((opt) => (
-              <option key={opt.apiKey} value={opt.apiKey}>{opt.label}</option>
-            ))}
-          </select>
-          <code style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", padding: "4px 8px", background: "var(--surface-muted)", borderRadius: "var(--radius-sm)" }}>
-            {endpointUrl}
-          </code>
-        </div>
-      </SurfaceCard>
-
-      {/* Tool Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "var(--space-4)" }}>
-        {Object.entries(CLI_TOOLS).map(([toolId, tool]) => (
+      <div style={{ display: "grid", gap: "var(--space-3)" }}>
+        {TOOLS.map((tool) => (
           <ToolCard
-            key={toolId}
+            key={tool.id}
             tool={tool}
-            status={toolStatuses[toolId]}
-            isSelected={selectedTool === toolId}
-            onClick={() => setSelectedTool(selectedTool === toolId ? null : toolId)}
+            status={toolStatuses[tool.id]}
+            isExpanded={expandedTool === tool.id}
+            onToggle={() => setExpandedTool(expandedTool === tool.id ? null : tool.id)}
+            endpointUrl={endpointUrl}
+            apiKeys={apiKeyOptions}
+            providers={providers}
           />
         ))}
       </div>
-
-      {/* Detail Panel */}
-      {selectedTool && CLI_TOOLS[selectedTool] && (
-        <ToolDetailPanel
-          tool={CLI_TOOLS[selectedTool]}
-          endpointUrl={endpointUrl}
-          apiKey={activeApiKey}
-        />
-      )}
     </div>
   );
 }
@@ -248,123 +205,106 @@ export function CliToolsScreen() {
 function ToolCard({
   tool,
   status,
-  isSelected,
-  onClick,
-}: {
-  tool: CliToolDef;
-  status?: { configured: boolean; label: string };
-  isSelected: boolean;
-  onClick: () => void;
-}) {
-  const statusLabel = status?.label || "Unknown";
-  const isConfigured = status?.configured;
-
-  return (
-    <section
-      className="surface-card"
-      onClick={onClick}
-      style={{
-        cursor: "pointer",
-        borderColor: isSelected ? "var(--accent)" : undefined,
-        transition: "border-color var(--animation-normal), transform var(--animation-normal)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-        {/* Icon circle */}
-        <div style={{
-          width: 36,
-          height: 36,
-          borderRadius: 10,
-          background: `${tool.color}18`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0,
-        }}>
-          <span style={{ fontSize: 18, fontWeight: 700, color: tool.color }}>
-            {tool.name.charAt(0)}
-          </span>
-        </div>
-
-        {/* Name + description */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h3 style={{ margin: 0, fontSize: "var(--text-sm)", fontWeight: 600, lineHeight: 1.3 }}>{tool.name}</h3>
-          <span
-            style={{
-              display: "inline-block",
-              marginTop: 4,
-              padding: "2px 8px",
-              fontSize: "0.65rem",
-              fontWeight: 600,
-              borderRadius: "var(--radius-pill)",
-              background: isConfigured ? "var(--success-soft)" : "var(--neutral-soft)",
-              color: isConfigured ? "var(--success)" : "var(--text-muted)",
-            }}
-          >
-            {statusLabel}
-          </span>
-        </div>
-
-        {/* Chevron */}
-        <span style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
-          {isSelected ? "▼" : "▶"}
-        </span>
-      </div>
-    </section>
-  );
-}
-
-// ─── Tool Detail Panel ───────────────────────────────────────────────────────
-
-function ToolDetailPanel({
-  tool,
+  isExpanded,
+  onToggle,
   endpointUrl,
-  apiKey,
+  apiKeys,
+  providers,
 }: {
-  tool: CliToolDef;
+  tool: ToolDef;
+  status?: ToolStatus;
+  isExpanded: boolean;
+  onToggle: () => void;
   endpointUrl: string;
-  apiKey: string;
+  apiKeys: { apiKey: string; routeKey: string }[];
+  providers: ProviderSummary[];
 }) {
-  const [copied, setCopied] = useState<string | null>(null);
+  const [selectedApiKey, setSelectedApiKey] = useState("");
+  const [modelMappings, setModelMappings] = useState<Record<string, string>>({});
   const [applying, setApplying] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [claudeStatus, setClaudeStatus] = useState<any>(null);
-  const [checkingStatus, setCheckingStatus] = useState(false);
+  const [message, setMessage] = useState<ToolMessage>(null);
+  const [showManual, setShowManual] = useState(false);
+  const [localStatus, setLocalStatus] = useState<ToolStatus | undefined>(status);
 
-  // Auto-detect Claude Code status on mount
+  useEffect(() => { setLocalStatus(status); }, [status]);
   useEffect(() => {
-    if (tool.id === "claude") {
-      checkClaudeStatus();
-    }
-  }, [tool.id]);
+    if (apiKeys.length > 0 && !selectedApiKey) setSelectedApiKey(apiKeys[0].apiKey);
+  }, [apiKeys, selectedApiKey]);
 
-  const checkClaudeStatus = async () => {
-    setCheckingStatus(true);
+  // Initialize model mappings from status
+  useEffect(() => {
+    if (localStatus?.settings?.env && tool.models) {
+      const env = localStatus.settings.env;
+      const initial: Record<string, string> = {};
+      tool.models.forEach((m) => {
+        if (m.envKey && env[m.envKey]) initial[m.alias] = env[m.envKey];
+        else if (m.defaultValue) initial[m.alias] = m.defaultValue;
+      });
+      setModelMappings(initial);
+    } else if (tool.models) {
+      const initial: Record<string, string> = {};
+      tool.models.forEach((m) => { if (m.defaultValue) initial[m.alias] = m.defaultValue; });
+      setModelMappings(initial);
+    }
+  }, [localStatus, tool.models]);
+
+  const refreshStatus = async () => {
+    if (!tool.statusEndpoint) return;
     try {
-      const res = await fetch("/api/cli-tools/claude-settings");
-      if (res.ok) setClaudeStatus(await res.json());
-    } catch { /* ignore */ }
-    finally { setCheckingStatus(false); }
+      const res = await fetch(tool.statusEndpoint);
+      if (res.ok) setLocalStatus(await res.json());
+    } catch { /* skip */ }
   };
 
-  const handleApplyClaude = async () => {
+  const getConfigStatus = (): "connected" | "not_configured" | "not_installed" | "guide_only" => {
+    if (!tool.statusEndpoint) return "guide_only";
+    if (!localStatus?.installed) return "not_installed";
+    if (localStatus.has9Router) return "connected";
+    return "not_configured";
+  };
+
+  const configStatus = getConfigStatus();
+
+  const handleApply = async () => {
+    if (!tool.applyEndpoint) return;
     setApplying(true);
     setMessage(null);
     try {
-      const env: Record<string, string> = {
-        ANTHROPIC_BASE_URL: endpointUrl,
-        ANTHROPIC_AUTH_TOKEN: apiKey,
-      };
-      const res = await fetch("/api/cli-tools/claude-settings", {
+      const effectiveUrl = endpointUrl.endsWith("/v1") ? endpointUrl : `${endpointUrl}/v1`;
+      const keyToUse = selectedApiKey || apiKeys[0]?.apiKey || "sk_9router";
+
+      let body: Record<string, unknown>;
+      if (tool.id === "claude") {
+        const env: Record<string, string> = {
+          ANTHROPIC_BASE_URL: effectiveUrl,
+          ANTHROPIC_AUTH_TOKEN: keyToUse,
+        };
+        if (tool.models) {
+          tool.models.forEach((m) => {
+            if (m.envKey && modelMappings[m.alias]) env[m.envKey] = modelMappings[m.alias];
+          });
+        }
+        body = { env };
+      } else if (tool.id === "codex") {
+        body = {
+          baseUrl: effectiveUrl,
+          apiKey: keyToUse,
+          model: modelMappings["model"] || "auto",
+        };
+      } else {
+        body = { baseUrl: effectiveUrl, apiKey: keyToUse };
+      }
+
+      const res = await fetch(tool.applyEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ env }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (res.ok) {
-        setMessage({ type: "success", text: data.changed ? "Settings applied!" : "Already up to date." });
-        checkClaudeStatus();
+        setMessage({ type: "success", text: data.changed !== false ? "Settings applied!" : "Already up to date." });
+        refreshStatus();
       } else {
         setMessage({ type: "error", text: data.error || "Failed to apply" });
       }
@@ -373,15 +313,16 @@ function ToolDetailPanel({
     } finally { setApplying(false); }
   };
 
-  const handleResetClaude = async () => {
+  const handleReset = async () => {
+    if (!tool.resetEndpoint) return;
     setResetting(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/cli-tools/claude-settings", { method: "DELETE" });
+      const res = await fetch(tool.resetEndpoint, { method: "DELETE" });
       const data = await res.json();
       if (res.ok) {
         setMessage({ type: "success", text: "Settings reset!" });
-        checkClaudeStatus();
+        refreshStatus();
       } else {
         setMessage({ type: "error", text: data.error || "Failed to reset" });
       }
@@ -390,307 +331,217 @@ function ToolDetailPanel({
     } finally { setResetting(false); }
   };
 
-  const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(id);
-    setTimeout(() => setCopied(null), 1500);
-  };
-
-  const resolveTemplate = (text: string) =>
-    text.replace(/\{\{baseUrl\}\}/g, endpointUrl).replace(/\{\{apiKey\}\}/g, apiKey);
+  const effectiveUrl = endpointUrl.endsWith("/v1") ? endpointUrl : `${endpointUrl}/v1`;
+  const keyToUse = selectedApiKey || apiKeys[0]?.apiKey || "your-api-key";
 
   return (
-    <SurfaceCard title={`${tool.name} Setup`} description={tool.description}>
-      <div style={{ display: "grid", gap: "var(--space-4)", marginTop: "var(--space-3)" }}>
+    <section className="surface-card" style={{ padding: "var(--space-4) var(--space-5)" }}>
+      {/* Header — always visible */}
+      <div
+        onClick={onToggle}
+        style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", cursor: "pointer" }}
+      >
+        <div style={{
+          width: 32, height: 32, borderRadius: 10, flexShrink: 0,
+          background: `${tool.color}18`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: tool.color }}>{tool.name.charAt(0)}</span>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0, fontSize: "var(--text-sm)", fontWeight: 600 }}>{tool.name}</h3>
+            <StatusPill status={configStatus} />
+          </div>
+          <p style={{ margin: "2px 0 0", fontSize: "var(--text-xs)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tool.description}</p>
+        </div>
+        <span style={{ color: "var(--text-muted)", transition: "transform var(--animation-normal)", transform: isExpanded ? "rotate(180deg)" : "none" }}>▾</span>
+      </div>
 
-        {/* Auto-Apply Section for Claude Code */}
-        {tool.id === "claude" && (
-          <div style={{ padding: "var(--space-4)", background: "var(--surface-muted)", borderRadius: "var(--radius-md)", border: "1px solid var(--line)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-3)", marginBottom: "var(--space-3)" }}>
-              <div>
-                <strong style={{ fontSize: "var(--text-sm)" }}>Auto-Apply</strong>
-                <p style={{ margin: "2px 0 0", fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>
-                  {checkingStatus ? "Checking..." : claudeStatus?.installed
-                    ? claudeStatus.has9Router ? "Connected to proxy" : "Installed, not configured"
-                    : "Claude CLI not detected"
-                  }
-                </p>
-              </div>
-              {claudeStatus?.installed && (
-                <span
-                  className="status-badge"
-                  style={{
-                    background: claudeStatus.has9Router ? "var(--success-soft)" : "var(--warning-soft)",
-                    color: claudeStatus.has9Router ? "var(--success)" : "var(--warning)",
-                  }}
-                >
-                  {claudeStatus.has9Router ? "Connected" : "Not configured"}
-                </span>
+      {/* Expanded content */}
+      {isExpanded && (
+        <div style={{ marginTop: "var(--space-4)", paddingTop: "var(--space-4)", borderTop: "1px solid var(--line)", display: "grid", gap: "var(--space-3)" }}>
+
+          {/* Not installed warning */}
+          {configStatus === "not_installed" && (
+            <div style={{ padding: "var(--space-3) var(--space-4)", background: "var(--warning-soft)", borderRadius: "var(--radius-sm)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+              <strong style={{ fontSize: "var(--text-sm)", color: "var(--warning)" }}>Not detected locally</strong>
+              <p style={{ margin: "4px 0 0", fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>Manual configuration is still available if running on a remote server.</p>
+              {tool.installCmd && (
+                <code style={{ display: "block", marginTop: "var(--space-2)", padding: "var(--space-2) var(--space-3)", background: "var(--surface-muted)", borderRadius: "var(--radius-sm)", fontSize: "var(--text-xs)", fontFamily: "monospace" }}>
+                  {tool.installCmd}
+                </code>
               )}
             </div>
+          )}
 
-            {claudeStatus?.settings?.env?.ANTHROPIC_BASE_URL && (
-              <div style={{ marginBottom: "var(--space-3)", padding: "var(--space-2) var(--space-3)", background: "var(--control-bg)", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)" }}>
-                <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Current: </span>
-                <code style={{ fontSize: "var(--text-xs)" }}>{claudeStatus.settings.env.ANTHROPIC_BASE_URL}</code>
-              </div>
-            )}
+          {/* Config fields — for tools with auto-apply */}
+          {tool.applyEndpoint && (configStatus === "connected" || configStatus === "not_configured" || configStatus === "not_installed") && (
+            <>
+              {/* Endpoint */}
+              <ConfigRow label="Endpoint">
+                <code style={{ flex: 1, fontSize: "var(--text-xs)", padding: "6px var(--space-3)", background: "var(--control-bg)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {effectiveUrl}
+                </code>
+              </ConfigRow>
 
-            <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
-              <button
-                className="button-primary"
-                onClick={handleApplyClaude}
-                disabled={applying || !apiKey}
-                style={{ minHeight: 36 }}
-              >
-                {applying ? "Applying..." : "Apply Settings"}
-              </button>
-              <button
-                className="button-link"
-                onClick={handleResetClaude}
-                disabled={resetting || !claudeStatus?.has9Router}
-                style={{ minHeight: 36 }}
-              >
-                {resetting ? "Resetting..." : "Reset"}
-              </button>
-              <button
-                className="button-link"
-                onClick={checkClaudeStatus}
-                disabled={checkingStatus}
-                style={{ minHeight: 36 }}
-              >
-                Refresh Status
-              </button>
-            </div>
+              {/* Current URL */}
+              {localStatus?.settings?.env?.ANTHROPIC_BASE_URL && (
+                <ConfigRow label="Current">
+                  <code style={{ flex: 1, fontSize: "var(--text-xs)", padding: "6px var(--space-3)", background: "var(--surface-muted)", borderRadius: "var(--radius-sm)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {localStatus.settings.env.ANTHROPIC_BASE_URL}
+                  </code>
+                </ConfigRow>
+              )}
 
-            {message && (
-              <div style={{
-                marginTop: "var(--space-3)",
-                padding: "var(--space-2) var(--space-3)",
-                borderRadius: "var(--radius-sm)",
-                background: message.type === "success" ? "var(--success-soft)" : "var(--danger-soft)",
-                color: message.type === "success" ? "var(--success)" : "var(--danger)",
-                fontSize: "var(--text-xs)",
-                fontWeight: 600,
-              }}>
-                {message.text}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Environment variable config */}
-        {tool.configType === "env" && tool.envVars && (
-          <div>
-            <p style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
-              Export these environment variables before starting your tool:
-            </p>
-            <div style={{
-              background: "var(--surface-muted)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--radius-md)",
-              padding: "var(--space-4)",
-              fontFamily: "monospace",
-              fontSize: "var(--text-xs)",
-              overflowX: "auto",
-              position: "relative",
-            }}>
-              <button
-                onClick={() => {
-                  const code = Object.entries(tool.envVars!).map(([key, envName]) => {
-                    const val = key === "baseUrl" ? endpointUrl : apiKey;
-                    return `export ${envName}="${val}"`;
-                  }).join("\n");
-                  handleCopy(code, "env");
-                }}
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  right: 8,
-                  background: "none",
-                  border: "none",
-                  color: "var(--accent)",
-                  cursor: "pointer",
-                  fontSize: "var(--text-xs)",
-                  fontWeight: 600,
-                  minHeight: "auto",
-                }}
-              >
-                {copied === "env" ? "Copied!" : "Copy"}
-              </button>
-              <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-                {Object.entries(tool.envVars).map(([key, envName]) => {
-                  const val = key === "baseUrl" ? endpointUrl : apiKey;
-                  return `export ${envName}="${val}"`;
-                }).join("\n")}
-              </pre>
-            </div>
-          </div>
-        )}
-
-        {/* Guide steps */}
-        {tool.guideSteps && (
-          <div>
-            <p style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
-              Follow these steps to configure {tool.name}:
-            </p>
-            <div style={{ display: "grid", gap: "var(--space-2)" }}>
-              {tool.guideSteps.map((step) => (
-                <div
-                  key={step.step}
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: "var(--space-3)",
-                    padding: "var(--space-3)",
-                    background: "var(--surface-muted)",
-                    borderRadius: "var(--radius-sm)",
-                    border: "1px solid var(--line)",
-                  }}
+              {/* API Key */}
+              <ConfigRow label="API Key">
+                <select
+                  value={selectedApiKey}
+                  onChange={(e) => setSelectedApiKey(e.target.value)}
+                  style={{ flex: 1, minHeight: 32, fontSize: "var(--text-xs)", padding: "4px 8px" }}
                 >
-                  <span style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: "50%",
-                    background: "var(--accent-soft)",
-                    color: "var(--accent)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "0.7rem",
-                    fontWeight: 700,
-                    flexShrink: 0,
-                  }}>
-                    {step.step}
-                  </span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <strong style={{ fontSize: "var(--text-sm)" }}>{step.title}</strong>
-                    {step.desc && <p style={{ margin: "2px 0 0", fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>{step.desc}</p>}
-                    {step.value && (
-                      <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                        <code style={{
-                          flex: 1,
-                          padding: "4px 8px",
-                          background: "var(--control-bg)",
-                          border: "1px solid var(--line)",
-                          borderRadius: "var(--radius-sm)",
-                          fontSize: "var(--text-xs)",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}>
-                          {resolveTemplate(step.value)}
-                        </code>
-                        {step.copyable && (
-                          <button
-                            onClick={() => handleCopy(resolveTemplate(step.value!), `step-${step.step}`)}
-                            style={{
-                              background: "none",
-                              border: "none",
-                              color: "var(--accent)",
-                              cursor: "pointer",
-                              fontSize: "var(--text-xs)",
-                              fontWeight: 600,
-                              minHeight: "auto",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {copied === `step-${step.step}` ? "✓" : "Copy"}
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                  {apiKeys.length === 0 && <option value="">No API keys</option>}
+                  {apiKeys.map((k) => (
+                    <option key={k.apiKey} value={k.apiKey}>{k.routeKey} • ••••{k.apiKey.slice(-4)}</option>
+                  ))}
+                </select>
+              </ConfigRow>
+
+              {/* Model mappings */}
+              {tool.models?.map((m) => (
+                <ConfigRow key={m.alias} label={m.name}>
+                  <input
+                    type="text"
+                    value={modelMappings[m.alias] || ""}
+                    onChange={(e) => setModelMappings((prev) => ({ ...prev, [m.alias]: e.target.value }))}
+                    placeholder={m.defaultValue || "provider/model"}
+                    style={{ flex: 1, minHeight: 32, fontSize: "var(--text-xs)", padding: "4px 8px", fontFamily: "monospace" }}
+                  />
+                </ConfigRow>
               ))}
-            </div>
-          </div>
-        )}
 
-        {/* Custom tool — show generic endpoint info */}
-        {tool.configType === "custom" && !tool.guideSteps && (
-          <div>
-            <p style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
-              Configure {tool.name} with these connection details:
-            </p>
+              {/* Actions */}
+              <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginTop: "var(--space-2)" }}>
+                <button className="button-primary" onClick={handleApply} disabled={applying} style={{ minHeight: 36 }}>
+                  {applying ? "Applying..." : "Apply"}
+                </button>
+                <button className="button-link" onClick={handleReset} disabled={resetting || !localStatus?.has9Router} style={{ minHeight: 36 }}>
+                  {resetting ? "Resetting..." : "Reset"}
+                </button>
+                <button className="button-link" onClick={() => setShowManual(!showManual)} style={{ minHeight: 36 }}>
+                  Manual Config
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Guide-only tools (no auto-apply) */}
+          {!tool.applyEndpoint && (
             <div style={{ display: "grid", gap: "var(--space-2)" }}>
-              <CopyableField label="Endpoint URL" value={endpointUrl} copied={copied} onCopy={handleCopy} id="url" />
-              <CopyableField label="API Key" value={apiKey} copied={copied} onCopy={handleCopy} id="key" />
-              <CopyableField label="Model" value="auto" copied={copied} onCopy={handleCopy} id="model" />
+              <ConfigRow label="Endpoint">
+                <CopyField value={effectiveUrl} />
+              </ConfigRow>
+              <ConfigRow label="API Key">
+                <CopyField value={keyToUse} />
+              </ConfigRow>
+              <ConfigRow label="Model">
+                <CopyField value="auto" />
+              </ConfigRow>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Code block */}
-        {tool.codeBlock && (
-          <div style={{
-            background: "var(--surface-muted)",
-            border: "1px solid var(--line)",
-            borderRadius: "var(--radius-md)",
-            padding: "var(--space-4)",
-            fontFamily: "monospace",
-            fontSize: "var(--text-xs)",
-            overflowX: "auto",
-            position: "relative",
-          }}>
-            <button
-              onClick={() => handleCopy(resolveTemplate(tool.codeBlock!.code), "codeblock")}
-              style={{
-                position: "absolute",
-                top: 8,
-                right: 8,
-                background: "none",
-                border: "none",
-                color: "var(--accent)",
-                cursor: "pointer",
-                fontSize: "var(--text-xs)",
-                fontWeight: 600,
-                minHeight: "auto",
-              }}
-            >
-              {copied === "codeblock" ? "Copied!" : "Copy"}
-            </button>
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{resolveTemplate(tool.codeBlock.code)}</pre>
-          </div>
-        )}
-      </div>
-    </SurfaceCard>
+          {/* Manual config JSON */}
+          {showManual && (
+            <div style={{ background: "var(--surface-muted)", border: "1px solid var(--line)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", fontFamily: "monospace", fontSize: "var(--text-xs)", overflowX: "auto", whiteSpace: "pre-wrap" }}>
+              {tool.id === "claude" && JSON.stringify({
+                hasCompletedOnboarding: true,
+                env: {
+                  ANTHROPIC_BASE_URL: effectiveUrl,
+                  ANTHROPIC_AUTH_TOKEN: keyToUse,
+                  ...(tool.models || []).reduce((acc, m) => {
+                    if (m.envKey && modelMappings[m.alias]) acc[m.envKey] = modelMappings[m.alias];
+                    return acc;
+                  }, {} as Record<string, string>),
+                },
+              }, null, 2)}
+              {tool.id === "codex" && `# ~/.codex/config.toml\nmodel = "${modelMappings["model"] || "auto"}"\nmodel_provider = "9router"\n\n[model_providers.9router]\nname = "9Router"\nbase_url = "${effectiveUrl}"\nwire_api = "responses"\n\n# ~/.codex/auth.json\n${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: keyToUse }, null, 2)}`}
+              {!["claude", "codex"].includes(tool.id) && `Endpoint: ${effectiveUrl}\nAPI Key: ${keyToUse}\nModel: auto`}
+            </div>
+          )}
+
+          {/* Feedback message */}
+          {message && (
+            <div style={{
+              padding: "var(--space-2) var(--space-3)",
+              borderRadius: "var(--radius-sm)",
+              background: message.type === "success" ? "var(--success-soft)" : "var(--danger-soft)",
+              color: message.type === "success" ? "var(--success)" : "var(--danger)",
+              fontSize: "var(--text-xs)",
+              fontWeight: 600,
+            }}>
+              {message.text}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
-// ─── Copyable Field ──────────────────────────────────────────────────────────
+// ─── Helper Components ───────────────────────────────────────────────────────
 
-function CopyableField({
-  label,
-  value,
-  copied,
-  onCopy,
-  id,
-}: {
-  label: string;
-  value: string;
-  copied: string | null;
-  onCopy: (text: string, id: string) => void;
-  id: string;
-}) {
+function StatusPill({ status }: { status: string }) {
+  const styles: Record<string, { bg: string; color: string; label: string }> = {
+    connected: { bg: "var(--success-soft)", color: "var(--success)", label: "Connected" },
+    not_configured: { bg: "var(--warning-soft)", color: "var(--warning)", label: "Not configured" },
+    not_installed: { bg: "var(--neutral-soft)", color: "var(--text-muted)", label: "Not installed" },
+    guide_only: { bg: "var(--accent-soft)", color: "var(--accent)", label: "Manual" },
+  };
+  const s = styles[status] || styles.guide_only;
   return (
-    <div style={{
-      display: "flex",
-      alignItems: "center",
-      gap: "var(--space-3)",
-      padding: "var(--space-2) var(--space-3)",
-      background: "var(--surface-muted)",
-      borderRadius: "var(--radius-sm)",
-      border: "1px solid var(--line)",
+    <span style={{
+      padding: "2px 8px",
+      fontSize: "0.65rem",
+      fontWeight: 600,
+      borderRadius: "var(--radius-pill)",
+      background: s.bg,
+      color: s.color,
     }}>
-      <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", width: 90, flexShrink: 0 }}>{label}</span>
-      <code style={{ flex: 1, fontSize: "var(--text-xs)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</code>
+      {s.label}
+    </span>
+  );
+}
+
+function ConfigRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", alignItems: "center", gap: "var(--space-2)" }}>
+      <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", textAlign: "right" }}>{label}</span>
+      <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", minWidth: 0 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function CopyField({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(value).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <>
+      <code style={{ flex: 1, fontSize: "var(--text-xs)", padding: "6px var(--space-3)", background: "var(--control-bg)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "monospace" }}>
+        {value}
+      </code>
       <button
-        onClick={() => onCopy(value, id)}
+        onClick={handleCopy}
         style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: "var(--text-xs)", fontWeight: 600, minHeight: "auto", whiteSpace: "nowrap" }}
       >
-        {copied === id ? "✓" : "Copy"}
+        {copied ? "✓" : "Copy"}
       </button>
-    </div>
+    </>
   );
 }

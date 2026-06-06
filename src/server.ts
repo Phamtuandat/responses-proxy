@@ -2025,7 +2025,7 @@ app.post("/api/client-configs/apply", async (request, reply) => {
 // ─── CLI Tool Auto-Apply: Claude Code settings ──────────────────────────────
 
 app.get("/api/cli-tools/claude-settings", async (_request, reply) => {
-  const settingsPath = path.join(process.env.HOME || "", ".claude", "settings.json");
+  const settingsPath = path.join("/host-home", ".claude", "settings.json");
   try {
     if (!existsSync(settingsPath)) {
       return reply.send({ installed: false, path: settingsPath });
@@ -2052,7 +2052,7 @@ app.post("/api/cli-tools/claude-settings", async (request, reply) => {
     return reply.code(400).send({ error: "env object is required" });
   }
 
-  const settingsPath = path.join(process.env.HOME || "", ".claude", "settings.json");
+  const settingsPath = path.join("/host-home", ".claude", "settings.json");
   const settingsDir = path.dirname(settingsPath);
   const backupDir = quickApplyPaths.backupDir;
 
@@ -2085,7 +2085,7 @@ app.post("/api/cli-tools/claude-settings", async (request, reply) => {
 });
 
 app.delete("/api/cli-tools/claude-settings", async (_request, reply) => {
-  const settingsPath = path.join(process.env.HOME || "", ".claude", "settings.json");
+  const settingsPath = path.join("/host-home", ".claude", "settings.json");
   try {
     if (!existsSync(settingsPath)) {
       return reply.send({ ok: true, changed: false });
@@ -2104,6 +2104,89 @@ app.delete("/api/cli-tools/claude-settings", async (_request, reply) => {
     const nextRaw = JSON.stringify(data, null, 2) + "\n";
     const writeResult = writeQuickConfigFile(settingsPath, nextRaw, { backupDir: quickApplyPaths.backupDir });
     return reply.send({ ok: true, changed: writeResult.changed, backupCreated: writeResult.backupCreated });
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Failed to reset settings" });
+  }
+});
+
+// ─── CLI Tool Auto-Apply: Codex settings ────────────────────────────────────
+
+app.get("/api/cli-tools/codex-settings", async (_request, reply) => {
+  const configPath = path.join("/host-home", ".codex", "config.toml");
+  const authPath = path.join("/host-home", ".codex", "auth.json");
+  try {
+    const installed = existsSync(configPath) || existsSync(authPath);
+    if (!installed) {
+      return reply.send({ installed: false, path: configPath });
+    }
+    const configContent = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
+    // Check if base_url points to our proxy
+    const baseUrlMatch = configContent.match(/base_url\s*=\s*"([^"]+)"/);
+    const currentBaseUrl = baseUrlMatch ? baseUrlMatch[1] : null;
+    const isOurs = currentBaseUrl ? currentBaseUrl.includes(String(config.PORT)) : false;
+    return reply.send({
+      installed: true,
+      path: configPath,
+      has9Router: configContent.includes("9router") || configContent.includes("9Router") || isOurs,
+      config: configContent,
+    });
+  } catch (error) {
+    return reply.send({ installed: false, path: configPath, error: error instanceof Error ? error.message : "read failed" });
+  }
+});
+
+app.post("/api/cli-tools/codex-settings", async (request, reply) => {
+  const body = request.body as { baseUrl?: string; apiKey?: string; model?: string; subagentModel?: string } | undefined;
+  const baseUrl = typeof body?.baseUrl === "string" ? body.baseUrl : "";
+  const apiKey = typeof body?.apiKey === "string" ? body.apiKey : "";
+  const model = typeof body?.model === "string" ? body.model : "auto";
+  const subagentModel = typeof body?.subagentModel === "string" ? body.subagentModel : model;
+
+  if (!baseUrl) {
+    return reply.code(400).send({ error: "baseUrl is required" });
+  }
+
+  const configPath = path.join("/host-home", ".codex", "config.toml");
+  const authPath = path.join("/host-home", ".codex", "auth.json");
+  const backupDir = quickApplyPaths.backupDir;
+
+  try {
+    const configDir = path.dirname(configPath);
+    mkdirSync(configDir, { recursive: true });
+
+    // Write config.toml
+    const configContent = `# 9Router Configuration for Codex CLI\nmodel = "${model}"\nmodel_provider = "9router"\n\n[model_providers.9router]\nname = "9Router"\nbase_url = "${baseUrl}"\nwire_api = "responses"\n\n[agents.subagent]\nmodel = "${subagentModel}"\n`;
+    const configResult = writeQuickConfigFile(configPath, configContent, { backupDir });
+
+    // Write auth.json
+    const authContent = JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: apiKey }, null, 2) + "\n";
+    const authResult = writeQuickConfigFile(authPath, authContent, { backupDir });
+
+    return reply.send({
+      ok: true,
+      changed: configResult.changed || authResult.changed,
+      backupCreated: configResult.backupCreated || authResult.backupCreated,
+    });
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Failed to apply settings" });
+  }
+});
+
+app.delete("/api/cli-tools/codex-settings", async (_request, reply) => {
+  const configPath = path.join("/host-home", ".codex", "config.toml");
+  const authPath = path.join("/host-home", ".codex", "auth.json");
+  try {
+    let changed = false;
+    if (existsSync(configPath)) {
+      // Reset to empty default
+      const result = writeQuickConfigFile(configPath, "# Codex CLI config\n", { backupDir: quickApplyPaths.backupDir });
+      changed = result.changed;
+    }
+    if (existsSync(authPath)) {
+      const result = writeQuickConfigFile(authPath, "{}\n", { backupDir: quickApplyPaths.backupDir });
+      changed = changed || result.changed;
+    }
+    return reply.send({ ok: true, changed });
   } catch (error) {
     return reply.code(500).send({ error: error instanceof Error ? error.message : "Failed to reset settings" });
   }
