@@ -25,34 +25,79 @@ export const CODEWHISPERER_GENERATE_PATH = "/generateAssistantResponse";
  * bedrock-style `CLAUDE_SONNET_4_...` ids. Values mirror 9router's catalog.
  */
 export const DEFAULT_KIRO_MODEL_ALIASES: Record<string, string> = {
+  // ─── Auto (router) ───
   auto: "auto",
   "kiro-auto": "auto",
-  // Base Claude variants
-  "claude-sonnet-4": "claude-sonnet-4",
-  "kiro-claude-sonnet-4": "claude-sonnet-4",
+  "kr/auto": "auto",
+
+  // ─── Claude Opus series ───
+  "claude-opus-4-8": "claude-opus-4-8",
+  "claude-opus-4.8": "claude-opus-4-8",
+  "kr/claude-opus-4-8": "claude-opus-4-8",
+  "kr/claude-opus-4.8": "claude-opus-4-8",
+  "claude-opus-4-7": "claude-opus-4-7",
+  "claude-opus-4.7": "claude-opus-4-7",
+  "kr/claude-opus-4-7": "claude-opus-4-7",
+  "kr/claude-opus-4.7": "claude-opus-4-7",
+  "claude-opus-4-6": "claude-opus-4-6",
+  "claude-opus-4.6": "claude-opus-4-6",
+  "kr/claude-opus-4-6": "claude-opus-4-6",
+  "kr/claude-opus-4.6": "claude-opus-4-6",
+  "claude-opus-4-5": "claude-opus-4-5",
+  "claude-opus-4.5": "claude-opus-4-5",
+  "kr/claude-opus-4-5": "claude-opus-4-5",
+  "kr/claude-opus-4.5": "claude-opus-4-5",
+
+  // ─── Claude Sonnet series ───
+  "claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-sonnet-4.6": "claude-sonnet-4-6",
+  "kr/claude-sonnet-4-6": "claude-sonnet-4-6",
+  "kr/claude-sonnet-4.6": "claude-sonnet-4-6",
   "claude-sonnet-4-5": "claude-sonnet-4-5",
   "claude-sonnet-4.5": "claude-sonnet-4-5",
-  "kiro-claude-sonnet-4-5": "claude-sonnet-4-5",
-  "claude-sonnet-4-6": "claude-sonnet-4-6",
-  "kiro-claude-sonnet-4-6": "claude-sonnet-4-6",
+  "kr/claude-sonnet-4-5": "claude-sonnet-4-5",
+  "kr/claude-sonnet-4.5": "claude-sonnet-4-5",
+  "claude-sonnet-4": "claude-sonnet-4",
+  "claude-sonnet-4-0": "claude-sonnet-4",
+  "claude-sonnet-4.0": "claude-sonnet-4",
+  "kr/claude-sonnet-4": "claude-sonnet-4",
+  "kr/claude-sonnet-4-0": "claude-sonnet-4",
+
+  // ─── Claude Haiku ───
   "claude-haiku-4-5": "claude-haiku-4.5",
   "claude-haiku-4.5": "claude-haiku-4.5",
-  "kiro-claude-haiku-4-5": "claude-haiku-4.5",
-  // Non-Claude models available via Kiro
+  "kr/claude-haiku-4-5": "claude-haiku-4.5",
+  "kr/claude-haiku-4.5": "claude-haiku-4.5",
+
+  // ─── Non-Claude models (open weight) ───
   "deepseek-3.2": "deepseek-3.2",
-  "qwen3-coder-next": "qwen3-coder-next",
-  "glm-5": "glm-5",
-  "MiniMax-M2.5": "MiniMax-M2.5",
+  "deepseek-3-2": "deepseek-3.2",
+  "kr/deepseek-3.2": "deepseek-3.2",
+  "kr/deepseek-3-2": "deepseek-3.2",
   "minimax-m2.5": "MiniMax-M2.5",
-  // Thinking variants
-  "claude-sonnet-4.5-thinking": "claude-sonnet-4.5-thinking",
-  "claude-haiku-4.5-thinking": "claude-haiku-4.5-thinking",
-  // Agentic variants
-  "claude-sonnet-4.5-agentic": "claude-sonnet-4.5-agentic",
-  "claude-haiku-4.5-agentic": "claude-haiku-4.5-agentic",
-  // Thinking + Agentic variants
-  "claude-sonnet-4.5-thinking-agentic": "claude-sonnet-4.5-thinking-agentic",
-  "claude-haiku-4.5-thinking-agentic": "claude-haiku-4.5-thinking-agentic",
+  "minimax-m2-5": "MiniMax-M2.5",
+  "MiniMax-M2.5": "MiniMax-M2.5",
+  "kr/minimax-m2.5": "MiniMax-M2.5",
+  "kr/minimax-m2-5": "MiniMax-M2.5",
+  "minimax-m2.1": "MiniMax-M2.1",
+  "minimax-m2-1": "MiniMax-M2.1",
+  "MiniMax-M2.1": "MiniMax-M2.1",
+  "kr/minimax-m2.1": "MiniMax-M2.1",
+  "kr/minimax-m2-1": "MiniMax-M2.1",
+  "glm-5": "glm-5",
+  "kr/glm-5": "glm-5",
+  "qwen3-coder-next": "qwen3-coder-next",
+  "kr/qwen3-coder-next": "qwen3-coder-next",
+
+  // ─── Legacy aliases (kiro- prefix) ───
+  "kiro-claude-sonnet-4": "claude-sonnet-4",
+  "kiro-claude-sonnet-4-5": "claude-sonnet-4-5",
+  "kiro-claude-sonnet-4-6": "claude-sonnet-4-6",
+  "kiro-claude-haiku-4-5": "claude-haiku-4.5",
+  "kiro-claude-opus-4-5": "claude-opus-4-5",
+  "kiro-claude-opus-4-6": "claude-opus-4-6",
+  "kiro-claude-opus-4-7": "claude-opus-4-7",
+  "kiro-claude-opus-4-8": "claude-opus-4-8",
 };
 
 /** `auto` lets CodeWhisperer pick the model; safest default matching 9router. */
