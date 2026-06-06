@@ -66,6 +66,7 @@ export type RuntimeProviderPreset = {
   providerApiKeys: string[];
   clientApiKeys: string[];
   capabilities: RuntimeProviderCapabilities;
+  enabled?: boolean;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -134,6 +135,7 @@ export type RuntimeProviderInput = {
   authMode?: unknown;
   chatgptAccountId?: unknown;
   capabilities?: unknown;
+  enabled?: unknown;
 };
 
 export type RuntimeProviderView = {
@@ -146,6 +148,7 @@ export type RuntimeProviderView = {
   authMode: RuntimeProviderAuthMode;
   chatgptAccountId: string | null;
   capabilities: RuntimeProviderCapabilities;
+  enabled: boolean;
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -169,6 +172,7 @@ type ValidatedProviderInput = {
   providerApiKeys: string[];
   clientApiKeys: string[];
   capabilities: RuntimeProviderCapabilities;
+  enabled?: boolean;
 };
 
 type RuntimeProviderRepositoryOptions = {
@@ -200,6 +204,7 @@ type ProviderRow = {
   system_managed: number | null;
   account_platform: string | null;
   account_pool_required: number | null;
+  enabled: number | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -814,6 +819,7 @@ export class RuntimeProviderRepository {
       providerApiKeys: validated.providerApiKeys,
       clientApiKeys: validated.clientApiKeys,
       capabilities: validated.capabilities,
+      enabled: validated.enabled ?? true,
       createdAt: now,
       updatedAt: now,
     };
@@ -842,6 +848,7 @@ export class RuntimeProviderRepository {
       providerApiKeys: validated.providerApiKeys,
       clientApiKeys: validated.clientApiKeys,
       capabilities: validated.capabilities,
+      enabled: validated.enabled ?? existing.enabled,
       updatedAt: new Date().toISOString(),
     };
     this.providerPresets = this.providerPresets.map((provider) =>
@@ -962,6 +969,7 @@ export class RuntimeProviderRepository {
       providerApiKeys,
       clientApiKeys: [],
       capabilities: parseProviderCapabilitiesInput(body.capabilities),
+      enabled: body.enabled === false || body.enabled === "false" ? false : body.enabled === true || body.enabled === "true" ? true : undefined,
     };
   }
 
@@ -976,6 +984,7 @@ export class RuntimeProviderRepository {
       authMode: parseRuntimeProviderAuthMode(provider.authMode),
       chatgptAccountId: provider.chatgptAccountId ?? null,
       capabilities: cloneCapabilities(provider.capabilities),
+      enabled: provider.enabled !== false,
       createdAt: provider.createdAt ?? null,
       updatedAt: provider.updatedAt ?? null,
     };
@@ -1068,10 +1077,11 @@ export class RuntimeProviderRepository {
           system_managed,
           account_platform,
           account_pool_required,
+          enabled,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertApiKey = this.db.prepare(`
         INSERT INTO provider_api_keys (provider_id, api_key, position)
@@ -1120,6 +1130,7 @@ export class RuntimeProviderRepository {
           provider.capabilities.systemManaged ? 1 : 0,
           provider.capabilities.accountPlatform ?? null,
           provider.capabilities.accountPoolRequired ? 1 : 0,
+          provider.enabled !== false ? 1 : 0,
           provider.createdAt ?? null,
           provider.updatedAt ?? null,
         );
@@ -1371,6 +1382,7 @@ function ensureSchema(db: Database): void {
   ensureProvidersColumn(db, "system_managed", "INTEGER NOT NULL DEFAULT 0");
   ensureProvidersColumn(db, "account_platform", "TEXT");
   ensureProvidersColumn(db, "account_pool_required", "INTEGER NOT NULL DEFAULT 0");
+  ensureProvidersColumn(db, "enabled", "INTEGER NOT NULL DEFAULT 1");
   ensureSharedApiKeyTable(db, "provider_api_keys");
   ensureSharedApiKeyTable(db, "client_api_keys");
 }
@@ -1401,6 +1413,7 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
       system_managed,
       account_platform,
       account_pool_required,
+      enabled,
       created_at,
       updated_at
     FROM providers
@@ -1443,6 +1456,7 @@ function readStateFromDatabase(db: Database): RuntimeProviderState {
     chatgptAccountId: row.chatgpt_account_id?.trim() ? row.chatgpt_account_id.trim() : undefined,
     providerApiKeys: providerApiKeysByProvider.get(row.id) ?? [],
     clientApiKeys: [],
+    enabled: row.enabled !== 0,
     capabilities: {
       ownedBy: row.owned_by ?? undefined,
       systemManaged: row.system_managed === 1,

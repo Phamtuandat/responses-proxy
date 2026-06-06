@@ -116,6 +116,10 @@ export function deleteProvider(providerId: string) {
   return apiSend<ProviderDeleteResponse>(`/api/providers/${encodeURIComponent(providerId)}`, "DELETE");
 }
 
+export function toggleProviderEnabled(providerId: string, enabled: boolean) {
+  return apiSend<ProviderMutationResponse>(`/api/providers/${encodeURIComponent(providerId)}/toggle-enabled`, "POST", { enabled });
+}
+
 export function createClient(input: ClientMutationInput) {
   return apiSend<ClientMutationResponse>("/api/clients", "POST", input);
 }

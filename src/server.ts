@@ -2402,6 +2402,27 @@ app.put("/api/providers/:providerId", async (request, reply) => {
   }
 });
 
+app.post("/api/providers/:providerId/toggle-enabled", async (request, reply) => {
+  const params = request.params as { providerId?: string };
+  const providerId = typeof params.providerId === "string" ? params.providerId.trim() : "";
+  const body = request.body as { enabled?: unknown } | undefined;
+  const enabled = body?.enabled === true || body?.enabled === "true";
+
+  try {
+    const existing = providerRepository.getProviderOrThrow(providerId);
+    const updated = providerRepository.updateProvider(providerId, {
+      ...existing,
+      enabled,
+    });
+    return reply.send({
+      ok: true,
+      provider: providerRepository.getProviderForUiOrThrow(updated.id),
+    });
+  } catch (error) {
+    return sendProviderRepositoryError(reply, error);
+  }
+});
+
 app.post("/api/providers/:providerId/transport-mode", async (request, reply) => {
   const params = request.params as { providerId?: string };
   const providerId = typeof params.providerId === "string" ? params.providerId.trim() : "";

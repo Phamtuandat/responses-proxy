@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from "react";
-import { updateProvider, deleteProvider, getProviderModels, addKiroModelAlias, deleteKiroModelAlias, testKiroModel } from "../api/client";
+import { updateProvider, deleteProvider, getProviderModels, addKiroModelAlias, deleteKiroModelAlias, testKiroModel, toggleProviderEnabled } from "../api/client";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { RefreshButton } from "../components/RefreshButton";
@@ -100,9 +100,10 @@ function CopyMini(props: { className?: string }) {
   );
 }
 
-function ProviderDetailHeader({ provider }: { provider: Provider }) {
+function ProviderDetailHeader({ provider, onToggleEnabled }: { provider: Provider; onToggleEnabled?: (enabled: boolean) => void }) {
   const catalogEntry = getProviderById(provider.id);
   const connectionCount = provider.accounts?.length || 0;
+  const isEnabled = provider.enabled !== false;
 
   return (
     <div className="pd9-header">
@@ -117,6 +118,21 @@ function ProviderDetailHeader({ provider }: { provider: Provider }) {
         <div className="pd9-title-main">
           <div className="pd9-title-line">
             <h1 className="pd9-title">{provider.displayName}</h1>
+            {onToggleEnabled && (
+              <button
+                type="button"
+                className={`pd9-switch ${isEnabled ? "on" : ""}`}
+                role="switch"
+                aria-checked={isEnabled}
+                onClick={() => onToggleEnabled(!isEnabled)}
+                title={isEnabled ? "Disable provider" : "Enable provider"}
+              >
+                <span className="pd9-switch-knob" />
+              </button>
+            )}
+            {!isEnabled && (
+              <StatusBadge variant="neutral" size="sm">Disabled</StatusBadge>
+            )}
             {catalogEntry?.signupUrl && (
               <a
                 href={catalogEntry.signupUrl}
@@ -882,7 +898,14 @@ export function ProviderDetailScreen({ providerId }: ProviderDetailScreenProps) 
   return (
     <div className="screen-stack pd9-screen">
       <div className="provider-detail-layout pd9-layout">
-        <ProviderDetailHeader provider={provider} />
+        <ProviderDetailHeader provider={provider} onToggleEnabled={async (enabled) => {
+          try {
+            await toggleProviderEnabled(providerId!, enabled);
+            await refreshProvider();
+          } catch (err) {
+            console.error('Failed to toggle provider:', err);
+          }
+        }} />
 
         <ProviderRiskNotice provider={provider} />
 
