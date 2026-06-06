@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from "react";
-import { updateProvider, deleteProvider, getProviderModels, addKiroModelAlias, deleteKiroModelAlias } from "../api/client";
+import { updateProvider, deleteProvider, getProviderModels, addKiroModelAlias, deleteKiroModelAlias, testKiroModel } from "../api/client";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { RefreshButton } from "../components/RefreshButton";
@@ -402,11 +402,33 @@ function ModelsCard({ models, loading, onRefresh, isKiro }: { models: ProviderMo
   const [newTarget, setNewTarget] = useState('');
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [testingModel, setTestingModel] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Map<string, { ok: boolean; latencyMs?: number; error?: string }>>(new Map());
 
   const copyModelId = (modelId: string) => {
     navigator.clipboard.writeText(modelId);
     setCopiedModel(modelId);
     setTimeout(() => setCopiedModel(null), 1500);
+  };
+
+  const handleTestModel = async (modelId: string) => {
+    if (testingModel) return;
+    setTestingModel(modelId);
+    try {
+      const result = await testKiroModel(modelId);
+      setTestResults(prev => new Map(prev).set(modelId, {
+        ok: result.ok,
+        latencyMs: result.latencyMs,
+        error: result.error
+      }));
+    } catch (err) {
+      setTestResults(prev => new Map(prev).set(modelId, {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Test failed'
+      }));
+    } finally {
+      setTestingModel(null);
+    }
   };
 
   const handleAddAlias = async () => {
@@ -456,31 +478,56 @@ function ModelsCard({ models, loading, onRefresh, isKiro }: { models: ProviderMo
         </div>
       ) : (
         <div className="pd9-models-grid">
-          {models.map(model => (
-            <div key={model.id} className="pd9-model-pill" title={model.id}>
-              <span className="pd9-model-icon">
-                {SERVICE_KINDS[model.serviceKind]?.icon || "🧠"}
-              </span>
-              <span className="pd9-model-id">{model.id}</span>
-              <button
-                className="pd9-model-copy"
-                onClick={() => copyModelId(model.id)}
-                title="Copy model ID"
-              >
-                {copiedModel === model.id ? "✓" : <CopyMini />}
-              </button>
-              {isKiro && (
+          {models.map(model => {
+            const result = testResults.get(model.id);
+            const isTesting = testingModel === model.id;
+            const borderStyle = result
+              ? result.ok ? '2px solid var(--success, #22c55e)' : '2px solid var(--danger, #ef4444)'
+              : undefined;
+
+            return (
+              <div key={model.id} className="pd9-model-pill" title={model.id} style={borderStyle ? { border: borderStyle } : undefined}>
+                <span className="pd9-model-icon">
+                  {result ? (result.ok ? "✓" : "✕") : (SERVICE_KINDS[model.serviceKind]?.icon || "🧠")}
+                </span>
+                <span className="pd9-model-id">{model.id}</span>
+                {result?.ok && result.latencyMs && (
+                  <span style={{ fontSize: '0.65rem', color: 'var(--success, #22c55e)' }}>{result.latencyMs}ms</span>
+                )}
+                {result && !result.ok && (
+                  <span style={{ fontSize: '0.65rem', color: 'var(--danger)' }} title={result.error}>✕</span>
+                )}
+                {isKiro && (
+                  <button
+                    className="pd9-model-copy"
+                    onClick={() => handleTestModel(model.id)}
+                    title="Test model"
+                    disabled={isTesting}
+                    style={isTesting ? { animation: 'spin 1s linear infinite' } : undefined}
+                  >
+                    {isTesting ? "⏳" : "🧪"}
+                  </button>
+                )}
                 <button
                   className="pd9-model-copy"
-                  onClick={() => handleDeleteAlias(model.id)}
-                  title="Remove alias"
-                  style={{ color: 'var(--danger)' }}
+                  onClick={() => copyModelId(model.id)}
+                  title="Copy model ID"
                 >
-                  ✕
+                  {copiedModel === model.id ? "✓" : <CopyMini />}
                 </button>
-              )}
-            </div>
-          ))}
+                {isKiro && (
+                  <button
+                    className="pd9-model-copy"
+                    onClick={() => handleDeleteAlias(model.id)}
+                    title="Remove alias"
+                    style={{ color: 'var(--danger)' }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            );
+          })}
 
           {showAddForm ? (
             <div className="pd9-add-model-form">

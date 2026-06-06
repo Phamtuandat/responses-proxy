@@ -273,6 +273,10 @@ export function deleteKiroModelAlias(alias: string) {
   return apiSend<{ ok: boolean; aliases: Record<string, string> }>(`/api/kiro/model-aliases/${encodeURIComponent(alias)}`, "DELETE");
 }
 
+export function testKiroModel(model: string) {
+  return apiSend<{ ok: boolean; model: string; resolvedModel?: string; accountId?: string; region?: string; latencyMs?: number; error?: string }>("/api/kiro/models/test", "POST", { model });
+}
+
 export function getAuditLogs(params?: { limit?: number; event?: string; subjectId?: string }) {
   const query = new URLSearchParams();
   if (params?.limit) query.append("limit", String(params.limit));

@@ -1687,6 +1687,60 @@ app.delete("/api/kiro/model-aliases/:alias", async (request, reply) => {
   return reply.send({ ok: true, aliases: updatedAliases });
 });
 
+app.post("/api/kiro/models/test", async (request, reply) => {
+  if (!config.KIRO_ENABLED) {
+    return reply.code(409).send({
+      error: { type: "configuration_error", code: "KIRO_DISABLED", message: "Kiro is disabled." },
+    });
+  }
+  if (!kiroTokenStore) {
+    return reply.code(409).send({
+      error: { type: "configuration_error", code: "KIRO_UNAVAILABLE", message: "Kiro token store not available." },
+    });
+  }
+
+  const body = request.body as { model?: unknown } | undefined;
+  const model = typeof body?.model === "string" ? body.model.trim() : "";
+  if (!model) {
+    return reply.code(400).send({
+      error: { type: "validation_error", code: "INVALID_MODEL", message: "model is required" },
+    });
+  }
+
+  try {
+    const { resolveKiroCredentials } = await import("./kiro-auth.js");
+    const { mapModelToCodeWhisperer } = await import("./kiro-codewhisperer.js");
+
+    const kiroProvider = providerRepository.getProvider("account-kiro");
+    const aliases = kiroProvider?.capabilities.modelAliases ?? {};
+    const resolvedModel = mapModelToCodeWhisperer(model, aliases);
+
+    // Resolve credentials (ensures at least one account is available + token is fresh)
+    const start = Date.now();
+    const creds = await resolveKiroCredentials({
+      store: kiroTokenStore,
+      defaultRegion: config.KIRO_DEFAULT_REGION,
+      refreshLeadSeconds: config.KIRO_REFRESH_LEAD_SECONDS,
+    });
+    const latencyMs = Date.now() - start;
+
+    return reply.send({
+      ok: true,
+      model,
+      resolvedModel,
+      accountId: creds.accountId,
+      region: creds.region,
+      latencyMs,
+    });
+  } catch (error) {
+    return reply.send({
+      ok: false,
+      model,
+      error: error instanceof Error ? error.message : "Model test failed",
+    });
+  }
+});
+
 app.post("/api/kiro/import", async (request, reply) => {
   if (!config.KIRO_ENABLED) {
     return reply.code(409).send({
