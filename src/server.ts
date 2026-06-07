@@ -4612,6 +4612,10 @@ async function handleAnthropicMessagesRequest(
         reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
         reply.raw.setHeader("Connection", "keep-alive");
         reply.raw.setHeader("X-Accel-Buffering", "no");
+        // reply.header() is ignored after hijack(); set observability headers
+        // directly on the raw socket so streamed bypasses are still traceable.
+        reply.raw.setHeader("x-proxy-request-id", requestId);
+        reply.raw.setHeader("x-proxy-bypass", "claude-cli-housekeeping");
         reply.raw.flushHeaders?.();
         for (const frame of buildBypassSseFrames(parsed.model, bypass.text)) {
           reply.raw.write(frame);
