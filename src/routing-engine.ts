@@ -39,14 +39,56 @@ export type EligibleProvider = {
   provider: RuntimeProviderPreset;
   health: ProviderHealth;
   eligibilityScore: number;
+  /** Cost/quality class of the tier this provider was selected from. */
+  tier?: RoutingTier['tier'];
 };
 
+/**
+ * Resolves real account-pool status for a provider. Supplied by the host so the
+ * engine can reuse ProviderHealthService's account checks (Kiro / ChatGPT OAuth /
+ * API key) instead of guessing. Returns `null` when status is not yet known.
+ */
+export type AccountStatusResolver = (
+  providerId: string,
+) => { hasValidAccounts: boolean; accountsNearExpiry: boolean } | null;
+
 export class RoutingEngine {
+  /** Live in-flight request counts per provider, for least-connections balancing. */
+  private readonly activeConnections = new Map<string, number>();
+  /** Optional real account-status source (wired to ProviderHealthService). */
+  private accountStatusResolver?: AccountStatusResolver;
+
   constructor(
     private readonly providerRepository: RuntimeProviderRepository,
     private readonly healthCheckCache = new Map<string, ProviderHealth>(),
     private readonly healthCacheTtl = 30000 // 30 seconds
   ) {}
+
+  /** Wire a real account-status source (e.g. ProviderHealthService). */
+  setAccountStatusResolver(resolver: AccountStatusResolver): void {
+    this.accountStatusResolver = resolver;
+  }
+
+  /** Record that a request started against a provider (least-connections). */
+  acquireConnection(providerId: string): void {
+    this.activeConnections.set(providerId, (this.activeConnections.get(providerId) ?? 0) + 1);
+  }
+
+  /** Record that a request against a provider finished (clamped at zero). */
+  releaseConnection(providerId: string): void {
+    const current = this.activeConnections.get(providerId) ?? 0;
+    const next = current - 1;
+    if (next <= 0) {
+      this.activeConnections.delete(providerId);
+    } else {
+      this.activeConnections.set(providerId, next);
+    }
+  }
+
+  /** Current in-flight request count for a provider. */
+  getActiveConnections(providerId: string): number {
+    return this.activeConnections.get(providerId) ?? 0;
+  }
 
   /**
    * Select the best provider for a request using multi-tier routing
@@ -88,6 +130,7 @@ export class RoutingEngine {
           );
 
           if (selectedProvider) {
+            this.acquireConnection(selectedProvider.provider.id);
             return {
               success: true,
               provider: selectedProvider.provider,
@@ -155,7 +198,8 @@ export class RoutingEngine {
             binding,
             provider,
             health,
-            eligibilityScore
+            eligibilityScore,
+            tier: tier.tier
           });
         }
       } catch (error) {
@@ -369,13 +413,23 @@ export class RoutingEngine {
     let accountsNearExpiry = false;
 
     if (provider.authMode === 'chatgpt_oauth') {
-      // TODO: Check ChatGPT OAuth account status
-      // For now, assume valid if provider has chatgptAccountId
-      hasValidAccounts = !!provider.chatgptAccountId;
+      const resolved = this.accountStatusResolver?.(providerId);
+      if (resolved) {
+        hasValidAccounts = resolved.hasValidAccounts;
+        accountsNearExpiry = resolved.accountsNearExpiry;
+      } else {
+        // No live status yet (health check not run) — fall back to config presence.
+        hasValidAccounts = !!provider.chatgptAccountId;
+      }
     } else if (provider.authMode === 'kiro') {
-      // TODO: Check Kiro account status
-      // For now, assume valid
-      hasValidAccounts = true;
+      const resolved = this.accountStatusResolver?.(providerId);
+      if (resolved) {
+        hasValidAccounts = resolved.hasValidAccounts;
+        accountsNearExpiry = resolved.accountsNearExpiry;
+      } else {
+        // No live status yet — assume valid so a freshly started engine still routes.
+        hasValidAccounts = true;
+      }
     } else if (provider.authMode === 'api_key') {
       // Check if provider has API keys
       hasValidAccounts = provider.providerApiKeys.length > 0;
@@ -417,18 +471,37 @@ export class RoutingEngine {
   }
 
   private selectByCost(providers: EligibleProvider[]): EligibleProvider {
-    // For now, prefer providers in 'cheap' or 'free' tiers
-    // TODO: Implement actual cost calculation based on provider pricing
-    const cheapProviders = providers.filter(p =>
-      p.provider.name.toLowerCase().includes('free') ||
-      p.provider.name.toLowerCase().includes('cheap')
-    );
+    // Rank by relative cost (cheapest first), then by health as a tie-breaker.
+    // There is no per-token price in the data model yet, so cost is derived from
+    // the provider's tier/platform classification. When prices are equal (or
+    // unknown) the healthiest provider wins.
+    const ranked = [...providers].sort((a, b) => {
+      const costDelta = this.providerCostRank(a) - this.providerCostRank(b);
+      if (costDelta !== 0) {
+        return costDelta;
+      }
+      return b.eligibilityScore - a.eligibilityScore;
+    });
+    return ranked[0];
+  }
 
-    if (cheapProviders.length > 0) {
-      return this.selectByHealth(cheapProviders);
-    }
+  /**
+   * Relative cost rank for a provider (lower = cheaper). Derived from the tier
+   * classification and platform/name keywords since no per-token pricing exists
+   * in the schema yet. `free` < `cheap`/open-weight < default < `subscription`/
+   * premium models (opus, gpt-5, etc.).
+   */
+  private providerCostRank(eligible: EligibleProvider): number {
+    const tier = eligible.tier;
+    if (tier === 'free') return 0;
+    if (tier === 'cheap') return 1;
+    if (tier === 'subscription') return 3;
 
-    return this.selectByHealth(providers);
+    const haystack = `${eligible.provider.name} ${eligible.provider.capabilities.accountPlatform ?? ''}`.toLowerCase();
+    if (/(free|gemini-free|cloudflare|nvidia|nim)/.test(haystack)) return 0;
+    if (/(deepseek|groq|mistral|openrouter|qwen|glm|minimax|cheap|open-?weight)/.test(haystack)) return 1;
+    if (/(opus|gpt-5|claude-code|subscription|premium|kiro|codex)/.test(haystack)) return 3;
+    return 2;
   }
 
   private selectRoundRobin(providers: EligibleProvider[], request: RoutingRequest): EligibleProvider {
@@ -439,9 +512,20 @@ export class RoutingEngine {
   }
 
   private selectLeastConnections(providers: EligibleProvider[]): EligibleProvider {
-    // TODO: Implement actual connection tracking
-    // For now, fall back to health-based selection
-    return this.selectByHealth(providers);
+    // Pick the provider with the fewest in-flight requests; break ties by health.
+    let best = providers[0];
+    let bestConnections = this.getActiveConnections(best.provider.id);
+    for (const candidate of providers.slice(1)) {
+      const connections = this.getActiveConnections(candidate.provider.id);
+      if (
+        connections < bestConnections ||
+        (connections === bestConnections && candidate.eligibilityScore > best.eligibilityScore)
+      ) {
+        best = candidate;
+        bestConnections = connections;
+      }
+    }
+    return best;
   }
 
   private selectRandom(providers: EligibleProvider[]): EligibleProvider {

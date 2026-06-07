@@ -236,6 +236,20 @@ const healthWebSocketManager = new HealthWebSocketManager(
   config.ROUTING_WEBSOCKET_BROADCAST_INTERVAL // Use configurable broadcast interval
 );
 
+// Wire the real account-status resolver from the health service into the
+// routing engine so provider eligibility checks use live Kiro/OAuth data
+// instead of hardcoded assumptions.
+routingEngine.setAccountStatusResolver((providerId) => {
+  const metrics = providerHealthService.getProviderHealth(providerId);
+  if (!metrics) {
+    return null;
+  }
+  return {
+    hasValidAccounts: metrics.accountStatus.hasValidAccounts,
+    accountsNearExpiry: metrics.accountStatus.accountsNearExpiry,
+  };
+});
+
 // Create routing integration context
 const routingIntegrationContext: RoutingIntegrationContext = {
   routingComboRepository,
@@ -4222,6 +4236,7 @@ async function handleResponsesRequest(
         Date.now() - startedAt,
         false // not an error
       );
+      routingEngine.releaseConnection(selectedProvider.id);
 
       request.log.info(
         {
@@ -4382,6 +4397,7 @@ async function handleResponsesRequest(
       Date.now() - startedAt,
       false // not an error
     );
+    routingEngine.releaseConnection(selectedProvider.id);
 
     reply.send(payload);
   } catch (error) {
@@ -4428,7 +4444,7 @@ async function handleResponsesRequest(
       Date.now() - startedAt,
       true // is an error
     );
-
+    routingEngine.releaseConnection(selectedProvider.id);
     const resolvedError = resolveProxyError({
       statusCode,
       message: error instanceof Error ? error.message : "Unknown proxy error",
