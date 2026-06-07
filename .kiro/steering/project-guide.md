@@ -15,13 +15,13 @@
 - **Backend**: Fastify + TypeScript, compiled with tsc → `dist/server.js`
 - **Frontend**: React + TypeScript, built with Vite → `dist/client/`
 - **Database**: SQLite via better-sqlite3 (runtime state, accounts, sessions)
-- **Deployment**: Docker Compose on OMV (port 8318), GitHub Actions CI/CD
+- **Deployment**: npm global package `responses-proxy` (port 8318). No Docker/CI-CD.
 - **Clients**: Codex, Hermes, Telegram bot — all route through the proxy
 
 ## Source of Truth
 
 - `README.md` — project docs and setup
-- `docker-compose.yml` — service definitions
+- `cli/package.json` — npm package definition (`responses-proxy`)
 - `env/dev.mac.env` — dev environment variables
 - `env/prod.omv.env` — production environment variables
 - `docs/*` — detailed guides
@@ -43,15 +43,15 @@
 ## Environments
 
 - **dev**: Mac local only. Proxy at `http://127.0.0.1:8318`.
-- **prod**: OMV Docker host. Public at `https://proxy.taskhub.io.vn`. Internal at `http://192.168.0.201:8318`.
-- **CI/CD**: Push to `main` triggers GitHub Actions (typecheck → test → build → Docker publish → optional OMV deploy).
+- **prod**: OMV host. Public at `https://proxy.taskhub.io.vn`. Internal at `http://192.168.0.201:8318`.
+- **Distribution**: published to npm as `responses-proxy`; install/upgrade with `npm install -g responses-proxy`. No GitHub Actions / Docker pipeline.
 
 ## Working Rules
 
 - Never modify secrets in env files.
 - Never revert unrelated changes from other contributors.
 - When changing logic, update tests in the same commit.
-- When touching deployment, verify with `docker ps`, `lsof`, and workflow status.
+- When touching deployment, verify with `lsof -i :8318`, `responses-proxy` CLI status, and `curl /health`.
 - Keep client-side code zero-`fetch()` in connection/account management — use the typed API client from `client/src/api/client.ts`.
 
 ## Key Flows
@@ -73,11 +73,12 @@
 - `/api/client-configs/status` shows current state
 - Backups are mandatory before any config mutation
 
-### Deployment (OMV)
-- Docker Compose with services: `responses-proxy`, `telegram-bot`, `telegram-bot-worker`
-- Persistent data in `./logs/` (SQLite DBs, session files)
-- Host mounts: `~/.hermes/config.yaml`, `~/.codex/`
-- Health gate: `curl http://127.0.0.1:8318/health` must return `ok: true`
+### Deployment (npm)
+- Install globally: `npm install -g responses-proxy` (publishes from `cli/`).
+- Runs `dist/server.js`; persistent data under `~/.responses-proxy/` (SQLite DBs, session files, `server.log`).
+- Reads Kiro tokens from `~/.9router/db/data.sqlite` (read-only by default).
+- Upgrade by bumping `cli/package.json` version, `cd cli && npm publish`, then `npm install -g responses-proxy@latest` on the host.
+- Health gate: `curl http://127.0.0.1:8318/health` must return `ok: true`.
 
 ## Client Routing
 
