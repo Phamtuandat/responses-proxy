@@ -112,6 +112,11 @@ import {
   buildCountTokensResponse,
   parseAnthropicRequest,
 } from "./anthropic-messages.js";
+import {
+  detectAnthropicBypass,
+  buildBypassMessage,
+  buildBypassSseFrames,
+} from "./anthropic-bypass.js";
 import { RoutingComboRepository } from "./routing-combo-repository.js";
 import { RoutingEngine } from "./routing-engine.js";
 import { RoutingSimulationEngine } from "./routing-simulation-engine.js";
@@ -4584,6 +4589,38 @@ async function handleAnthropicMessagesRequest(
   if (countOnly) {
     reply.header("x-proxy-request-id", requestId);
     return reply.send(buildCountTokensResponse(parsed.inputText));
+  }
+
+  // Short-circuit Claude Code CLI housekeeping requests (title/warmup/count/
+  // topic-naming) locally so they never reach the Kiro account — this is the
+  // main driver of upstream 429 throttling. Mirrors 9router's bypass handler.
+  if (config.KIRO_CLI_BYPASS_ENABLED) {
+    const userAgent = readHeaderString(request.headers["user-agent"]) ?? "";
+    const bypass = detectAnthropicBypass(body, userAgent, {
+      namingEnabled: config.KIRO_CLI_BYPASS_NAMING,
+    });
+    if (bypass) {
+      request.log.info(
+        { requestId, clientRoute, provider: provider.id },
+        "kiro anthropic messages request bypassed (claude-cli housekeeping)",
+      );
+      reply.header("x-proxy-request-id", requestId);
+      reply.header("x-proxy-bypass", "claude-cli-housekeeping");
+      if (parsed.stream) {
+        reply.hijack();
+        reply.raw.setHeader("Content-Type", "text/event-stream");
+        reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+        reply.raw.setHeader("Connection", "keep-alive");
+        reply.raw.setHeader("X-Accel-Buffering", "no");
+        reply.raw.flushHeaders?.();
+        for (const frame of buildBypassSseFrames(parsed.model, bypass.text)) {
+          reply.raw.write(frame);
+        }
+        reply.raw.end();
+        return reply;
+      }
+      return reply.send(buildBypassMessage(parsed.model, bypass.text));
+    }
   }
 
   if (!kiroTokenStore) {

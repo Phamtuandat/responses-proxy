@@ -254,8 +254,20 @@ const envSchema = z.object({
     .transform((value) => (value?.trim() ? value.trim() : defaultKiroDbPath())),
   KIRO_DEFAULT_REGION: z.string().min(1).default("us-east-1"),
   KIRO_REFRESH_LEAD_SECONDS: z.coerce.number().int().nonnegative().default(120),
-  KIRO_RETRY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(6).default(3),
-  KIRO_RETRY_BASE_DELAY_MS: z.coerce.number().int().nonnegative().default(800),
+  KIRO_RETRY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(8).default(5),
+  KIRO_RETRY_BASE_DELAY_MS: z.coerce.number().int().nonnegative().default(1000),
+  KIRO_RETRY_MAX_DELAY_MS: z.coerce.number().int().nonnegative().default(15000),
+  // Short-circuit Claude Code CLI housekeeping requests (title/warmup/count/
+  // topic-naming) locally instead of forwarding them to Kiro, cutting upstream
+  // load and 429 throttling. Mirrors 9router's bypass handler.
+  KIRO_CLI_BYPASS_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  KIRO_CLI_BYPASS_NAMING: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
   KIRO_WRITE_BACK_ENABLED: z
     .string()
     .optional()
