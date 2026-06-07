@@ -780,6 +780,57 @@ app.post("/api/analytics/response-cache/flush", async (request, reply) => {
   return reply.send({ deleted });
 });
 
+app.get("/api/endpoint-info", async (_request, reply) => {
+  // Enumerate all reachable IPv4 addresses on this host so the dashboard can
+  // display every URL the proxy is listening on. Mirrors the four lines the
+  // server logs at startup ("Server listening at http://...").
+  type NetIface = { kind: "loopback" | "lan" | "tailscale" | "other"; address: string };
+  const addresses: NetIface[] = [];
+  const seen = new Set<string>();
+  const interfaces = os.networkInterfaces();
+  for (const list of Object.values(interfaces)) {
+    if (!list) continue;
+    for (const info of list) {
+      if (info.family !== "IPv4") continue;
+      if (seen.has(info.address)) continue;
+      seen.add(info.address);
+      let kind: NetIface["kind"] = "lan";
+      if (info.internal || info.address === "127.0.0.1") {
+        kind = "loopback";
+      } else if (info.address.startsWith("100.")) {
+        // Tailscale CGNAT range
+        kind = "tailscale";
+      } else if (
+        !info.address.startsWith("192.168.") &&
+        !info.address.startsWith("10.") &&
+        !/^172\.(1[6-9]|2\d|3[01])\./.test(info.address)
+      ) {
+        kind = "other";
+      }
+      addresses.push({ kind, address: info.address });
+    }
+  }
+
+  // Stable order: loopback first, then LAN, then Tailscale, then other.
+  const order: Record<NetIface["kind"], number> = { loopback: 0, lan: 1, tailscale: 2, other: 3 };
+  addresses.sort((a, b) => order[a.kind] - order[b.kind] || a.address.localeCompare(b.address));
+
+  const port = config.PORT;
+  return reply.send({
+    ok: true,
+    service: "responses-proxy",
+    port,
+    host: config.HOST,
+    endpoints: addresses.map((entry) => ({
+      kind: entry.kind,
+      address: entry.address,
+      url: `http://${entry.address}:${port}`,
+      apiUrl: `http://${entry.address}:${port}/v1`,
+    })),
+    publicUrl: process.env.PROXY_PUBLIC_URL?.trim() || null,
+  });
+});
+
 app.get("/api/stats/usage", async (_request, reply) => {
   try {
     return reply.send({

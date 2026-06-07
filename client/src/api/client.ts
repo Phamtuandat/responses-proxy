@@ -14,6 +14,7 @@ import type {
   ClientConfigsStatusResponse,
   ClientTokenLimitResponse,
   ClientTokenLimitsResponse,
+  EndpointInfoResponse,
   HealthResponse,
   KiroAccountsResponse,
   KiroAccountResponse,
@@ -102,6 +103,10 @@ export function logoutDashboard() {
 
 export function getHealth() {
   return apiGet<HealthResponse>("/health");
+}
+
+export function getEndpointInfo() {
+  return apiGet<EndpointInfoResponse>("/api/endpoint-info");
 }
 
 export function getProviders() {

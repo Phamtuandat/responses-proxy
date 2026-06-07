@@ -1,394 +1,297 @@
-import { useState, useEffect, useCallback } from "react";
+/**
+ * Endpoint screen — 9router-inspired layout.
+ *
+ * Lists every URL the proxy is reachable on (loopback, LAN, Tailscale,
+ * configured public URL) as compact rows with copy buttons. Below that, a
+ * quick-setup card with copy-paste env vars for popular AI tools, and the
+ * route API-key manager.
+ *
+ * No fake metrics, no fake routing pipeline visualization — those belong
+ * on the dashboard / quota tracker. This page is just the endpoint surface.
+ */
+
+import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import { SurfaceCard } from "../components/SurfaceCard";
-import { StatCard } from "../components/StatCard";
-import { StatusBadge } from "../components/StatusBadge";
 import { RefreshButton } from "../components/RefreshButton";
+import { StatusBadge } from "../components/StatusBadge";
 import { ApiKeyManager } from "../components/ApiKeyManager";
 import { EndpointIcon, AlertIcon } from "../components/icons";
-import { getHealth, getUsageStats } from "../api/client";
-import type { HealthResponse, UsageStatsResponse } from "../api/types";
-import { useProviders, useAutoHealthMonitoring } from "../features/providers/providerHooks";
-import type { Provider } from "../features/providers/providerTypes";
-import { formatNumber, formatPercent } from "../lib/format";
+import { getEndpointInfo, getHealth } from "../api/client";
+import type {
+  EndpointEntry,
+  EndpointInfoResponse,
+  HealthResponse,
+} from "../api/types";
 
-// Helper function to render syntax-highlighted terminal commands
-function renderSyntaxHighlightedCommand(cmd: string, type: "claude" | "cursor" | "openai") {
-  if (type === "cursor") {
-    return cmd.split("\n").map((line, idx) => {
-      if (line.trim().startsWith("//")) {
-        return (
-          <div key={idx} className="terminal-comment">
-            {line}
+type EndpointKind = EndpointEntry["kind"] | "public";
+
+type EndpointRow = {
+  id: string;
+  kind: EndpointKind;
+  label: string;
+  description?: string;
+  apiUrl: string;
+};
+
+const KIND_LABELS: Record<EndpointKind, string> = {
+  loopback: "Local",
+  lan: "LAN",
+  tailscale: "Tailscale",
+  other: "Network",
+  public: "Public",
+};
+
+const KIND_DESCRIPTIONS: Record<EndpointKind, string> = {
+  loopback: "Same machine only",
+  lan: "Reachable on the local network",
+  tailscale: "Reachable on your tailnet",
+  other: "Externally routable address",
+  public: "Configured via PROXY_PUBLIC_URL",
+};
+
+export function EndpointScreen() {
+  const [info, setInfo] = useState<EndpointInfoResponse | null>(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setRefreshing(true);
+      setError(null);
+      const [endpointInfo, healthInfo] = await Promise.all([getEndpointInfo(), getHealth()]);
+      setInfo(endpointInfo);
+      setHealth(healthInfo);
+    } catch (err) {
+      console.error("Failed to load endpoint info", err);
+      setError(err instanceof Error ? err.message : "Could not load endpoint information");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const rows: EndpointRow[] = (() => {
+    if (!info) return [];
+    const result: EndpointRow[] = info.endpoints.map((entry, index) => ({
+      id: `${entry.kind}-${entry.address}-${index}`,
+      kind: entry.kind,
+      label: KIND_LABELS[entry.kind] ?? entry.kind,
+      description: KIND_DESCRIPTIONS[entry.kind],
+      apiUrl: entry.apiUrl,
+    }));
+    if (info.publicUrl) {
+      const trimmed = info.publicUrl.replace(/\/+$/, "");
+      result.push({
+        id: "public",
+        kind: "public",
+        label: KIND_LABELS.public,
+        description: KIND_DESCRIPTIONS.public,
+        apiUrl: trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`,
+      });
+    }
+    return result;
+  })();
+
+  const primaryUrl = rows.find((r) => r.kind === "public")?.apiUrl
+    ?? rows.find((r) => r.kind === "loopback")?.apiUrl
+    ?? `${window.location.origin}/v1`;
+
+  return (
+    <div className="screen-stack">
+      <PageHeader
+        icon={EndpointIcon}
+        title="Endpoint"
+        description="Reach the proxy from any of these URLs. Use the API URL in your AI tool's base-url setting."
+        actions={<RefreshButton onClick={load} isRefreshing={refreshing} />}
+      />
+
+      {error && (
+        <div className="error-banner" style={{
+          background: "var(--danger-soft)",
+          border: "1px solid var(--danger)",
+          borderRadius: "var(--radius-md)",
+          padding: "var(--space-4)",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-3)",
+        }}>
+          <AlertIcon className="status-icon status-error" style={{ width: 20, height: 20 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, color: "var(--danger)" }}>Connection issue</div>
+            <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
+              {error}
+            </div>
           </div>
-        );
-      }
-      const parts = line.split(":");
-      if (parts.length >= 2) {
-        const key = parts[0];
-        const val = parts.slice(1).join(":");
-        return (
-          <div key={idx}>
-            <span className="terminal-key">{key}</span>:
-            <span className="terminal-value">{val}</span>
+          <button className="button-secondary" onClick={load}>Retry</button>
+        </div>
+      )}
+
+      <SurfaceCard
+        title="API Endpoint"
+        description={
+          health
+            ? health.ok
+              ? `Service ${health.service ?? "responses-proxy"} is online and listening on port ${info?.port ?? ""}.`
+              : "Service is not reporting healthy."
+            : "Loading service status..."
+        }
+        actions={
+          <StatusBadge variant={health?.ok ? "success" : "warning"}>
+            {health?.ok ? "Online" : health ? "Offline" : "Loading"}
+          </StatusBadge>
+        }
+      >
+        {loading && rows.length === 0 ? (
+          <p style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+            Loading endpoint URLs...
+          </p>
+        ) : rows.length === 0 ? (
+          <p style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+            No reachable URLs detected.
+          </p>
+        ) : (
+          <div className="endpoint-rows">
+            {rows.map((row) => (
+              <EndpointUrlRow key={row.id} row={row} />
+            ))}
           </div>
-        );
-      }
-      return <div key={idx} className="terminal-text">{line}</div>;
-    });
-  } else {
-    return cmd.split("\n").map((line, idx) => {
-      if (line.startsWith("export ")) {
-        const parts = line.split("=");
-        const variable = parts[0];
-        const value = parts.slice(1).join("=");
-        return (
-          <div key={idx}>
-            <span className="command-highlight">export</span>{" "}
-            <span className="variable-highlight">{variable.replace("export ", "")}</span>=
-            <span className="terminal-value">{value}</span>
-          </div>
-        );
-      }
-      return <div key={idx}>{line}</div>;
-    });
+        )}
+      </SurfaceCard>
+
+      <QuickSetupCard endpointUrl={primaryUrl} />
+
+      <ApiKeyManager />
+    </div>
+  );
+}
+
+function EndpointUrlRow({ row }: { row: EndpointRow }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(row.apiUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard write blocked; ignore */
+    }
+  };
+
+  return (
+    <div className="endpoint-row">
+      <div className="endpoint-row-label">
+        <StatusBadge variant={row.kind === "public" ? "accent" : "neutral"}>
+          {row.label}
+        </StatusBadge>
+        {row.description && (
+          <span className="endpoint-row-description">{row.description}</span>
+        )}
+      </div>
+      <div className="endpoint-row-url-wrap">
+        <input
+          className="endpoint-row-input"
+          readOnly
+          value={row.apiUrl}
+          onFocus={(e) => e.currentTarget.select()}
+        />
+        <button
+          type="button"
+          className="endpoint-row-copy"
+          onClick={handleCopy}
+          title={copied ? "Copied" : "Copy URL"}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Quick Setup Card ────────────────────────────────────────────────────────
+
+type SetupTool = "claude" | "codex" | "openai" | "cursor";
+
+const SETUP_TABS: { id: SetupTool; label: string }[] = [
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "openai", label: "OpenAI CLI" },
+  { id: "cursor", label: "Cursor" },
+];
+
+function buildSetupCommand(tool: SetupTool, endpointUrl: string): { lang: "bash" | "json"; text: string } {
+  switch (tool) {
+    case "claude":
+      return {
+        lang: "bash",
+        text: `# In ~/.claude/settings.json env block:
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "${endpointUrl.replace(/\/$/, "")}",
+    "ANTHROPIC_AUTH_TOKEN": "<route api key>"
+  }
+}`,
+      };
+    case "codex":
+      return {
+        lang: "bash",
+        text: `export OPENAI_BASE_URL="${endpointUrl.replace(/\/$/, "")}"
+export OPENAI_API_KEY="<route api key>"`,
+      };
+    case "openai":
+      return {
+        lang: "bash",
+        text: `export OPENAI_BASE_URL="${endpointUrl.replace(/\/$/, "")}"
+export OPENAI_API_KEY="<route api key>"`,
+      };
+    case "cursor":
+      return {
+        lang: "json",
+        text: `// In Cursor settings (Settings → Models → OpenAI):
+{
+  "base_url": "${endpointUrl.replace(/\/$/, "")}",
+  "api_key": "<route api key>"
+}`,
+      };
   }
 }
 
-interface ServerStatusCardProps {
-  health: HealthResponse | null;
-  loading: boolean;
-  endpointUrl: string;
-  onRefresh: () => void;
-}
-
-function ServerStatusCard({ health, loading, endpointUrl, onRefresh }: ServerStatusCardProps) {
-  const isRunning = health?.ok ?? false;
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(endpointUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <SurfaceCard
-      title="Server Status"
-      description="Local router server health and information"
-      actions={<RefreshButton onClick={onRefresh} isRefreshing={loading} />}
-    >
-      <div className="endpoint-status-grid">
-        <div className="status-item">
-          <div className="status-indicator">
-            {isRunning ? (
-              <span className="status-pulse-dot" />
-            ) : (
-              <AlertIcon className="status-icon status-error" />
-            )}
-          </div>
-          <div className="status-details">
-            <div className="status-label">Server</div>
-            <div className="status-value">
-              {isRunning ? "Running" : "Stopped"}
-            </div>
-          </div>
-        </div>
-
-        <div className="status-item">
-          <div className="status-details">
-            <div className="status-label">Service</div>
-            <div className="status-value">{health?.service || "responses-proxy"}</div>
-          </div>
-        </div>
-
-        <div className="status-item">
-          <div className="status-details">
-            <div className="status-label">Status</div>
-            <div className="status-value">{isRunning ? "Online" : "Offline"}</div>
-          </div>
-        </div>
-
-        <div className="status-item">
-          <div className="status-details">
-            <div className="status-label">Port</div>
-            <div className="status-value">{window.location.port || "8318"}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="endpoint-url-section">
-        <div className="endpoint-label">Local Endpoint</div>
-        <div className="endpoint-url-container">
-          <code className="endpoint-url">{endpointUrl}</code>
-          <button
-            className="copy-button"
-            onClick={handleCopy}
-            title="Copy endpoint URL"
-          >
-            {copied ? "Copied!" : "Copy"}
-          </button>
-        </div>
-      </div>
-    </SurfaceCard>
-  );
-}
-
-interface ActiveProviderCardProps {
-  health: HealthResponse | null;
-  providers: Provider[];
-}
-
-function ActiveProviderCard({ health, providers }: ActiveProviderCardProps) {
-  const activeProviderId = health?.activeProviderId;
-  const activeProvider = providers.find(p => p.id === activeProviderId);
-
-  const displayName = activeProvider?.displayName || activeProviderId || "None";
-  const tier = activeProvider?.tier || "n/a";
-  const status = activeProvider?.healthStatus || "unknown";
-  
-  const activeModel = activeProvider?.models?.[0]?.id || 
-                      (activeProvider as any)?.capabilities?.defaultModels?.[0] ||
-                      "auto";
-
-  // Class tone mappings and icons for vendors
-  const { cardClass, icon } = (() => {
-    const id = activeProviderId?.toLowerCase() || "";
-    if (id.includes("claude") || id.includes("anthropic")) {
-      return { cardClass: "active-provider-card-anthropic", icon: "🦉" };
-    } else if (id.includes("openai") || id.includes("codex") || id.includes("gpt")) {
-      return { cardClass: "active-provider-card-openai", icon: "🧠" };
-    } else if (id.includes("gemini") || id.includes("google")) {
-      return { cardClass: "active-provider-card-google", icon: "✨" };
-    } else if (id.includes("kiro")) {
-      return { cardClass: "active-provider-card-kiro", icon: "⚡" };
-    } else {
-      return { cardClass: "active-provider-card-default", icon: "🔌" };
-    }
-  })();
-
-  return (
-    <SurfaceCard
-      title="Active Provider"
-      description="Currently selected provider for new requests"
-      className={cardClass}
-    >
-      <div className="active-provider-info">
-        <div className="provider-header-row">
-          <div className="provider-vendor-icon">
-            {icon}
-          </div>
-          <div className="provider-details-wrapper">
-            <div className="provider-name">
-              {displayName}
-            </div>
-            <div className="provider-meta-row">
-              <StatusBadge variant="accent">
-                {tier}
-              </StatusBadge>
-              <StatusBadge 
-                variant={status === "healthy" ? "success" : status === "degraded" ? "warning" : "danger"} 
-              >
-                {status}
-              </StatusBadge>
-            </div>
-          </div>
-        </div>
-        <div className="provider-model-wrapper">
-          <div className="model-label">Active Model</div>
-          <code className="model-name">{activeModel}</code>
-        </div>
-      </div>
-    </SurfaceCard>
-  );
-}
-
-interface FallbackTiersCardProps {
-  providers: Provider[];
-}
-
-function FallbackTiersCard({ providers }: FallbackTiersCardProps) {
-  const tiers = ["subscription", "cheap", "free"] as const;
-  
-  const tierData = tiers.map(tier => {
-    const tierProviders = providers.filter(p => p.tier === tier);
-    const configuredProviders = tierProviders.filter(p => p.configured);
-    const healthyCount = configuredProviders.filter(p => p.healthStatus === "healthy").length;
-    
-    let status: "healthy" | "warning" | "not_configured" = "not_configured";
-    if (configuredProviders.length > 0) {
-      status = healthyCount > 0 ? "healthy" : "warning";
-    }
-
-    const usagePercent = configuredProviders.length > 0
-      ? (healthyCount / configuredProviders.length) * 100
-      : 0;
-
-    const tierLabels = {
-      subscription: "Subscription",
-      cheap: "Cheap",
-      free: "Free"
-    };
-
-    return {
-      tier: tierLabels[tier],
-      providers: configuredProviders.length,
-      healthy: healthyCount,
-      status,
-      usagePercent
-    };
-  });
-
-  return (
-    <SurfaceCard
-      title="Fallback Tiers"
-      description="Provider tier health and fallback readiness"
-    >
-      <div className="fallback-tiers-list">
-        {tierData.map((tier) => (
-          <div key={tier.tier} className="fallback-tier-item">
-            <div className="tier-header">
-              <div className="tier-name">{tier.tier}</div>
-              <div className="tier-stats">
-                {tier.providers > 0 ? (
-                  `${tier.healthy}/${tier.providers} healthy`
-                ) : (
-                  "Not configured"
-                )}
-              </div>
-            </div>
-
-            {tier.providers > 0 ? (
-              <>
-                <div className="tier-progress-container">
-                  <div 
-                    className={`tier-progress-fill tier-progress-fill-${tier.status}`} 
-                    style={{ width: `${tier.usagePercent}%` }} 
-                  />
-                </div>
-                <div className="tier-footer">
-                  <StatusBadge
-                    variant={tier.status === "healthy" ? "success" : "warning"}
-                  >
-                    {tier.status === "healthy" ? "Ready" : "Warning"}
-                  </StatusBadge>
-                </div>
-              </>
-            ) : (
-              <div className="tier-footer">
-                <StatusBadge variant="neutral">
-                  Disabled
-                </StatusBadge>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </SurfaceCard>
-  );
-}
-
-interface RoutingPipelineCardProps {
-  health: HealthResponse | null;
-  providers: Provider[];
-  endpointUrl: string;
-}
-
-function RoutingPipelineCard({ health, providers, endpointUrl }: RoutingPipelineCardProps) {
-  const activeProviderId = health?.activeProviderId;
-  const activeProvider = providers.find(p => p.id === activeProviderId);
-  const activeProviderName = activeProvider?.displayName || activeProviderId || "No Active Upstream";
-  const activeTier = activeProvider?.tier ? `${activeProvider.tier.toUpperCase()} Tier` : "Routing Pipeline";
-
-  const routingPipeline = [
-    { step: "Client CLI", description: "Claude Code / Cline Client", active: true },
-    { step: "Local Proxy", description: endpointUrl.replace(/^https?:\/\//, ""), active: true },
-    { step: "Router Engine", description: "Failover Strategy Routing", active: true },
-    { step: activeTier, description: activeProviderName, active: activeProvider !== undefined },
-    { step: "Response Stream", description: "Dynamic cache delivery", active: activeProvider !== undefined }
-  ];
-
-  return (
-    <SurfaceCard
-      title="Routing Pipeline"
-      description="Request flow through the router system"
-    >
-      <div className="pipeline-container-premium">
-        {routingPipeline.map((step, index) => (
-          <div 
-            key={step.step} 
-            className={`pipeline-step-premium ${step.active ? "active" : ""}`}
-          >
-            <div className="step-indicator-premium">
-              {index + 1}
-            </div>
-            <div className="pipeline-step-info">
-              <div className="pipeline-step-title">{step.step}</div>
-              <div className="pipeline-step-desc">{step.description}</div>
-            </div>
-            <div className="step-status">
-              <StatusBadge variant={step.active ? "success" : "neutral"}>
-                {step.active ? "Active" : "Pending"}
-              </StatusBadge>
-            </div>
-          </div>
-        ))}
-      </div>
-    </SurfaceCard>
-  );
-}
-
 function QuickSetupCard({ endpointUrl }: { endpointUrl: string }) {
-  const [activeTab, setActiveTab] = useState<"claude" | "cursor" | "openai">("claude");
+  const [activeTab, setActiveTab] = useState<SetupTool>("claude");
   const [copied, setCopied] = useState(false);
 
-  const setupCommands = {
-    claude: {
-      tool: "Claude Code",
-      command: `export ANTHROPIC_API_KEY="your-key-here"\nexport ANTHROPIC_BASE_URL="${endpointUrl}"`
-    },
-    cursor: {
-      tool: "Cursor",
-      command: `// In Cursor settings:\n{\n  "anthropic.baseURL": "${endpointUrl}",\n  "anthropic.apiKey": "your-key-here"\n}`
-    },
-    openai: {
-      tool: "OpenAI CLI",
-      command: `export OPENAI_API_KEY="your-key-here"\nexport OPENAI_BASE_URL="${endpointUrl}"`
+  const setup = buildSetupCommand(activeTab, endpointUrl);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(setup.text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
     }
-  };
-
-  const currentSetup = setupCommands[activeTab];
-
-  const copyCommand = (command: string) => {
-    navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
     <SurfaceCard
       title="Quick Setup"
-      description="Copy configuration for popular AI tools"
+      description="Copy-paste configuration for popular AI tools."
     >
       <div className="setup-tab-bar">
-        <button 
-          className={`setup-tab-btn ${activeTab === "claude" ? "active" : ""}`}
-          onClick={() => setActiveTab("claude")}
-        >
-          Claude Code
-        </button>
-        <button 
-          className={`setup-tab-btn ${activeTab === "cursor" ? "active" : ""}`}
-          onClick={() => setActiveTab("cursor")}
-        >
-          Cursor
-        </button>
-        <button 
-          className={`setup-tab-btn ${activeTab === "openai" ? "active" : ""}`}
-          onClick={() => setActiveTab("openai")}
-        >
-          OpenAI CLI
-        </button>
+        {SETUP_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            className={`setup-tab-btn ${activeTab === tab.id ? "active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       <div className="terminal-wrapper">
@@ -398,165 +301,54 @@ function QuickSetupCard({ endpointUrl }: { endpointUrl: string }) {
             <span className="terminal-dot terminal-dot-yellow" />
             <span className="terminal-dot terminal-dot-green" />
           </div>
-          <span className="terminal-title">{activeTab === "cursor" ? "JSON" : "BASH"}</span>
-          <button
-            className="copy-command-button"
-            onClick={() => copyCommand(currentSetup.command)}
-          >
-            {copied ? "Copied!" : "Copy"}
+          <span className="terminal-title">{setup.lang.toUpperCase()}</span>
+          <button type="button" className="copy-command-button" onClick={copy}>
+            {copied ? "Copied" : "Copy"}
           </button>
         </div>
         <div className="terminal-body">
-          <pre>
-            <code>
-              {renderSyntaxHighlightedCommand(currentSetup.command, activeTab)}
-            </code>
-          </pre>
+          <pre><code>{renderHighlighted(setup.text, setup.lang)}</code></pre>
         </div>
       </div>
     </SurfaceCard>
   );
 }
 
-export function EndpointScreen() {
-  const { providers, loading: providersLoading, refresh: refreshProviders } = useProviders();
-  useAutoHealthMonitoring(true);
-
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [usageStats, setUsageStats] = useState<UsageStatsResponse | null>(null);
-  const [loadingStats, setLoadingStats] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadStats = useCallback(async () => {
-    try {
-      setLoadingStats(true);
-      setError(null);
-      const [healthData, usageData] = await Promise.all([
-        getHealth(),
-        getUsageStats(),
-      ]);
-      setHealth(healthData);
-      setUsageStats(usageData);
-    } catch (err) {
-      console.error("Failed to load telemetry", err);
-      setError(err instanceof Error ? err.message : "Failed to connect to local proxy. Make sure it is running.");
-    } finally {
-      setLoadingStats(false);
+function renderHighlighted(source: string, lang: "bash" | "json"): JSX.Element[] {
+  const lines = source.split("\n");
+  return lines.map((line, idx) => {
+    if (line.trim().startsWith("#") || line.trim().startsWith("//")) {
+      return (
+        <div key={idx} className="terminal-comment">{line}</div>
+      );
     }
-  }, []);
-
-  useEffect(() => {
-    loadStats();
-  }, [loadStats]);
-
-  const handleRefresh = async () => {
-    await Promise.all([loadStats(), refreshProviders()]);
-  };
-
-  const endpointUrl = `${window.location.origin}/v1`;
-
-  // Parse usage statistics
-  const statsData = usageStats?.stats || {};
-  const today = (statsData.today || {}) as any;
-
-  const requestsToday = today.requests || 0;
-  const tokensToday = (today.totalInputTokens || 0) + (today.totalCachedTokens || 0);
-  const cacheHitRate = today.hitRate || 0;
-  const avgSavings = today.avgCacheSavedPercent || 0;
-  const rtkApplied = today.rtkAppliedRequests || 0;
-
-  const isScreenLoading = providersLoading || loadingStats;
-
-  return (
-    <div className="screen-stack">
-      <PageHeader
-        icon={EndpointIcon}
-        title="Endpoint"
-        description="Local OpenAI-compatible endpoint and router status"
-        actions={
-          <div className="page-actions">
-            <RefreshButton onClick={handleRefresh} isRefreshing={isScreenLoading} />
+    if (lang === "bash" && line.startsWith("export ")) {
+      const eq = line.indexOf("=");
+      if (eq > 0) {
+        const head = line.slice("export ".length, eq);
+        const tail = line.slice(eq);
+        return (
+          <div key={idx}>
+            <span className="command-highlight">export</span>{" "}
+            <span className="variable-highlight">{head}</span>
+            <span className="terminal-value">{tail}</span>
           </div>
-        }
-      />
-
-      <div className="endpoint-screen-layout">
-        {error && (
-          <div className="error-banner" style={{
-            background: "var(--danger-soft)",
-            border: "1px solid var(--danger)",
-            borderRadius: "var(--radius-md)",
-            padding: "var(--space-4)",
-            marginBottom: "var(--space-5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "var(--space-4)"
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-              <AlertIcon className="status-icon status-error" style={{ width: "24px", height: "24px" }} />
-              <div>
-                <h3 style={{ margin: 0, color: "var(--danger)", fontSize: "var(--font-md)" }}>Connection Offline</h3>
-                <p style={{ margin: "var(--space-1) 0 0 0", fontSize: "var(--font-sm)", color: "var(--text-secondary)" }}>
-                  Failed to connect to local proxy: {error}. Check if your service is active.
-                </p>
-              </div>
-            </div>
-            <button className="button-secondary" style={{ whiteSpace: "nowrap" }} onClick={handleRefresh}>
-              Retry Connection
-            </button>
+        );
+      }
+    }
+    if (lang === "json") {
+      const colonIdx = line.indexOf(":");
+      if (colonIdx > 0 && line.trim().startsWith('"')) {
+        const head = line.slice(0, colonIdx);
+        const tail = line.slice(colonIdx);
+        return (
+          <div key={idx}>
+            <span className="terminal-key">{head}</span>
+            <span className="terminal-value">{tail}</span>
           </div>
-        )}
-
-        <div className="endpoint-top-row">
-          <ServerStatusCard 
-            health={health} 
-            loading={isScreenLoading} 
-            endpointUrl={endpointUrl} 
-            onRefresh={handleRefresh} 
-          />
-          <ActiveProviderCard health={health} providers={providers} />
-        </div>
-
-        <div className="endpoint-stats-row">
-          <StatCard
-            label="Requests Today"
-            value={formatNumber(requestsToday)}
-            caption="API requests processed"
-          />
-          <StatCard
-            label="Tokens Today"
-            value={formatNumber(tokensToday)}
-            caption="Input + cached tokens"
-          />
-          <StatCard
-            label="RTK Applied"
-            value={formatNumber(rtkApplied)}
-            caption="Reduced context requests"
-          />
-          <StatCard
-            label="Cache Hit Rate"
-            value={formatPercent(cacheHitRate)}
-            caption="Prompt cache efficiency"
-          />
-          <StatCard
-            label="Average Savings"
-            value={formatPercent(avgSavings)}
-            caption="Tokens saved ratio"
-          />
-        </div>
-
-        <div className="endpoint-bottom-row">
-          <FallbackTiersCard providers={providers} />
-          <RoutingPipelineCard health={health} providers={providers} endpointUrl={endpointUrl} />
-        </div>
-
-        <div className="endpoint-setup-row">
-          <QuickSetupCard endpointUrl={endpointUrl} />
-        </div>
-
-        <ApiKeyManager />
-      </div>
-    </div>
-  );
+        );
+      }
+    }
+    return <div key={idx}>{line}</div>;
+  });
 }

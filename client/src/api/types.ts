@@ -45,6 +45,22 @@ export type HealthResponse = {
   fallback?: string | null;
 };
 
+export type EndpointEntry = {
+  kind: "loopback" | "lan" | "tailscale" | "other";
+  address: string;
+  url: string;
+  apiUrl: string;
+};
+
+export type EndpointInfoResponse = {
+  ok: boolean;
+  service?: string;
+  port: number;
+  host: string;
+  endpoints: EndpointEntry[];
+  publicUrl: string | null;
+};
+
 export type ProviderSummary = {
   id: string;
   name: string;
