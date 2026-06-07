@@ -105,6 +105,10 @@ export function getHealth() {
   return apiGet<HealthResponse>("/health");
 }
 
+export function deleteConsoleLogs() {
+  return apiSend<{ ok: boolean }>("/api/console-logs", "DELETE");
+}
+
 export function getEndpointInfo() {
   return apiGet<EndpointInfoResponse>("/api/endpoint-info");
 }

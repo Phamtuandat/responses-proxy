@@ -107,6 +107,7 @@ import {
   forwardKiroAnthropicSse,
 } from "./kiro-forward.js";
 import { fetchKiroUsage } from "./kiro-usage.js";
+import { consoleLogBuffer } from "./console-log-buffer.js";
 import {
   buildAnthropicError,
   buildAnthropicModelsList,
@@ -311,12 +312,17 @@ await hydrateLatestPromptCacheObservations(path.resolve(config.SESSION_LOG_DIR))
 export const app = Fastify({
   logger: {
     level: config.LOG_LEVEL,
+    stream: consoleLogBuffer.createTeeStream(process.stdout),
   },
   requestTimeout: config.REQUEST_TIMEOUT_MS,
   bodyLimit: config.REQUEST_BODY_LIMIT_BYTES,
   trustProxy: config.HTTP_TRUST_PROXY,
   disableRequestLogging: true,
 });
+
+// Tee process-wide console.* into the in-memory log buffer so the dashboard
+// console-log viewer sees everything (not just Fastify request logs).
+consoleLogBuffer.installConsoleHook();
 
 // Activate routing system services after Fastify app is created
 (async () => {
@@ -724,6 +730,66 @@ app.get("/api/debug/prompt-cache/latest", async (request) => {
       ? latestPromptCacheObservationByProvider.get(providerId) ?? null
       : latestPromptCacheObservation ?? null,
   };
+});
+
+app.get("/api/console-logs/stream", async (request, reply) => {
+  if (!isOperatorRequest(request)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+
+  // Hijack the response and stream Server-Sent Events. Mirrors 9router's
+  // /api/translator/console-logs/stream contract:
+  //   { type: "init", logs: [...] } on connect
+  //   { type: "line", line: "..." } per new log line
+  //   { type: "clear" } when the buffer is cleared
+  reply.hijack();
+  const raw = reply.raw;
+  raw.setHeader("Content-Type", "text/event-stream");
+  raw.setHeader("Cache-Control", "no-cache, no-transform");
+  raw.setHeader("Connection", "keep-alive");
+  raw.setHeader("X-Accel-Buffering", "no");
+  raw.flushHeaders?.();
+
+  const send = (data: unknown) => {
+    try {
+      raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    } catch {
+      /* socket closed mid-write */
+    }
+  };
+
+  send({ type: "init", logs: consoleLogBuffer.snapshot() });
+
+  // Light keep-alive comment every 30s so reverse proxies don't drop the connection.
+  const keepalive = setInterval(() => {
+    try {
+      raw.write(": ping\n\n");
+    } catch {
+      /* ignore */
+    }
+  }, 30_000);
+
+  const unsubscribe = consoleLogBuffer.subscribe(send);
+  const cleanup = () => {
+    clearInterval(keepalive);
+    unsubscribe();
+    try {
+      raw.end();
+    } catch {
+      /* already ended */
+    }
+  };
+  request.raw.on("close", cleanup);
+  request.raw.on("aborted", cleanup);
+  return reply;
+});
+
+app.delete("/api/console-logs", async (request, reply) => {
+  if (!isOperatorRequest(request)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+  consoleLogBuffer.clear();
+  return reply.send({ ok: true });
 });
 
 app.get("/api/debug/audit-logs", async (request, reply) => {
@@ -5649,6 +5715,12 @@ function normalizeIpAddress(value: string): string {
 }
 
 function isOperatorRequest(request: { headers: Record<string, unknown> }): boolean {
+  // Playground mode: when no dashboard admins are configured, all dashboard
+  // routes are open (mirrors /api/dashboard-auth/session auto-authenticate).
+  if (dashboardAdminUserIds.size === 0) {
+    return true;
+  }
+
   const sessionToken = readCookie(readHeaderString(request.headers.cookie), DASHBOARD_SESSION_COOKIE);
   if (dashboardAuthRepository.getSessionByToken(sessionToken)) {
     return true;
