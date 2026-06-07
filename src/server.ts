@@ -106,6 +106,7 @@ import {
   forwardKiroAnthropicJson,
   forwardKiroAnthropicSse,
 } from "./kiro-forward.js";
+import { fetchKiroUsage } from "./kiro-usage.js";
 import {
   buildAnthropicError,
   buildAnthropicModelsList,
@@ -6685,7 +6686,7 @@ async function buildLiveProviderUsageEntry(
   }
 
   if (!provider.capabilities.usageCheckEnabled || !provider.capabilities.usageCheckUrl) {
-    // For Kiro providers, report account pool status
+    // For Kiro providers, fetch real credit usage from upstream API
     if (provider.authMode === "kiro" && kiroTokenStore) {
       const accounts = kiroTokenStore.listAccounts();
       const active = accounts.filter((a) => a.isActive);
@@ -6693,9 +6694,37 @@ async function buildLiveProviderUsageEntry(
         if (!a.expiresAt) return !!a.accessToken;
         return new Date(a.expiresAt).getTime() > Date.now();
       });
+
+      // Pick the first healthy account to query credit usage
+      const queryAccount = healthy[0] ?? active[0];
+      let creditUsage: Record<string, unknown> | null = null;
+
+      if (queryAccount?.accessToken) {
+        try {
+          const result = await fetchKiroUsage({
+            accessToken: queryAccount.accessToken,
+            profileArn: queryAccount.providerSpecificData?.profileArn ?? undefined,
+            region: queryAccount.providerSpecificData?.region ?? "us-east-1",
+            timeoutMs: 10000,
+          });
+          if (result.ok) {
+            creditUsage = {
+              plan: result.plan,
+              quotas: result.quotas,
+            };
+          } else {
+            creditUsage = { error: result.message };
+          }
+        } catch (error) {
+          creditUsage = {
+            error: error instanceof Error ? error.message : "Failed to fetch Kiro credits",
+          };
+        }
+      }
+
       return {
         ...base,
-        source: "kiro_account_pool",
+        source: "kiro_credit_usage",
         configured: true,
         ok: healthy.length > 0,
         usage: {
@@ -6703,6 +6732,12 @@ async function buildLiveProviderUsageEntry(
           remaining: healthy.length,
           limit: active.length,
           used: active.length - healthy.length,
+        },
+        creditUsage,
+        accounts: {
+          total: accounts.length,
+          active: active.length,
+          healthy: healthy.length,
         },
       };
     }
