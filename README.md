@@ -30,6 +30,52 @@ npm test
 - [Public bot launch verification](docs/public-bot-launch-verification.md)
 - [Public bot production release](docs/public-bot-production-release.md)
 
+## Telegram bot setup (npm install)
+
+The CLI manages both the proxy and the Telegram bot as separate background
+daemons. After `npm install -g responses-proxy`:
+
+1. Configure the bot once (interactive wizard or `config set`):
+
+   ```bash
+   responses-proxy setup            # asks for token + owner IDs
+   # or set explicitly:
+   responses-proxy config set TELEGRAM_BOT_TOKEN <bot-token-from-BotFather>
+   responses-proxy config set TELEGRAM_OWNER_USER_IDS <your-telegram-user-id>
+   ```
+
+2. Start both processes:
+
+   ```bash
+   responses-proxy --background     # starts proxy on :8318
+   responses-proxy bot start        # starts Telegram bot (polling)
+   ```
+
+3. Verify everything is up:
+
+   ```bash
+   responses-proxy status           # proxy + bot status
+   responses-proxy info             # endpoint URLs + bot state
+   responses-proxy bot logs         # tail bot logs
+   ```
+
+4. Manage the bot daemon like the proxy:
+
+   ```bash
+   responses-proxy bot stop
+   responses-proxy bot restart
+   responses-proxy bot status
+   responses-proxy bot logs
+   ```
+
+The proxy and bot share the same SQLite databases under
+`~/.responses-proxy/` (`app.sqlite`, `telegram-bot.sqlite`) so customer keys,
+audit log, and dashboard auth challenges are visible to both.
+
+The CLI sets `TELEGRAM_BOT_MODE=polling` for the bot daemon. Webhook mode is
+not yet implemented — leave the proxy reachable on `127.0.0.1:8318` from the
+machine where the bot runs.
+
 ## Public Telegram Bot
 
 For public bot mode:
