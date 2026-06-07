@@ -1,6 +1,6 @@
 {
   "name": "responses-proxy",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "AI routing proxy with multi-provider fallback, RTK token saver, and web dashboard",
   "bin": {
     "responses-proxy": "./cli.js"
