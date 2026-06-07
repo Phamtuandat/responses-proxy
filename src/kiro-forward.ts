@@ -126,9 +126,18 @@ async function openKiroStream(
   // Kiro free tier throttles aggressively (429 "Too many requests"). Retry a few
   // times with backoff (honoring Retry-After) so transient throttles don't fail
   // the whole request — mirrors how the IDE client behaves.
-  const maxAttempts = Math.max(1, args.config.KIRO_RETRY_MAX_ATTEMPTS ?? 3);
-  const baseDelayMs = Math.max(0, args.config.KIRO_RETRY_BASE_DELAY_MS ?? 800);
+  const maxAttempts = Math.max(1, args.config.KIRO_RETRY_MAX_ATTEMPTS ?? 5);
+  const baseDelayMs = Math.max(0, args.config.KIRO_RETRY_BASE_DELAY_MS ?? 1000);
+  const maxDelayMs = Math.max(baseDelayMs, args.config.KIRO_RETRY_MAX_DELAY_MS ?? 15000);
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  // Exponential backoff with full jitter, capped at maxDelayMs. Jitter is essential
+  // because Kiro free-tier throttling is per-account: concurrent requests that all
+  // retry on the same fixed schedule would re-collide on every attempt and stay
+  // throttled. Spreading retries across the window lets some get through.
+  const backoffMs = (attempt: number) => {
+    const exp = Math.min(baseDelayMs * Math.pow(2, attempt - 1), maxDelayMs);
+    return Math.floor(Math.random() * exp);
+  };
 
   let response: Response | undefined;
   let lastError = "";
@@ -165,7 +174,7 @@ async function openKiroStream(
       lastError = `Kiro upstream request failed: ${reason}`;
       lastStatus = 502;
       if (attempt < maxAttempts) {
-        await sleep(baseDelayMs * attempt);
+        await sleep(backoffMs(attempt));
         continue;
       }
       throw new KiroUpstreamError(args.requestId, 502, lastError);
@@ -192,9 +201,9 @@ async function openKiroStream(
       const retryAfterHeader = attemptResponse.headers.get("retry-after");
       const retryAfterMs = retryAfterHeader && /^\d+$/.test(retryAfterHeader.trim())
         ? Number(retryAfterHeader.trim()) * 1000
-        : baseDelayMs * Math.pow(2, attempt - 1);
+        : backoffMs(attempt);
       clearTimeout(timeout);
-      await sleep(Math.min(retryAfterMs, 8000));
+      await sleep(Math.min(retryAfterMs, maxDelayMs));
       continue;
     }
 
