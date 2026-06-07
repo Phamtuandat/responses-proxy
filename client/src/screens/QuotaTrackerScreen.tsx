@@ -1,12 +1,13 @@
 /**
- * Quota Tracker Screen — 9Router-style ProviderLimits clone.
+ * Quota Tracker Screen — real-time provider quota / credit usage.
  *
  * Shows per-provider quota status with:
- * - Provider cards in a 2-column grid
- * - Quota progress bars (used/limit)
- * - Auto-refresh with countdown timer
- * - Enable/disable toggle per provider
- * - Refresh individual or all
+ * - Provider cards in a responsive grid
+ * - Progress bar for each quota resource (used/total) when known
+ * - For Kiro: real CodeWhisperer credit usage (used / total / reset date)
+ * - For account-pool providers (no credit API): healthy account count
+ * - For api_key providers with usage check configured: upstream usage
+ * - Auto-refresh with countdown
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
@@ -15,11 +16,44 @@ import { SurfaceCard } from "../components/SurfaceCard";
 import { LoadingState } from "../components/LoadingState";
 import { RefreshButton } from "../components/RefreshButton";
 import { StatusBadge } from "../components/StatusBadge";
-import { getLiveUsage, getProviders, toggleProviderEnabled } from "../api/client";
-import type { LiveUsageProvider, LiveUsageResponse, ProviderSummary } from "../api/types";
-import { formatNumber, isRecord } from "../lib/format";
+import { getLiveUsage, getProviders } from "../api/client";
+import type { LiveUsageProvider, ProviderSummary } from "../api/types";
+import { formatNumber } from "../lib/format";
 
 const REFRESH_INTERVAL_MS = 60_000;
+
+type QuotaResource = {
+  resourceType: string;
+  used: number;
+  total: number;
+  remaining: number;
+  resetAt: string | null;
+  unlimited: boolean;
+};
+
+type ProviderQuota = {
+  id: string;
+  name: string;
+  authMode?: string;
+  ok: boolean;
+  error?: string;
+  /** Detailed quota resources (Kiro credits, etc.) — preferred display. */
+  resources: QuotaResource[];
+  /** Plan label, e.g. "KIRO POWER". */
+  plan?: string;
+  /** Account-pool stats fallback (Kiro/OAuth) when no credit data is available. */
+  accountPool?: {
+    total: number;
+    active: number;
+    healthy: number;
+  };
+  /** Generic usage block (for api_key providers with custom usage checks). */
+  usage?: {
+    used?: number;
+    limit?: number;
+    remaining?: number;
+  };
+};
 
 export function QuotaTrackerScreen() {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
@@ -53,7 +87,6 @@ export function QuotaTrackerScreen() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Auto-refresh
   useEffect(() => {
     if (!autoRefresh) {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -70,35 +103,60 @@ export function QuotaTrackerScreen() {
     };
   }, [autoRefresh, fetchAll]);
 
-  // Build merged provider list with live quota data
-  const providerQuotas = useMemo(() => {
+  const providerQuotas = useMemo<ProviderQuota[]>(() => {
     const liveMap = new Map<string, LiveUsageProvider>();
     for (const l of liveData) {
       if (l.providerId) liveMap.set(l.providerId, l);
     }
 
-    return providers.map((p) => {
-      const live = liveMap.get(p.id);
-      const usage = live && isRecord(live.usage) ? live.usage : null;
-      return {
-        id: p.id,
-        name: p.name,
-        live,
-        ok: live?.ok !== false && usage?.allowed !== false,
-        allowed: usage?.allowed,
-        remaining: typeof usage?.remaining === "number" ? usage.remaining : undefined,
-        limit: typeof usage?.limit === "number" ? usage.limit : undefined,
-        used: typeof usage?.used === "number" ? usage.used : undefined,
-        error: live?.error,
-        hasQuota: live !== undefined,
-      };
-    });
-  }, [providers, liveData]);
+    return providers
+      .filter((p) => liveMap.has(p.id))
+      .map((p): ProviderQuota => {
+        const live = liveMap.get(p.id)!;
+        const resources: QuotaResource[] = [];
 
-  // Only show providers that have quota data or are known to be tracked
-  const visibleProviders = useMemo(() => {
-    return providerQuotas.filter((p) => p.hasQuota);
-  }, [providerQuotas]);
+        if (live.creditUsage?.quotas) {
+          for (const [key, value] of Object.entries(live.creditUsage.quotas)) {
+            resources.push({
+              resourceType: value?.resourceType ?? key,
+              used: typeof value?.used === "number" ? value.used : 0,
+              total: typeof value?.total === "number" ? value.total : 0,
+              remaining: typeof value?.remaining === "number" ? value.remaining : 0,
+              resetAt: typeof value?.resetAt === "string" ? value.resetAt : null,
+              unlimited: value?.unlimited === true,
+            });
+          }
+        }
+
+        const usage = live.usage ?? null;
+        const accountPool = live.accounts
+          ? {
+              total: live.accounts.total ?? 0,
+              active: live.accounts.active ?? 0,
+              healthy: live.accounts.healthy ?? 0,
+            }
+          : undefined;
+
+        return {
+          id: p.id,
+          name: p.name,
+          authMode: live.authMode,
+          ok: live.ok !== false,
+          error: live.error || (live.creditUsage?.error ?? undefined),
+          resources,
+          plan: live.creditUsage?.plan,
+          accountPool,
+          usage:
+            usage && (typeof usage.used === "number" || typeof usage.limit === "number")
+              ? {
+                  used: typeof usage.used === "number" ? usage.used : undefined,
+                  limit: typeof usage.limit === "number" ? usage.limit : undefined,
+                  remaining: typeof usage.remaining === "number" ? usage.remaining : undefined,
+                }
+              : undefined,
+        };
+      });
+  }, [providers, liveData]);
 
   if (loading) {
     return <LoadingState title="Loading quotas" description="Fetching provider quota status..." cards={4} />;
@@ -108,10 +166,9 @@ export function QuotaTrackerScreen() {
     <div className="screen-stack">
       <PageHeader
         title="Quota Tracker"
-        description="Real-time provider quota limits and usage status."
+        description="Real-time provider quota and credit usage from upstream APIs."
         actions={
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-            {/* Auto-refresh toggle */}
             <button
               onClick={() => setAutoRefresh((p) => !p)}
               className="button-link"
@@ -133,28 +190,25 @@ export function QuotaTrackerScreen() {
         }
       />
 
-      {/* Last updated */}
       {lastUpdated && (
         <p style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", margin: 0 }}>
           Last updated: {lastUpdated.toLocaleTimeString()}
         </p>
       )}
 
-      {/* Empty state */}
-      {visibleProviders.length === 0 ? (
+      {providerQuotas.length === 0 ? (
         <SurfaceCard>
           <div style={{ textAlign: "center", padding: "var(--space-8)" }}>
             <p style={{ fontSize: "var(--text-base)", fontWeight: 600, margin: "0 0 var(--space-2)" }}>No Quota Data Available</p>
             <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0, maxWidth: 400, marginInline: "auto" }}>
-              Connect providers with quota tracking (OAuth subscriptions like Claude Code, Codex) to see quota limits and usage here.
+              Connect a provider with quota tracking (Kiro, OAuth subscriptions, or custom usage-check URLs) to see live limits and credit usage here.
             </p>
           </div>
         </SurfaceCard>
       ) : (
-        /* Provider quota cards — 2 column grid like 9Router */
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "var(--space-4)" }}>
-          {visibleProviders.map((pq) => (
-            <ProviderQuotaCard key={pq.id} provider={pq} onRefresh={fetchAll} />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "var(--space-4)" }}>
+          {providerQuotas.map((pq) => (
+            <ProviderQuotaCard key={pq.id} provider={pq} />
           ))}
         </div>
       )}
@@ -164,100 +218,280 @@ export function QuotaTrackerScreen() {
 
 // ─── Provider Quota Card ─────────────────────────────────────────────────────
 
-type ProviderQuota = {
-  id: string;
-  name: string;
-  ok: boolean;
-  allowed?: boolean;
-  remaining?: number;
-  limit?: number;
-  used?: number;
-  error?: string;
-  hasQuota: boolean;
-};
-
-function ProviderQuotaCard({ provider, onRefresh }: { provider: ProviderQuota; onRefresh: () => void }) {
-  const percentage = provider.limit && provider.limit > 0
-    ? Math.round(((provider.used || 0) / provider.limit) * 100)
-    : null;
-
-  const remainingPercentage = percentage !== null ? 100 - percentage : null;
-
-  const getBarColor = () => {
-    if (!provider.ok) return "var(--danger)";
-    if (remainingPercentage !== null && remainingPercentage <= 10) return "var(--danger)";
-    if (remainingPercentage !== null && remainingPercentage <= 30) return "var(--warning)";
-    return "var(--success)";
-  };
+function ProviderQuotaCard({ provider }: { provider: ProviderQuota }) {
+  const hasResources = provider.resources.length > 0;
+  const hasGenericUsage = !hasResources && provider.usage !== undefined;
+  const hasAccountPool = !hasResources && !hasGenericUsage && provider.accountPool !== undefined;
 
   return (
     <section className="surface-card" style={{ padding: 0, overflow: "hidden" }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-3)", padding: "var(--space-3) var(--space-4)", borderBottom: "1px solid var(--line)" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "var(--space-3)",
+          padding: "var(--space-3) var(--space-4)",
+          borderBottom: "1px solid var(--line)",
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", minWidth: 0 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--accent-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <span style={{ fontSize: 14, fontWeight: 700, color: "var(--accent)" }}>{provider.name.charAt(0).toUpperCase()}</span>
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              background: "var(--accent-soft)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ fontSize: 14, fontWeight: 700, color: "var(--accent)" }}>
+              {provider.name.charAt(0).toUpperCase()}
+            </span>
           </div>
           <div style={{ minWidth: 0 }}>
-            <h3 style={{ margin: 0, fontSize: "var(--text-sm)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <h3
+              style={{
+                margin: 0,
+                fontSize: "var(--text-sm)",
+                fontWeight: 600,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
               {provider.name}
             </h3>
+            {provider.plan && (
+              <p style={{ margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+                {provider.plan}
+                {provider.authMode ? ` · ${provider.authMode}` : ""}
+              </p>
+            )}
           </div>
         </div>
-        <StatusBadge status={provider.ok ? "success" : "danger"}>
+        <StatusBadge variant={provider.ok ? "success" : provider.error ? "danger" : "warning"}>
           {provider.ok ? "Active" : provider.error ? "Error" : "Exhausted"}
         </StatusBadge>
       </div>
 
-      {/* Quota content */}
       <div style={{ padding: "var(--space-3) var(--space-4)" }}>
         {provider.error ? (
           <p style={{ margin: 0, fontSize: "var(--text-xs)", color: "var(--danger)" }}>{provider.error}</p>
-        ) : provider.limit !== undefined ? (
+        ) : hasResources ? (
           <div style={{ display: "grid", gap: "var(--space-3)" }}>
-            {/* Progress bar */}
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-                  {formatNumber(provider.remaining)} remaining
-                </span>
-                <span style={{ fontSize: "var(--text-xs)", fontWeight: 600 }}>
-                  {remainingPercentage !== null ? `${remainingPercentage}%` : "—"}
-                </span>
-              </div>
-              <div style={{ height: 8, borderRadius: "var(--radius-pill)", background: "var(--neutral-soft)", overflow: "hidden" }}>
-                <div style={{
-                  height: "100%",
-                  width: `${remainingPercentage ?? 0}%`,
-                  borderRadius: "var(--radius-pill)",
-                  background: getBarColor(),
-                  transition: "width var(--animation-slow) var(--animation-easing)",
-                }} />
-              </div>
-            </div>
-
-            {/* Stats row */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "var(--space-2)" }}>
-              <div style={{ textAlign: "center" }}>
-                <span style={{ display: "block", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Used</span>
-                <span style={{ display: "block", fontSize: "var(--text-sm)", fontWeight: 600 }}>{formatNumber(provider.used)}</span>
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <span style={{ display: "block", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Remaining</span>
-                <span style={{ display: "block", fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--success)" }}>{formatNumber(provider.remaining)}</span>
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <span style={{ display: "block", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Limit</span>
-                <span style={{ display: "block", fontSize: "var(--text-sm)", fontWeight: 600 }}>{formatNumber(provider.limit)}</span>
-              </div>
-            </div>
+            {provider.resources.map((resource) => (
+              <QuotaResourceRow key={resource.resourceType} resource={resource} />
+            ))}
           </div>
+        ) : hasGenericUsage ? (
+          <GenericUsageBlock usage={provider.usage!} />
+        ) : hasAccountPool ? (
+          <AccountPoolBlock pool={provider.accountPool!} />
         ) : (
-          <p style={{ margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)", textAlign: "center", padding: "var(--space-2)" }}>
-            {provider.ok ? "Connected — no quota limits reported" : "Unable to fetch quota"}
+          <p
+            style={{
+              margin: 0,
+              fontSize: "var(--text-xs)",
+              color: "var(--text-muted)",
+              textAlign: "center",
+              padding: "var(--space-2)",
+            }}
+          >
+            {provider.ok ? "Connected — no quota data reported" : "Unable to fetch quota"}
           </p>
         )}
       </div>
     </section>
   );
+}
+
+function QuotaResourceRow({ resource }: { resource: QuotaResource }) {
+  const total = resource.total;
+  const used = resource.used;
+  const remaining = resource.remaining;
+  const remainingPercentage = total > 0 ? Math.max(0, Math.min(100, (remaining / total) * 100)) : null;
+
+  const barColor = (() => {
+    if (remainingPercentage === null) return "var(--accent)";
+    if (remainingPercentage <= 10) return "var(--danger)";
+    if (remainingPercentage <= 30) return "var(--warning)";
+    return "var(--success)";
+  })();
+
+  const resetLabel = resource.resetAt ? formatResetLabel(resource.resetAt) : null;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", fontWeight: 600 }}>
+          {humanizeResource(resource.resourceType)}
+        </span>
+        <span style={{ fontSize: "var(--text-xs)", fontWeight: 600 }}>
+          {resource.unlimited
+            ? "Unlimited"
+            : remainingPercentage !== null
+              ? `${remainingPercentage.toFixed(0)}% remaining`
+              : "—"}
+        </span>
+      </div>
+      {!resource.unlimited && total > 0 && (
+        <div
+          style={{
+            height: 8,
+            borderRadius: "var(--radius-pill)",
+            background: "var(--neutral-soft)",
+            overflow: "hidden",
+            marginBottom: 6,
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${remainingPercentage ?? 0}%`,
+              borderRadius: "var(--radius-pill)",
+              background: barColor,
+              transition: "width var(--animation-slow) var(--animation-easing)",
+            }}
+          />
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "var(--space-2)" }}>
+        <Stat label="Used" value={formatNumber(used)} />
+        <Stat label="Remaining" value={formatNumber(remaining)} tone="success" />
+        <Stat label="Total" value={resource.unlimited ? "∞" : formatNumber(total)} />
+      </div>
+      {resetLabel && (
+        <p style={{ margin: "6px 0 0", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          Resets {resetLabel}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function GenericUsageBlock({ usage }: { usage: { used?: number; limit?: number; remaining?: number } }) {
+  const total = usage.limit ?? 0;
+  const used = usage.used ?? 0;
+  const remaining = usage.remaining ?? Math.max(0, total - used);
+  const remainingPercentage = total > 0 ? Math.max(0, Math.min(100, (remaining / total) * 100)) : null;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+          {formatNumber(remaining)} remaining
+        </span>
+        <span style={{ fontSize: "var(--text-xs)", fontWeight: 600 }}>
+          {remainingPercentage !== null ? `${remainingPercentage.toFixed(0)}%` : "—"}
+        </span>
+      </div>
+      {total > 0 && (
+        <div
+          style={{
+            height: 8,
+            borderRadius: "var(--radius-pill)",
+            background: "var(--neutral-soft)",
+            overflow: "hidden",
+            marginBottom: 6,
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${remainingPercentage ?? 0}%`,
+              borderRadius: "var(--radius-pill)",
+              background: "var(--success)",
+              transition: "width var(--animation-slow) var(--animation-easing)",
+            }}
+          />
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "var(--space-2)" }}>
+        <Stat label="Used" value={formatNumber(used)} />
+        <Stat label="Remaining" value={formatNumber(remaining)} tone="success" />
+        <Stat label="Limit" value={total > 0 ? formatNumber(total) : "—"} />
+      </div>
+    </div>
+  );
+}
+
+function AccountPoolBlock({ pool }: { pool: { total: number; active: number; healthy: number } }) {
+  return (
+    <div>
+      <p style={{ margin: "0 0 6px", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+        Account pool
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "var(--space-2)" }}>
+        <Stat label="Total" value={String(pool.total)} />
+        <Stat label="Active" value={String(pool.active)} />
+        <Stat
+          label="Healthy"
+          value={String(pool.healthy)}
+          tone={pool.healthy > 0 ? "success" : "danger"}
+        />
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "success" | "danger";
+}) {
+  const color = tone === "success" ? "var(--success)" : tone === "danger" ? "var(--danger)" : undefined;
+  return (
+    <div style={{ textAlign: "center" }}>
+      <span style={{ display: "block", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+        {label}
+      </span>
+      <span style={{ display: "block", fontSize: "var(--text-sm)", fontWeight: 600, color }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function humanizeResource(type: string): string {
+  const trimmed = type.trim();
+  if (!trimmed) return "Quota";
+  if (trimmed.endsWith("_freetrial")) {
+    const base = trimmed.slice(0, -"_freetrial".length);
+    return `${prettyCase(base)} (Free trial)`;
+  }
+  return prettyCase(trimmed);
+}
+
+function prettyCase(value: string): string {
+  return value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function formatResetLabel(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const now = Date.now();
+  const diffMs = date.getTime() - now;
+  if (diffMs <= 0) return "now";
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (days >= 1) {
+    return `in ${days} day${days === 1 ? "" : "s"} (${date.toLocaleDateString()})`;
+  }
+  const hours = Math.floor(diffMs / (1000 * 60 * 60));
+  if (hours >= 1) {
+    return `in ${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  const minutes = Math.max(1, Math.floor(diffMs / (1000 * 60)));
+  return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }

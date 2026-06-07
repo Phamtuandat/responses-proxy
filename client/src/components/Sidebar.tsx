@@ -13,7 +13,7 @@ type SidebarProps = {
 function ProductHeader() {
   return (
     <header className="sidebar-product-header">
-      <div className="product-info">
+      <a className="product-info" href="#/dashboard" aria-label="Go to dashboard">
         <div className="product-mark" aria-hidden="true">
           RP
         </div>
@@ -21,7 +21,7 @@ function ProductHeader() {
           <h1 className="product-name">Responses Proxy</h1>
           <span className="product-version">v0.1.0</span>
         </div>
-      </div>
+      </a>
     </header>
   );
 }

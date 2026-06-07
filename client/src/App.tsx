@@ -94,7 +94,7 @@ type AuthState =
   | { status: "anonymous" };
 
 const THEME_STORAGE_KEY = "responses-proxy-theme";
-const DEFAULT_ROUTE: NavRoute = "endpoint"; // Default to endpoint for router-focused UI
+const DEFAULT_ROUTE: NavRoute = "dashboard"; // Land on the system overview by default
 
 // Create navRouteSet from both functional navigation and router navigation
 const allNavItems = [...flatNavItems, ...routerFlatNavItems];
@@ -210,9 +210,9 @@ function renderScreen(routeState: RouteState) {
     return (
       <EmptyState
         title="Route not found"
-        description="This dashboard uses the current React route map. Return to Endpoint to continue."
-        actionHref="#/endpoint"
-        actionLabel="Go to Endpoint"
+        description="This dashboard uses the current React route map. Return to the dashboard to continue."
+        actionHref="#/dashboard"
+        actionLabel="Go to Dashboard"
       />
     );
   }
@@ -270,7 +270,7 @@ function renderScreen(routeState: RouteState) {
     case "dashboard":
       return <EnhancedDashboardScreen />;
     default:
-      return <EndpointScreen />;
+      return <EnhancedDashboardScreen />;
   }
 }
 
@@ -310,7 +310,7 @@ export function App() {
 
   useEffect(() => {
     if (!window.location.hash) {
-      window.history.replaceState(null, "", "#/endpoint");
+      window.history.replaceState(null, "", `#/${DEFAULT_ROUTE}`);
     }
 
     const handleHashChange = () => setRouteState(readRouteFromHash());

@@ -1225,7 +1225,7 @@ function buildKiroProviderPreset(config: AppConfig): RuntimeProviderPreset {
   const baseUrl = `https://codewhisperer.${region}.amazonaws.com`;
   return {
     id: KIRO_PROVIDER_ID,
-    name: "Kiro (9router)",
+    name: "Kiro",
     baseUrl,
     responsesUrl: `${baseUrl}${CODEWHISPERER_GENERATE_PATH}`,
     authMode: "kiro",
@@ -1860,6 +1860,10 @@ function migrateLegacyProvider(provider: RuntimeProviderPreset): RuntimeProvider
     authMode: parseRuntimeProviderAuthMode(provider.authMode),
     chatgptAccountId: provider.chatgptAccountId?.trim() || undefined,
   };
+  // Rename legacy "Kiro (9router)" → "Kiro" for the built-in account-kiro provider.
+  if (provider.id === KIRO_PROVIDER_ID && provider.name === "Kiro (9router)") {
+    migrated.name = "Kiro";
+  }
   if (provider.id !== "primary" && provider.id !== "fallback") {
     return migrated;
   }

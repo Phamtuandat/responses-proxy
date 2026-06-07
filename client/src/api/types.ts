@@ -251,6 +251,29 @@ export type LiveUsageProvider = {
     used?: number;
     [key: string]: unknown;
   } | null;
+  /**
+   * Real upstream credit/quota usage. Currently set for Kiro providers (via
+   * the CodeWhisperer getUsageLimits API). For other providers, the proxy
+   * may also populate a similar shape via custom usage-check endpoints.
+   */
+  creditUsage?: {
+    plan?: string;
+    quotas?: Record<string, {
+      resourceType?: string;
+      used?: number;
+      total?: number;
+      remaining?: number;
+      resetAt?: string | null;
+      unlimited?: boolean;
+    }>;
+    error?: string;
+  } | null;
+  /** Account-pool counts for providers backed by a connected-account pool (Kiro/OAuth). */
+  accounts?: {
+    total?: number;
+    active?: number;
+    healthy?: number;
+  };
   error?: string;
   [key: string]: unknown;
 };
