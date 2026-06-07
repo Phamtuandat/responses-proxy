@@ -325,3 +325,19 @@ export function updateModelCombo(id: string, input: Partial<ModelComboInput>) {
 export function deleteModelCombo(id: string) {
   return apiSend<ModelComboDeleteResponse>(`/api/model-combos/${encodeURIComponent(id)}`, "DELETE");
 }
+
+// ─── MITM Model Mappings ─────────────────────────────────────────────────────
+
+export function getMitmMappings(tool: string) {
+  return apiGet<{ ok: boolean; tool: string; mappings: Record<string, string> }>(
+    `/api/cli-tools/mitm-mappings?tool=${encodeURIComponent(tool)}`,
+  );
+}
+
+export function setMitmMappings(tool: string, mappings: Record<string, string>) {
+  return apiSend<{ ok: boolean; tool: string; mappings: Record<string, string> }>(
+    "/api/cli-tools/mitm-mappings",
+    "PUT",
+    { tool, mappings },
+  );
+}

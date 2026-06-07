@@ -122,56 +122,95 @@ async function openKiroStream(
   const inputText = args.inputText;
 
   const url = `https://codewhisperer.${credentials.region}.amazonaws.com${CODEWHISPERER_GENERATE_PATH}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), args.config.REQUEST_TIMEOUT_MS);
-  const cleanup = () => clearTimeout(timeout);
 
-  const startedAt = Date.now();
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${credentials.accessToken}`,
-        "Content-Type": "application/json",
-        Accept: "application/vnd.amazon.eventstream",
-        // CodeWhisperer is an AWS JSON-RPC service; X-Amz-Target selects the
-        // operation and the user-agent pair identifies the Kiro IDE client.
-        // These mirror the headers 9router sends and are required for routing.
-        "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
-        "User-Agent": "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
-        "X-Amz-User-Agent": "aws-sdk-js/3.0.0 kiro-ide/1.0.0",
-        "Amz-Sdk-Request": "attempt=1; max=3",
-        "Amz-Sdk-Invocation-Id": randomUUID(),
+  // Kiro free tier throttles aggressively (429 "Too many requests"). Retry a few
+  // times with backoff (honoring Retry-After) so transient throttles don't fail
+  // the whole request — mirrors how the IDE client behaves.
+  const maxAttempts = Math.max(1, args.config.KIRO_RETRY_MAX_ATTEMPTS ?? 3);
+  const baseDelayMs = Math.max(0, args.config.KIRO_RETRY_BASE_DELAY_MS ?? 800);
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  let response: Response | undefined;
+  let lastError = "";
+  let lastStatus = 0;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), args.config.REQUEST_TIMEOUT_MS);
+    const startedAt = Date.now();
+    let attemptResponse: Response;
+    try {
+      attemptResponse = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${credentials.accessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/vnd.amazon.eventstream",
+          // CodeWhisperer is an AWS JSON-RPC service; X-Amz-Target selects the
+          // operation and the user-agent pair identifies the Kiro IDE client.
+          // These mirror the headers 9router sends and are required for routing.
+          "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
+          "User-Agent": "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
+          "X-Amz-User-Agent": "aws-sdk-js/3.0.0 kiro-ide/1.0.0",
+          "Amz-Sdk-Request": `attempt=${attempt}; max=${maxAttempts}`,
+          "Amz-Sdk-Invocation-Id": randomUUID(),
+        },
+        body: JSON.stringify(cwRequest),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      const reason = error instanceof Error ? error.message : String(error);
+      // Network failures are retryable too.
+      lastError = `Kiro upstream request failed: ${reason}`;
+      lastStatus = 502;
+      if (attempt < maxAttempts) {
+        await sleep(baseDelayMs * attempt);
+        continue;
+      }
+      throw new KiroUpstreamError(args.requestId, 502, lastError);
+    }
+
+    args.logger.info(
+      {
+        requestId: args.requestId,
+        provider: args.provider.id,
+        accountId: credentials.accountId,
+        upstreamStatus: attemptResponse.status,
+        connectMs: Date.now() - startedAt,
+        attempt,
+        modelId,
       },
-      body: JSON.stringify(cwRequest),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    cleanup();
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new KiroUpstreamError(args.requestId, 502, `Kiro upstream request failed: ${reason}`);
+      "kiro codewhisperer response received",
+    );
+
+    // Retry on throttling (429) and transient upstream errors (502/503/504).
+    const isRetryable = attemptResponse.status === 429 || [502, 503, 504].includes(attemptResponse.status);
+    if (!attemptResponse.ok && isRetryable && attempt < maxAttempts) {
+      lastError = await attemptResponse.text().catch(() => "");
+      lastStatus = attemptResponse.status;
+      const retryAfterHeader = attemptResponse.headers.get("retry-after");
+      const retryAfterMs = retryAfterHeader && /^\d+$/.test(retryAfterHeader.trim())
+        ? Number(retryAfterHeader.trim()) * 1000
+        : baseDelayMs * Math.pow(2, attempt - 1);
+      clearTimeout(timeout);
+      await sleep(Math.min(retryAfterMs, 8000));
+      continue;
+    }
+
+    if (!attemptResponse.ok) {
+      const errorBody = await attemptResponse.text().catch(() => "");
+      clearTimeout(timeout);
+      throw new KiroUpstreamError(args.requestId, attemptResponse.status, errorBody);
+    }
+
+    response = attemptResponse;
+    const cleanup = () => clearTimeout(timeout);
+    return { response, model: args.model || modelId, inputText, cleanup };
   }
 
-  args.logger.info(
-    {
-      requestId: args.requestId,
-      provider: args.provider.id,
-      accountId: credentials.accountId,
-      upstreamStatus: response.status,
-      connectMs: Date.now() - startedAt,
-      modelId,
-    },
-    "kiro codewhisperer response received",
-  );
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    cleanup();
-    throw new KiroUpstreamError(args.requestId, response.status, errorBody);
-  }
-
-  return { response, model: args.model || modelId, inputText, cleanup };
+  // Exhausted retries.
+  throw new KiroUpstreamError(args.requestId, lastStatus || 429, lastError || "Kiro upstream throttled");
 }
 
 /** Non-streaming Kiro path: buffers the stream, returns a Responses JSON payload + usage. */

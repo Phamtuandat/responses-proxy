@@ -35,9 +35,10 @@ const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf
 const prodDeps = rootPkg.dependencies || {};
 
 // Write a minimal package.json into cli/dist/ so better-sqlite3 can be resolved
+const cliPkg = JSON.parse(fs.readFileSync(path.join(CLI_DIR, "package.json"), "utf8"));
 const distPkg = {
   name: "responses-proxy-runtime",
-  version: rootPkg.version,
+  version: cliPkg.version,
   private: true,
   type: "module",
   dependencies: prodDeps,

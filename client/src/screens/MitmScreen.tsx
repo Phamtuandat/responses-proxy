@@ -15,6 +15,14 @@ import { PageHeader } from "../components/PageHeader";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { LoadingState } from "../components/LoadingState";
+import {
+  getProviders,
+  getMitmMappings,
+  setMitmMappings,
+  getModelCombos,
+} from "../api/client";
+import type { ProviderSummary, ModelCombo } from "../api/types";
+import { ModelPickerModal, COMBO_PROVIDER } from "../components/ModelPickerModal";
 
 // ─── MITM Tool Definitions (mirrors 9Router's MITM_TOOLS) ───────────────────
 
@@ -76,9 +84,14 @@ export function MitmScreen() {
     certExists: boolean;
     certTrusted: boolean;
     dnsStatus: Record<string, boolean>;
+    needsSudoPassword?: boolean;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
+  const [sudoPassword, setSudoPassword] = useState("");
+  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
+  const [providers, setProviders] = useState<ProviderSummary[]>([]);
+  const [combos, setCombos] = useState<ModelCombo[]>([]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -97,6 +110,38 @@ export function MitmScreen() {
   }, []);
 
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
+
+  useEffect(() => {
+    getProviders()
+      .then((data) => setProviders(data.providerOptions || data.providers || []))
+      .catch(() => setProviders([]));
+  }, []);
+
+  useEffect(() => {
+    getModelCombos()
+      .then((data) => setCombos(data.combos || []))
+      .catch(() => setCombos([]));
+  }, []);
+
+  // Ask for sudo password before executing a privileged action
+  const [pendingActionRef] = useState<{ current: ((password: string) => Promise<void>) | null }>({ current: null });
+
+  const withSudo = (action: (password: string) => Promise<void>) => {
+    if (sudoPassword || serverStatus?.needsSudoPassword === false) {
+      action(sudoPassword);
+    } else {
+      pendingActionRef.current = action;
+      setShowPasswordPrompt(true);
+    }
+  };
+
+  const handlePasswordSubmit = () => {
+    setShowPasswordPrompt(false);
+    if (pendingActionRef.current) {
+      pendingActionRef.current(sudoPassword);
+      pendingActionRef.current = null;
+    }
+  };
 
   if (loading) {
     return <LoadingState title="Loading MITM status" description="Checking MITM server and certificates..." cards={3} />;
@@ -129,7 +174,7 @@ export function MitmScreen() {
       </div>
 
       {/* MITM Server Card */}
-      <MitmServerCard status={serverStatus} isRunning={isRunning} onRefresh={fetchStatus} />
+      <MitmServerCard status={serverStatus} isRunning={isRunning} onRefresh={fetchStatus} withSudo={withSudo} />
 
       {/* Per-Tool Cards */}
       <div style={{ display: "grid", gap: "var(--space-3)" }}>
@@ -141,9 +186,40 @@ export function MitmScreen() {
             onToggle={() => setExpandedTool(expandedTool === tool.id ? null : tool.id)}
             serverRunning={isRunning}
             dnsActive={serverStatus?.dnsStatus?.[tool.id] || false}
+            withSudo={withSudo}
+            onDnsChanged={fetchStatus}
+            providers={providers}
+            combos={combos}
           />
         ))}
       </div>
+
+      {/* Sudo password modal */}
+      {showPasswordPrompt && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowPasswordPrompt(false)}>
+          <div className="modal-card" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
+            <div className="modal-header"><div><p className="eyebrow">Sudo Required</p><h2>Enter Mac Password</h2></div></div>
+            <div style={{ padding: "0 var(--space-5) var(--space-4)" }}>
+              <p style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-xs)", color: "var(--text-secondary)" }}>
+                Modifying /etc/hosts requires administrator privileges.
+              </p>
+              <input
+                type="password"
+                value={sudoPassword}
+                onChange={(e) => setSudoPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handlePasswordSubmit(); }}
+                placeholder="Mac login password"
+                autoFocus
+                style={{ minHeight: 42 }}
+              />
+            </div>
+            <div className="modal-actions" style={{ padding: "var(--space-3) var(--space-5)" }}>
+              <button className="button-link" onClick={() => { setShowPasswordPrompt(false); pendingActionRef.current = null; }}>Cancel</button>
+              <button className="button-primary" onClick={handlePasswordSubmit} disabled={!sudoPassword}>Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -154,48 +230,54 @@ function MitmServerCard({
   status,
   isRunning,
   onRefresh,
+  withSudo,
 }: {
   status: any;
   isRunning: boolean;
   onRefresh: () => void;
+  withSudo: (action: (password: string) => Promise<void>) => void;
 }) {
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleStart = async () => {
-    setActionLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/cli-tools/mitm-start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error || "Failed to start MITM server");
-      } else {
-        await onRefresh();
+  const handleStart = () => {
+    withSudo(async (password) => {
+      setActionLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/cli-tools/mitm-start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sudoPassword: password }) });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setError(data.error || "Failed to start MITM server");
+        } else {
+          await onRefresh();
+        }
+      } catch (e: any) {
+        setError(e.message || "Network error");
+      } finally {
+        setActionLoading(false);
       }
-    } catch (e: any) {
-      setError(e.message || "Network error");
-    } finally {
-      setActionLoading(false);
-    }
+    });
   };
 
-  const handleStop = async () => {
-    setActionLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/cli-tools/mitm-stop", { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error || "Failed to stop MITM server");
-      } else {
-        await onRefresh();
+  const handleStop = () => {
+    withSudo(async (password) => {
+      setActionLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/cli-tools/mitm-stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sudoPassword: password }) });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setError(data.error || "Failed to stop MITM server");
+        } else {
+          await onRefresh();
+        }
+      } catch (e: any) {
+        setError(e.message || "Network error");
+      } finally {
+        setActionLoading(false);
       }
-    } catch (e: any) {
-      setError(e.message || "Network error");
-    } finally {
-      setActionLoading(false);
-    }
+    });
   };
 
   return (
@@ -268,25 +350,79 @@ function MitmToolCard({
   onToggle,
   serverRunning,
   dnsActive,
+  withSudo,
+  onDnsChanged,
+  providers,
+  combos,
 }: {
   tool: MitmToolDef;
   isExpanded: boolean;
   onToggle: () => void;
   serverRunning: boolean;
   dnsActive: boolean;
+  withSudo: (action: (password: string) => Promise<void>) => void;
+  onDnsChanged: () => void;
+  providers: ProviderSummary[];
+  combos: ModelCombo[];
 }) {
   const [toggling, setToggling] = useState(false);
+  const [error, setError] = useState("");
+  const [mappings, setMappings] = useState<Record<string, string>>({});
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
 
-  const handleToggleDns = async () => {
-    setToggling(true);
+  // Load saved mappings when the card expands
+  useEffect(() => {
+    if (!isExpanded) return;
+    let cancelled = false;
+    getMitmMappings(tool.id)
+      .then((data) => { if (!cancelled) setMappings(data.mappings || {}); })
+      .catch(() => { /* keep empty */ });
+    return () => { cancelled = true; };
+  }, [isExpanded, tool.id]);
+
+  const persistMappings = useCallback(async (next: Record<string, string>) => {
+    setMappings(next);
     try {
-      await fetch("/api/cli-tools/mitm-dns", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toolId: tool.id, enable: !dnsActive }),
-      });
-    } catch { /* ignore */ }
-    finally { setToggling(false); }
+      await setMitmMappings(tool.id, next);
+    } catch (e: any) {
+      setError(e.message || "Failed to save model mapping");
+    }
+  }, [tool.id]);
+
+  const handleSelectModel = (nativeModel: string, providerId: string, proxyModel: string) => {
+    const next = { ...mappings, [nativeModel]: `${providerId}::${proxyModel}` };
+    persistMappings(next);
+    setPickerFor(null);
+  };
+
+  const handleClearModel = (nativeModel: string) => {
+    const next = { ...mappings };
+    delete next[nativeModel];
+    persistMappings(next);
+  };
+
+  const handleToggleDns = () => {
+    withSudo(async (password) => {
+      setToggling(true);
+      setError("");
+      try {
+        const res = await fetch("/api/cli-tools/mitm-dns", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ toolId: tool.id, enable: !dnsActive, sudoPassword: password }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setError(data.error || "Failed to update DNS");
+        } else {
+          onDnsChanged();
+        }
+      } catch (e: any) {
+        setError(e.message || "Network error");
+      } finally {
+        setToggling(false);
+      }
+    });
   };
 
   return (
@@ -349,17 +485,102 @@ function MitmToolCard({
             </button>
           </div>
 
-          {/* Available models */}
+          {/* Error display */}
+          {error && (
+            <div style={{ padding: "var(--space-2) var(--space-3)", background: "var(--danger-soft)", borderRadius: "var(--radius-sm)", fontSize: "var(--text-xs)", color: "var(--danger)" }}>
+              {error}
+            </div>
+          )}
+
+          {/* Model mapping editor */}
           <div>
-            <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "var(--space-2)" }}>Available Models</span>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {tool.models.map((m) => (
-                <code key={m.id} className="metadata-pill" style={{ fontSize: "0.6rem", padding: "2px 6px", minHeight: "auto" }}>
-                  {m.name}
-                </code>
-              ))}
+            <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "var(--space-2)" }}>
+              Model Mapping
+            </span>
+            <p style={{ margin: "0 0 var(--space-3)", fontSize: "0.65rem", color: "var(--text-muted)", lineHeight: 1.4 }}>
+              Map each {tool.name} model to a proxy model. Requests using that model will be rewritten before routing. Leave unset to pass through unchanged.
+            </p>
+            <div style={{ display: "grid", gap: "var(--space-2)" }}>
+              {tool.models.map((m) => {
+                const raw = mappings[m.id];
+                const isCombo = !!raw && raw.startsWith(`${COMBO_PROVIDER}::`);
+                const rawValue = raw ? (raw.includes("::") ? raw.slice(raw.indexOf("::") + 2) : raw) : null;
+                const comboName = isCombo ? (combos.find((c) => c.id === rawValue)?.name || rawValue) : null;
+                const mapped = isCombo ? `⚡ ${comboName}` : rawValue;
+                return (
+                  <div
+                    key={m.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "var(--space-2)",
+                      padding: "var(--space-2) var(--space-3)",
+                      background: "var(--surface-muted)",
+                      borderRadius: "var(--radius-sm)",
+                      border: "1px solid var(--line)",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div style={{ flex: "1 1 140px", minWidth: 0 }}>
+                      <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
+                      <code style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>{m.id}</code>
+                    </div>
+                    <span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>→</span>
+                    <div style={{ flex: "1 1 160px", minWidth: 0, display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                      {mapped ? (
+                        <code
+                          className="metadata-pill"
+                          style={{ fontSize: "0.62rem", padding: "2px 6px", minHeight: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
+                          title={mapped}
+                        >
+                          {mapped}
+                        </code>
+                      ) : (
+                        <span style={{ fontSize: "0.65rem", color: "var(--text-muted)", flex: 1 }}>Passthrough</span>
+                      )}
+                      <button
+                        className="button-link"
+                        onClick={() => setPickerFor(m.id)}
+                        style={{ minHeight: "auto", padding: "2px 6px", fontSize: "0.65rem" }}
+                      >
+                        {mapped ? "Change" : "Select"}
+                      </button>
+                      {mapped && (
+                        <button
+                          className="button-link"
+                          onClick={() => handleClearModel(m.id)}
+                          style={{ minHeight: "auto", padding: "2px 6px", fontSize: "0.65rem", color: "var(--danger)" }}
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
+
+          {/* Model picker modal */}
+          {pickerFor && (() => {
+            const raw = mappings[pickerFor] || "";
+            const isComboSel = raw.startsWith(`${COMBO_PROVIDER}::`);
+            const valuePart = raw.includes("::") ? raw.slice(raw.indexOf("::") + 2) : raw;
+            return (
+              <ModelPickerModal
+                providers={providers}
+                combos={combos}
+                title="Map to Proxy Model"
+                selectedModel={isComboSel ? null : (valuePart || null)}
+                selectedComboId={isComboSel ? valuePart : null}
+                onSelect={(sel) => {
+                  if (sel.kind === "combo") handleSelectModel(pickerFor, COMBO_PROVIDER, sel.combo.id);
+                  else handleSelectModel(pickerFor, sel.providerId, sel.model);
+                }}
+                onClose={() => setPickerFor(null)}
+              />
+            );
+          })()}
 
           {/* Domain info */}
           <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>

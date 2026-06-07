@@ -6,6 +6,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import readline from "node:readline";
 import path from "node:path";
+import os from "node:os";
 import { readConfig } from "./config.js";
 import {
   buildChatGptAuthUrl,
@@ -58,6 +59,7 @@ import {
   readRequestProviderHint,
   resolveProviderForRequest,
 } from "./provider-routing.js";
+import { resolveProxyModel } from "./model-prefix.js";
 import { resolveRequestTimeoutMs } from "./request-timeout-policy.js";
 import {
   type ClientRouteKey,
@@ -185,6 +187,20 @@ const deviceLoginService = new DeviceLoginService({
 });
 setInterval(() => deviceLoginService.pruneExpiredSessions(), 60_000).unref();
 
+// Auto-disable Kiro provider if it has no accounts
+if (kiroTokenStore) {
+  const kiroAccounts = kiroTokenStore.listAccounts();
+  if (kiroAccounts.length === 0) {
+    try {
+      const kiroProvider = providerRepository.getProvider("account-kiro");
+      if (kiroProvider && kiroProvider.enabled !== false) {
+        providerRepository.updateProvider("account-kiro", { ...kiroProvider, enabled: false });
+        console.log("[kiro] No accounts found — provider auto-disabled. Add accounts via dashboard to enable.");
+      }
+    } catch { /* provider might not exist yet */ }
+  }
+}
+
 // Initialize routing services after all stores are available
 const routingComboRepository = new RoutingComboRepository(providerRepository.getDatabase());
 const modelComboRepository = new ModelComboRepository(providerRepository.getDatabase());
@@ -249,6 +265,14 @@ const quickApplyPaths = resolveQuickApplyPaths({
 });
 const localProxyBaseUrl = `http://127.0.0.1:${config.PORT}/v1`;
 const quickApplyRuntime = existsSync("/.dockerenv") ? "container" : "native";
+
+// Resolve the host home directory for CLI-tool config files.
+// In Docker the host home is bind-mounted at /host-home; running natively
+// (e.g. via the CLI on macOS) we use the real home directory.
+function hostHomeDir(): string {
+  if (existsSync("/host-home")) return "/host-home";
+  return process.env.HOME || os.homedir();
+}
 let latestPromptCacheObservation: PromptCacheObservation | undefined;
 const latestPromptCacheObservationByProvider = new Map<string, PromptCacheObservation>();
 const inflightJsonRequests = new Map<
@@ -1834,6 +1858,16 @@ app.post("/api/kiro/import", async (request, reply) => {
       provider: 'kiro',
     });
 
+    // Auto-enable the Kiro provider after importing accounts
+    if (result.imported > 0) {
+      try {
+        const kiroProvider = providerRepository.getProvider("account-kiro");
+        if (kiroProvider && !kiroProvider.enabled) {
+          providerRepository.updateProvider("account-kiro", { ...kiroProvider, enabled: true });
+        }
+      } catch { /* ignore */ }
+    }
+
     return reply.send({
       ok: true,
       imported: result.imported,
@@ -1923,6 +1957,17 @@ app.post("/api/kiro/device/poll", async (request, reply) => {
 
   try {
     const result = await deviceLoginService.pollDeviceLogin(sessionId);
+
+    // Auto-enable Kiro provider when a new account is added
+    if (result.status === "completed") {
+      try {
+        const kiroProvider = providerRepository.getProvider("account-kiro");
+        if (kiroProvider && !kiroProvider.enabled) {
+          providerRepository.updateProvider("account-kiro", { ...kiroProvider, enabled: true });
+        }
+      } catch { /* ignore */ }
+    }
+
     return reply.send({ ok: true, ...result });
   } catch (error) {
     if (error instanceof DeviceLoginError) {
@@ -2085,7 +2130,7 @@ app.post("/api/client-configs/apply", async (request, reply) => {
 // ─── CLI Tool Auto-Apply: Claude Code settings ──────────────────────────────
 
 app.get("/api/cli-tools/claude-settings", async (_request, reply) => {
-  const settingsPath = path.join("/host-home", ".claude", "settings.json");
+  const settingsPath = path.join(hostHomeDir(), ".claude", "settings.json");
   try {
     if (!existsSync(settingsPath)) {
       return reply.send({ installed: false, path: settingsPath });
@@ -2112,7 +2157,7 @@ app.post("/api/cli-tools/claude-settings", async (request, reply) => {
     return reply.code(400).send({ error: "env object is required" });
   }
 
-  const settingsPath = path.join("/host-home", ".claude", "settings.json");
+  const settingsPath = path.join(hostHomeDir(), ".claude", "settings.json");
   const settingsDir = path.dirname(settingsPath);
   const backupDir = quickApplyPaths.backupDir;
 
@@ -2145,7 +2190,7 @@ app.post("/api/cli-tools/claude-settings", async (request, reply) => {
 });
 
 app.delete("/api/cli-tools/claude-settings", async (_request, reply) => {
-  const settingsPath = path.join("/host-home", ".claude", "settings.json");
+  const settingsPath = path.join(hostHomeDir(), ".claude", "settings.json");
   try {
     if (!existsSync(settingsPath)) {
       return reply.send({ ok: true, changed: false });
@@ -2172,8 +2217,8 @@ app.delete("/api/cli-tools/claude-settings", async (_request, reply) => {
 // ─── CLI Tool Auto-Apply: Codex settings ────────────────────────────────────
 
 app.get("/api/cli-tools/codex-settings", async (_request, reply) => {
-  const configPath = path.join("/host-home", ".codex", "config.toml");
-  const authPath = path.join("/host-home", ".codex", "auth.json");
+  const configPath = path.join(hostHomeDir(), ".codex", "config.toml");
+  const authPath = path.join(hostHomeDir(), ".codex", "auth.json");
   try {
     const installed = existsSync(configPath) || existsSync(authPath);
     if (!installed) {
@@ -2206,8 +2251,8 @@ app.post("/api/cli-tools/codex-settings", async (request, reply) => {
     return reply.code(400).send({ error: "baseUrl is required" });
   }
 
-  const configPath = path.join("/host-home", ".codex", "config.toml");
-  const authPath = path.join("/host-home", ".codex", "auth.json");
+  const configPath = path.join(hostHomeDir(), ".codex", "config.toml");
+  const authPath = path.join(hostHomeDir(), ".codex", "auth.json");
   const backupDir = quickApplyPaths.backupDir;
 
   try {
@@ -2233,8 +2278,8 @@ app.post("/api/cli-tools/codex-settings", async (request, reply) => {
 });
 
 app.delete("/api/cli-tools/codex-settings", async (_request, reply) => {
-  const configPath = path.join("/host-home", ".codex", "config.toml");
-  const authPath = path.join("/host-home", ".codex", "auth.json");
+  const configPath = path.join(hostHomeDir(), ".codex", "config.toml");
+  const authPath = path.join(hostHomeDir(), ".codex", "auth.json");
   try {
     let changed = false;
     if (existsSync(configPath)) {
@@ -2252,37 +2297,197 @@ app.delete("/api/cli-tools/codex-settings", async (_request, reply) => {
   }
 });
 
-// ─── MITM Server Status (stub — requires host-mode deployment) ──────────────
+// ─── MITM DNS & Certificate Management ──────────────────────────────────────
 
 app.get("/api/cli-tools/mitm-status", async (_request, reply) => {
-  // MITM requires running directly on host (not Docker) with root privileges.
-  // Return stub status indicating MITM is not available in this deployment mode.
-  return reply.send({
-    running: false,
-    certExists: false,
-    certTrusted: false,
-    dnsStatus: {},
-    available: false,
-    reason: "MITM requires host-mode deployment with root privileges (port 443 + DNS + cert trust). Not available in Docker mode.",
-  });
+  try {
+    const { rootCaExists, isRootCaTrusted } = await import("./mitm/cert.js");
+    const { checkAllDNSStatus, isSudoPasswordRequired } = await import("./mitm/dns.js");
+    const { hasCachedPassword } = await import("./mitm/password-cache.js");
+    const { isMitmServerListening } = await import("./mitm/launcher.js");
+
+    const dnsStatus = checkAllDNSStatus();
+    const cached = hasCachedPassword();
+    const serverRunning = isMitmServerListening();
+
+    return reply.send({
+      running: serverRunning,
+      certExists: rootCaExists(),
+      certTrusted: isRootCaTrusted(),
+      dnsStatus,
+      // Only needs password if sudo requires it AND we don't have one cached
+      needsSudoPassword: isSudoPasswordRequired() && !cached,
+      hasCachedPassword: cached,
+      available: true,
+      isWin: process.platform === "win32",
+    });
+  } catch (error) {
+    return reply.send({
+      running: false,
+      certExists: false,
+      certTrusted: false,
+      dnsStatus: {},
+      available: false,
+      needsSudoPassword: true,
+      hasCachedPassword: false,
+      reason: error instanceof Error ? error.message : "MITM module error",
+    });
+  }
 });
 
-app.post("/api/cli-tools/mitm-start", async (_request, reply) => {
-  return reply.code(501).send({
-    error: "MITM server is not available in Docker deployment mode. Run the proxy directly on the host with root privileges.",
-  });
+app.post("/api/cli-tools/mitm-start", async (request, reply) => {
+  const body = request.body as { sudoPassword?: string } | undefined;
+  try {
+    const { generateRootCA, trustRootCA, rootCaExists: caExists, isRootCaTrusted } = await import("./mitm/cert.js");
+    const { resolvePassword, setCachedPassword } = await import("./mitm/password-cache.js");
+    const { isSudoPasswordRequired } = await import("./mitm/dns.js");
+    const { startMitmServerProcess, isMitmServerListening } = await import("./mitm/launcher.js");
+
+    const sudoPassword = resolvePassword(body?.sudoPassword);
+    if (isSudoPasswordRequired() && !sudoPassword) {
+      return reply.code(400).send({ error: "sudoPassword is required", needsSudoPassword: true });
+    }
+
+    // 1. Ensure root CA exists and is trusted
+    if (!caExists()) {
+      generateRootCA();
+    }
+    if (!isRootCaTrusted()) {
+      await trustRootCA(sudoPassword);
+    }
+
+    // 2. Spawn the :443 interception server (root via sudo)
+    if (!isMitmServerListening()) {
+      await startMitmServerProcess(sudoPassword);
+    }
+
+    // Cache the password after successful use
+    if (sudoPassword) setCachedPassword(sudoPassword);
+
+    return reply.send({ ok: true, running: true, certExists: true, certTrusted: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Failed to start MITM server";
+    const isAuth = msg.includes("Incorrect sudo password") || msg.includes("incorrect password") || msg.includes("try again");
+    return reply.code(isAuth ? 401 : 500).send({ error: isAuth ? "Incorrect sudo password" : msg });
+  }
 });
 
-app.post("/api/cli-tools/mitm-stop", async (_request, reply) => {
-  return reply.code(501).send({
-    error: "MITM server is not available in Docker deployment mode.",
-  });
+app.post("/api/cli-tools/mitm-stop", async (request, reply) => {
+  const body = request.body as { sudoPassword?: string } | undefined;
+  try {
+    const { TOOL_HOSTS, removeDNSEntry, checkAllDNSStatus, isSudoPasswordRequired } = await import("./mitm/dns.js");
+    const { resolvePassword, setCachedPassword } = await import("./mitm/password-cache.js");
+    const { stopMitmServerProcess } = await import("./mitm/launcher.js");
+
+    const sudoPassword = resolvePassword(body?.sudoPassword);
+    if (isSudoPasswordRequired() && !sudoPassword) {
+      return reply.code(400).send({ error: "sudoPassword is required", needsSudoPassword: true });
+    }
+
+    // 1. Remove all DNS interception entries
+    for (const tool of Object.keys(TOOL_HOSTS)) {
+      await removeDNSEntry(tool, sudoPassword).catch(() => {});
+    }
+
+    // 2. Kill the :443 server process
+    await stopMitmServerProcess(sudoPassword);
+
+    if (sudoPassword) setCachedPassword(sudoPassword);
+    return reply.send({ ok: true, running: false, dnsStatus: checkAllDNSStatus() });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Failed to stop MITM server";
+    return reply.code(500).send({ error: msg });
+  }
 });
 
-app.post("/api/cli-tools/mitm-dns", async (_request, reply) => {
-  return reply.code(501).send({
-    error: "DNS interception is not available in Docker deployment mode.",
-  });
+app.post("/api/cli-tools/mitm-dns", async (request, reply) => {
+  const body = request.body as { toolId?: string; enable?: boolean; sudoPassword?: string } | undefined;
+  const toolId = typeof body?.toolId === "string" ? body.toolId : "";
+  const enable = body?.enable !== false;
+
+  if (!toolId) {
+    return reply.code(400).send({ error: "toolId is required" });
+  }
+
+  try {
+    const { addDNSEntry, removeDNSEntry, checkAllDNSStatus, isSudoPasswordRequired } = await import("./mitm/dns.js");
+    const { resolvePassword, setCachedPassword } = await import("./mitm/password-cache.js");
+
+    const sudoPassword = resolvePassword(body?.sudoPassword);
+    if (isSudoPasswordRequired() && !sudoPassword) {
+      return reply.code(400).send({ error: "sudoPassword is required to modify /etc/hosts", needsSudoPassword: true });
+    }
+
+    if (enable) {
+      await addDNSEntry(toolId, sudoPassword);
+    } else {
+      await removeDNSEntry(toolId, sudoPassword);
+    }
+
+    // Cache the password after successful use
+    if (sudoPassword) setCachedPassword(sudoPassword);
+
+    return reply.send({ ok: true, dnsStatus: checkAllDNSStatus() });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Failed to update DNS";
+    const isAuthError = msg.includes("incorrect password") || msg.includes("try again");
+    return reply.code(isAuthError ? 401 : 500).send({
+      error: isAuthError ? "Incorrect sudo password" : msg,
+    });
+  }
+});
+
+app.post("/api/cli-tools/mitm-trust-cert", async (request, reply) => {
+  const body = request.body as { sudoPassword?: string } | undefined;
+  try {
+    const { generateRootCA, trustRootCA } = await import("./mitm/cert.js");
+    const { resolvePassword, setCachedPassword } = await import("./mitm/password-cache.js");
+    const { isSudoPasswordRequired } = await import("./mitm/dns.js");
+
+    const sudoPassword = resolvePassword(body?.sudoPassword);
+    if (isSudoPasswordRequired() && !sudoPassword) {
+      return reply.code(400).send({ error: "sudoPassword is required", needsSudoPassword: true });
+    }
+
+    generateRootCA();
+    await trustRootCA(sudoPassword);
+    if (sudoPassword) setCachedPassword(sudoPassword);
+    return reply.send({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Failed to trust certificate";
+    const isAuth = msg.includes("incorrect password") || msg.includes("try again");
+    return reply.code(isAuth ? 401 : 500).send({ error: isAuth ? "Incorrect sudo password" : msg });
+  }
+});
+
+// ─── MITM Model Mappings ────────────────────────────────────────────────────
+
+app.get("/api/cli-tools/mitm-mappings", async (request, reply) => {
+  const query = request.query as { tool?: string };
+  try {
+    const { getToolMappings, getAllMappings } = await import("./mitm/model-mappings.js");
+    if (query.tool) {
+      return reply.send({ ok: true, tool: query.tool, mappings: getToolMappings(query.tool) });
+    }
+    return reply.send({ ok: true, mappings: getAllMappings() });
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Failed to load mappings" });
+  }
+});
+
+app.put("/api/cli-tools/mitm-mappings", async (request, reply) => {
+  const body = request.body as { tool?: string; mappings?: Record<string, string> } | undefined;
+  const tool = typeof body?.tool === "string" ? body.tool : "";
+  if (!tool || !body?.mappings || typeof body.mappings !== "object") {
+    return reply.code(400).send({ error: "tool and mappings are required" });
+  }
+  try {
+    const { setToolMappings, getToolMappings } = await import("./mitm/model-mappings.js");
+    setToolMappings(tool, body.mappings);
+    return reply.send({ ok: true, tool, mappings: getToolMappings(tool) });
+  } catch (error) {
+    return reply.code(500).send({ error: error instanceof Error ? error.message : "Failed to save mappings" });
+  }
 });
 
 app.get("/api/customer/codex/setup.sh", async (request, reply) => {
@@ -3077,6 +3282,55 @@ app.delete("/api/model-combos/:id", async (request, reply) => {
   return reply.send({ ok: true });
 });
 
+// Round-robin counters per combo (in-memory, reset on restart)
+const modelComboRoundRobinCounters = new Map<string, number>();
+
+// Resolve a combo (by id or name) into a concrete { providerId, model } pick.
+// Returns null if no such combo exists or it has no models.
+function pickFromModelCombo(
+  idOrName: string,
+): { providerId: string | null; model: string; comboId: string; comboName: string } | null {
+  const combo = modelComboRepository.getById(idOrName) || modelComboRepository.getByName(idOrName);
+  if (!combo) return null;
+  const models = combo.models.filter((m) => typeof m === "string" && m.trim());
+  if (models.length === 0) return null;
+
+  let pick: string;
+  if (combo.roundRobin) {
+    const next = (modelComboRoundRobinCounters.get(combo.id) ?? 0) % models.length;
+    pick = models[next];
+    modelComboRoundRobinCounters.set(combo.id, next + 1);
+  } else {
+    pick = models[0];
+  }
+
+  const providers = providerRepository.listProviders().map((p) => ({ id: p.id, name: p.name }));
+  const resolved = resolveProxyModel(providers, pick);
+  return { providerId: resolved.providerId, model: resolved.model, comboId: combo.id, comboName: combo.name };
+}
+
+// Resolve a model combo to a concrete { providerId, model } pick.
+// Used by MITM (and any caller) to turn a combo into a routable target.
+app.post("/api/model-combos/:id/resolve", async (request, reply) => {
+  const params = request.params as { id?: string };
+  const id = typeof params.id === "string" ? params.id.trim() : "";
+  if (!id) {
+    return reply.code(400).send({ error: { message: "Missing combo ID" } });
+  }
+  const pick = pickFromModelCombo(id);
+  if (!pick) {
+    return reply.code(404).send({ error: { message: "Model combo not found or has no models" } });
+  }
+
+  return reply.send({
+    ok: true,
+    comboId: pick.comboId,
+    comboName: pick.comboName,
+    providerId: pick.providerId,
+    model: pick.model,
+  });
+});
+
 // Provider Health API
 app.get("/api/health/providers", async (request, reply) => {
   try {
@@ -3476,14 +3730,14 @@ app.get("/api/providers/live-usage", async (request, reply) => {
 
 app.get("/v1/models", async (request, reply) => {
   const routingApiKey = readBearerToken(request.headers.authorization);
-  const routingAccess = resolveCustomerRoutingAccess({
+  const routingAccess = applyOpenRoutingFallback(resolveCustomerRoutingAccess({
     routingApiKey,
     resolvedClientRoute: "default",
     providerRepository,
     customerKeyRepository,
     workspaceRepository: customerWorkspaceRepository,
     billingRepository,
-  });
+  }));
   if ("error" in routingAccess) {
     return reply.code(routingAccess.error.statusCode).send(routingAccess.error.body);
   }
@@ -3547,6 +3801,26 @@ app.get("/v1/models", async (request, reply) => {
   return reply.send(payload);
 });
 
+// Open/playground data plane: when no /v1 auth is configured anywhere, fall back
+// to the default route's provider so local clients (Claude Code, Codex, etc.)
+// work out of the box. In configured deployments (keys present) this is a no-op.
+function applyOpenRoutingFallback(
+  routingAccess: ReturnType<typeof resolveCustomerRoutingAccess>,
+): ReturnType<typeof resolveCustomerRoutingAccess> {
+  if ("error" in routingAccess) return routingAccess;
+  if (routingAccess.kind !== "operator") return routingAccess;
+  if (routingAccess.providers.length > 0) return routingAccess;
+  if (providerRepository.hasConfiguredRoutingApiKeys()) return routingAccess;
+
+  const fallbackProvider =
+    providerRepository.getProviderForClient(routingAccess.clientRoute) ??
+    providerRepository.getActiveProvider();
+  if (fallbackProvider) {
+    return { ...routingAccess, providers: [fallbackProvider] };
+  }
+  return routingAccess;
+}
+
 async function handleResponsesRequest(
   request: {
     body: unknown;
@@ -3607,14 +3881,14 @@ async function handleResponsesRequest(
 
   const routingApiKey = readBearerToken(request.headers.authorization);
   const resolvedClientRoute = resolveClientRoute(request.headers, parsed.data, routingApiKey);
-  const routingAccess = resolveCustomerRoutingAccess({
+  const routingAccess = applyOpenRoutingFallback(resolveCustomerRoutingAccess({
     routingApiKey,
     resolvedClientRoute,
     providerRepository,
     customerKeyRepository,
     workspaceRepository: customerWorkspaceRepository,
     billingRepository,
-  });
+  }));
   if ("error" in routingAccess) {
     reply.header("x-proxy-request-id", requestId);
     reply.header("x-proxy-error-code", routingAccess.error.body.error.code);
@@ -3643,6 +3917,27 @@ async function handleResponsesRequest(
     return reply.code(limitError.statusCode).send(limitError.body);
   }
   const providerHint = readRequestProviderHint(request.headers, parsed.data.metadata);
+
+  // Model-combo support: if the requested model matches a combo (by name or id),
+  // resolve it to a concrete provider + model. This lets clients (CLI tools, etc.)
+  // target a combo by using its name as the model. An explicit provider hint or a
+  // per-route model override still take precedence and skip combo resolution.
+  const requestedModel = typeof parsed.data.model === "string" ? parsed.data.model.trim() : "";
+  if (
+    requestedModel &&
+    !providerHint.providerId &&
+    !providerHint.providerName &&
+    !providerRepository.getModelOverride(clientRoute)
+  ) {
+    const comboPick = pickFromModelCombo(requestedModel);
+    if (comboPick) {
+      (parsed.data as Record<string, unknown>).model = comboPick.model;
+      if (comboPick.providerId) {
+        providerHint.providerId = comboPick.providerId;
+      }
+      reply.header("x-proxy-model-combo", comboPick.comboName);
+    }
+  }
 
   // Use routing integration for enhanced provider selection
   const routingRequest: RoutingRequest = {
@@ -4224,14 +4519,14 @@ async function handleAnthropicMessagesRequest(
   const routingApiKey =
     readBearerToken(request.headers.authorization) ?? readHeaderString(request.headers["x-api-key"]);
   const resolvedClientRoute = resolveClientRoute(request.headers, body, routingApiKey);
-  const routingAccess = resolveCustomerRoutingAccess({
+  const routingAccess = applyOpenRoutingFallback(resolveCustomerRoutingAccess({
     routingApiKey,
     resolvedClientRoute,
     providerRepository,
     customerKeyRepository,
     workspaceRepository: customerWorkspaceRepository,
     billingRepository,
-  });
+  }));
   if ("error" in routingAccess) {
     reply.header("x-proxy-request-id", requestId);
     return reply

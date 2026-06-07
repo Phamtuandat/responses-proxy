@@ -15,10 +15,10 @@ import { PageHeader } from "../components/PageHeader";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { LoadingState } from "../components/LoadingState";
 import { RefreshButton } from "../components/RefreshButton";
+import { ModelPickerModal } from "../components/ModelPickerModal";
 import {
   getProviders,
   getClientConfigsStatus,
-  getProviderModels,
 } from "../api/client";
 import type {
   ClientRouteSummary,
@@ -78,6 +78,9 @@ const TOOLS: ToolDef[] = [
     applyEndpoint: "/api/cli-tools/codex-settings",
     resetEndpoint: "/api/cli-tools/codex-settings",
     installCmd: "npm install -g @openai/codex",
+    models: [
+      { alias: "model", name: "Model", defaultValue: "cx/gpt-5.5" },
+    ],
   },
   {
     id: "cursor",
@@ -221,6 +224,7 @@ function ToolCard({
 }) {
   const [selectedApiKey, setSelectedApiKey] = useState("");
   const [modelMappings, setModelMappings] = useState<Record<string, string>>({});
+  const [pickerField, setPickerField] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [message, setMessage] = useState<ToolMessage>(null);
@@ -418,6 +422,13 @@ function ToolCard({
                     placeholder={m.defaultValue || "provider/model"}
                     style={{ flex: 1, minHeight: 32, fontSize: "var(--text-xs)", padding: "4px 8px", fontFamily: "monospace" }}
                   />
+                  <button
+                    className="button-link"
+                    onClick={() => setPickerField(m.alias)}
+                    style={{ minHeight: 32, padding: "0 var(--space-2)", fontSize: "var(--text-xs)", whiteSpace: "nowrap" }}
+                  >
+                    Select
+                  </button>
                 </ConfigRow>
               ))}
 
@@ -482,6 +493,21 @@ function ToolCard({
             }}>
               {message.text}
             </div>
+          )}
+
+          {/* Model picker modal */}
+          {pickerField && (
+            <ModelPickerModal
+              providers={providers}
+              title={`Select ${tool.models?.find((m) => m.alias === pickerField)?.name || "Model"}`}
+              selectedModel={modelMappings[pickerField] || null}
+              onSelect={(sel) => {
+                const value = sel.kind === "combo" ? sel.combo.name : sel.model;
+                setModelMappings((prev) => ({ ...prev, [pickerField]: value }));
+                setPickerField(null);
+              }}
+              onClose={() => setPickerField(null)}
+            />
           )}
         </div>
       )}

@@ -31,7 +31,16 @@ function assistantFrame(content: string): Buffer {
 
 test("mapModelToCodeWhisperer resolves known aliases case-insensitively", () => {
   assert.equal(mapModelToCodeWhisperer("kiro-claude-sonnet-4"), "claude-sonnet-4");
-  assert.equal(mapModelToCodeWhisperer("Claude-Sonnet-4-6"), "claude-sonnet-4-6");
+  // Kiro expects a dotted minor version; the dashed form is normalized to it.
+  assert.equal(mapModelToCodeWhisperer("Claude-Sonnet-4-6"), "claude-sonnet-4.6");
+});
+
+test("mapModelToCodeWhisperer normalizes dashed minor versions to Kiro's dotted form", () => {
+  assert.equal(mapModelToCodeWhisperer("kr/claude-opus-4.8"), "claude-opus-4.8");
+  assert.equal(mapModelToCodeWhisperer("claude-sonnet-4-5"), "claude-sonnet-4.5");
+  assert.equal(mapModelToCodeWhisperer("claude-opus-4-8"), "claude-opus-4.8");
+  // No minor version → left unchanged.
+  assert.equal(mapModelToCodeWhisperer("claude-sonnet-4"), "claude-sonnet-4");
 });
 
 test("mapModelToCodeWhisperer falls back to the default for unknown aliases", () => {

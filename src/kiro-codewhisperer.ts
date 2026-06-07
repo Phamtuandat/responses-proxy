@@ -169,42 +169,72 @@ function readNumber(value: unknown): number | undefined {
  * case-insensitive; unknown names fall through to `defaultModelId` so the proxy
  * still issues a request rather than rejecting unfamiliar aliases.
  */
+/**
+ * Kiro/CodeWhisperer expects Claude model ids with a DOTTED minor version
+ * (e.g. `claude-sonnet-4.5`, `claude-opus-4.8`). Clients and our alias tables
+ * often produce the dashed form (`claude-sonnet-4-5`), which the upstream rejects
+ * with 400 "Invalid model". Convert the trailing `-<minor>` to `.<minor>` for the
+ * claude family. Ids without a minor version (`claude-sonnet-4`), `auto`, and
+ * non-claude ids (`MiniMax-M2.1`, `deepseek-3.2`) are left unchanged.
+ *
+ * Mirrors jwadow/kiro-gateway's `normalize_model_name`.
+ */
+export function normalizeKiroModelId(modelId: string): string {
+  return modelId.replace(/^(claude-(?:haiku|sonnet|opus)-\d+)-(\d{1,2})$/i, "$1.$2");
+}
+
 export function mapModelToCodeWhisperer(
   model: string | undefined,
   aliases: Record<string, string> = DEFAULT_KIRO_MODEL_ALIASES,
   defaultModelId: string = DEFAULT_KIRO_MODEL_ID,
 ): string {
-  const normalized = typeof model === "string" ? model.trim() : "";
-  if (!normalized) {
+  const raw = typeof model === "string" ? model.trim() : "";
+  if (!raw) {
     return defaultModelId;
   }
-  // Exact match first, then case-insensitive.
-  if (aliases[normalized]) {
-    return aliases[normalized];
-  }
-  const lower = normalized.toLowerCase();
-  for (const [alias, modelId] of Object.entries(aliases)) {
-    if (alias.toLowerCase() === lower) {
-      return modelId;
+  // The dashboard (model picker, provider model list, combos) prefixes Kiro
+  // models with "kr/" (e.g. "kr/claude-sonnet-4.5"). Strip it before matching —
+  // these are explicit Kiro model ids selected by the user.
+  const normalized = raw.replace(/^kr\//i, "");
+  const hadKiroPrefix = normalized !== raw;
+
+  const resolve = (): string => {
+    // Exact match first, then case-insensitive.
+    if (aliases[normalized]) {
+      return aliases[normalized];
     }
-  }
-  // Claude Code / the Anthropic SDK send date-suffixed ids (e.g.
-  // `claude-sonnet-4-20250514`). CodeWhisperer expects the bare lowercase id, so
-  // strip a trailing `-YYYYMMDD` and re-check aliases before falling through.
-  const deDated = lower.replace(/-\d{8}$/, "");
-  if (deDated !== lower) {
-    if (aliases[deDated]) {
-      return aliases[deDated];
+    const lower = normalized.toLowerCase();
+    for (const [alias, modelId] of Object.entries(aliases)) {
+      if (alias.toLowerCase() === lower) {
+        return modelId;
+      }
     }
-    if (deDated === "auto" || deDated.startsWith("claude-")) {
-      return deDated;
+    // Claude Code / the Anthropic SDK send date-suffixed ids (e.g.
+    // `claude-sonnet-4-20250514`). Strip a trailing `-YYYYMMDD` and re-check.
+    const deDated = lower.replace(/-\d{8}$/, "");
+    if (deDated !== lower) {
+      if (aliases[deDated]) {
+        return aliases[deDated];
+      }
+      if (deDated === "auto" || deDated.startsWith("claude-")) {
+        return deDated;
+      }
     }
-  }
-  // Pass a recognized Kiro model id straight through (lowercase `auto`/`claude-*`).
-  if (lower === "auto" || lower.startsWith("claude-")) {
-    return lower;
-  }
-  return defaultModelId;
+    // An explicit "kr/"-prefixed id is a Kiro model the user chose — trust it
+    // (covers non-claude ids like deepseek-3.2, minimax-m2.1, gpt-oss-*).
+    if (hadKiroPrefix) {
+      return lower;
+    }
+    // Pass a recognized Kiro model id straight through (lowercase `auto`/`claude-*`).
+    if (lower === "auto" || lower.startsWith("claude-")) {
+      return lower;
+    }
+    return defaultModelId;
+  };
+
+  // Normalize the resolved id so the dashed minor version becomes dotted, which
+  // is the form the Kiro upstream actually accepts.
+  return normalizeKiroModelId(resolve());
 }
 
 /** Pull plain text out of a Responses content value (string or content-part array). */

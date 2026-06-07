@@ -587,6 +587,21 @@ export class RuntimeProviderRepository {
     return undefined;
   }
 
+  /**
+   * True when any data-plane routing auth is configured — i.e. any client route
+   * has API keys, or any provider has provider API keys. When false, the proxy
+   * has no /v1 auth set up (local/playground), and callers may fall back to the
+   * default route's provider instead of rejecting unauthenticated requests.
+   */
+  hasConfiguredRoutingApiKeys(): boolean {
+    for (const clientRoute of this.listClientRouteKeys()) {
+      if ((this.clientRouteApiKeys[clientRoute] ?? []).length > 0) {
+        return true;
+      }
+    }
+    return this.providerPresets.some((provider) => provider.providerApiKeys.length > 0);
+  }
+
   setClientRoute(client: ClientRouteKey, providerId?: string): string {
     const routeKey = normalizeClientRouteKey(client);
     const normalizedProviderId = typeof providerId === "string" ? providerId.trim() : "";
