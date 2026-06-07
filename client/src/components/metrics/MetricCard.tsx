@@ -43,6 +43,14 @@ export function MetricCard({
     }
   };
 
+  /** Resolve a CSS variable to its computed value for canvas-based charts. */
+  const resolveColor = (cssVar: string): string => {
+    if (!cssVar.startsWith('var(')) return cssVar;
+    const prop = cssVar.slice(4, -1).trim();
+    const resolved = getComputedStyle(document.documentElement).getPropertyValue(prop).trim();
+    return resolved || '#6366f1'; // fallback indigo
+  };
+
   return (
     <div className={`metric-card metric-card-${status} ${className}`}>
       <div className="metric-card-header">
@@ -89,7 +97,7 @@ export function MetricCard({
             <LineChart
               data={sparklineData}
               height={60}
-              color={getStatusColor()}
+              color={resolveColor(getStatusColor())}
               fill={true}
               showGrid={false}
               valueFormatter={() => ''}

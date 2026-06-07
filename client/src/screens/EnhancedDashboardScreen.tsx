@@ -12,7 +12,6 @@ import {
   ProvidersIcon,
   RtkIcon,
   UsageIcon,
-  DashboardIcon,
   AlertIcon,
   CheckCircleIcon,
 } from "../components/icons";
@@ -58,34 +57,53 @@ export function EnhancedDashboardScreen() {
     [],
   );
   const { state, retry } = useAsyncResource<DashboardData>(loadDashboard);
+  const usageData = state.status === "success" ? state.data.usage : null;
 
-  // Generate mock time-series data for demonstration
-  const mockTimeSeriesData = useMemo((): LineChartDataPoint[] => {
-    const now = new Date();
-    const data: LineChartDataPoint[] = [];
-
-    for (let i = 23; i >= 0; i--) {
-      const timestamp = new Date(now.getTime() - i * 60 * 60 * 1000); // Last 24 hours
-      const baseValue = 75 + Math.sin(i * 0.5) * 15; // Simulate cache hit rate trend
-      const noise = (Math.random() - 0.5) * 10;
-      data.push({
-        timestamp,
-        value: Math.max(0, Math.min(100, baseValue + noise)),
-      });
+  // Real day-over-day delta for "Today's Requests" trend.
+  const dailyTrend = useMemo((): { direction: 'up' | 'down' | 'neutral'; percentage: number } | undefined => {
+    if (!usageData || !isRecord(usageData.stats)) return undefined;
+    const daily = (usageData.stats as any).daily;
+    if (!Array.isArray(daily) || daily.length < 2) return undefined;
+    const sorted = [...daily].sort((a: any, b: any) =>
+      String(a?.date ?? '').localeCompare(String(b?.date ?? '')),
+    );
+    const todayReq = Number(sorted[sorted.length - 1]?.requests ?? 0);
+    const prevReq = Number(sorted[sorted.length - 2]?.requests ?? 0);
+    if (!Number.isFinite(todayReq) || !Number.isFinite(prevReq) || prevReq <= 0) {
+      return undefined;
     }
+    const pct = ((todayReq - prevReq) / prevReq) * 100;
+    return {
+      direction: pct > 1 ? 'up' : pct < -1 ? 'down' : 'neutral',
+      percentage: Math.round(pct * 10) / 10,
+    };
+  }, [usageData]);
 
-    return data;
-  }, []);
+  // Real cache hit-rate trend from session log aggregation (last 30 days).
+  const cacheHitTrend = useMemo((): LineChartDataPoint[] => {
+    if (!usageData || !isRecord(usageData.stats)) return [];
+    const daily = (usageData.stats as any).daily;
+    if (!Array.isArray(daily)) return [];
+    return daily
+      .filter((d: any) => d && typeof d.date === 'string')
+      .map((d: any) => ({
+        timestamp: new Date(d.date),
+        value: typeof d.hitRate === 'number' ? d.hitRate * 100 : 0,
+      }));
+  }, [usageData]);
 
-  // Generate mock provider performance data
-  const mockProviderData = useMemo((): BarChartDataPoint[] => {
-    return [
-      { label: 'OpenAI', value: 95.2, color: 'var(--chart-success)' },
-      { label: 'Anthropic', value: 97.8, color: 'var(--chart-primary)' },
-      { label: 'Kiro', value: 89.1, color: 'var(--chart-secondary)' },
-      { label: 'Fallback', value: 78.5, color: 'var(--chart-warning)' },
-    ];
-  }, []);
+  // Real per-provider request volume from usage stats.
+  const providerVolume = useMemo((): BarChartDataPoint[] => {
+    if (!usageData || !isRecord(usageData.stats)) return [];
+    const byProvider = (usageData.stats as any).byProvider;
+    if (!Array.isArray(byProvider)) return [];
+    const palette = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+    return byProvider.slice(0, 6).map((entry: any, index: number) => ({
+      label: typeof entry?.name === 'string' && entry.name ? entry.name : `provider ${index + 1}`,
+      value: typeof entry?.requests === 'number' ? entry.requests : 0,
+      color: palette[index % palette.length],
+    }));
+  }, [usageData]);
 
   if (state.status === "loading" || state.status === "idle") {
     return (
@@ -142,19 +160,6 @@ export function EnhancedDashboardScreen() {
     ? (latest?.cacheHit ? 'healthy' : 'warning')
     : 'error';
 
-  // Generate sparkline data for metrics
-  const generateSparklineData = (baseValue: number): LineChartDataPoint[] => {
-    // Safety check for valid baseValue
-    if (typeof baseValue !== 'number' || isNaN(baseValue)) {
-      return [];
-    }
-
-    return Array.from({ length: 12 }, (_, i) => ({
-      timestamp: new Date(Date.now() - (11 - i) * 60 * 60 * 1000),
-      value: Math.max(0, baseValue + (Math.random() - 0.5) * baseValue * 0.2),
-    }));
-  };
-
   return (
     <div className="screen-stack">
       <PageHeader
@@ -188,12 +193,6 @@ export function EnhancedDashboardScreen() {
           icon={health.ok ? CheckCircleIcon : AlertIcon}
           status={systemHealthStatus}
           description="Overall system status"
-          sparklineData={generateSparklineData(health.ok ? 95 : 75)}
-          trend={{
-            direction: health.ok ? 'up' : 'down',
-            percentage: health.ok ? 2.1 : -1.5,
-            period: '24h'
-          }}
         />
 
         <MetricCard
@@ -202,7 +201,6 @@ export function EnhancedDashboardScreen() {
           icon={ProvidersIcon}
           status="healthy"
           description={`${formatUnknown(health.activeProviderId)} currently active`}
-          sparklineData={generateSparklineData(providerList.length)}
         />
 
         <MetricCard
@@ -211,7 +209,6 @@ export function EnhancedDashboardScreen() {
           icon={AccountsIcon}
           status="healthy"
           description="Configured routing endpoints"
-          sparklineData={generateSparklineData(clientRoutes.length)}
         />
 
         <MetricCard
@@ -220,12 +217,6 @@ export function EnhancedDashboardScreen() {
           icon={CacheIcon}
           status={cacheHealthStatus}
           description={cache ? formatDateTime(latest?.timestamp) : "Cache unavailable"}
-          sparklineData={usage && typeof today.hitRate === 'number' ? generateSparklineData(today.hitRate * 100) : undefined}
-          trend={usage && typeof today.hitRate === 'number' ? {
-            direction: today.hitRate > 0.8 ? 'up' : today.hitRate > 0.6 ? 'neutral' : 'down',
-            percentage: ((today.hitRate - 0.75) * 100),
-            period: 'today'
-          } : undefined}
         />
 
         <MetricCard
@@ -234,12 +225,7 @@ export function EnhancedDashboardScreen() {
           icon={UsageIcon}
           status={usage ? 'healthy' : 'error'}
           description="API requests processed today"
-          sparklineData={usage && typeof today.requests === 'number' ? generateSparklineData(Math.max(1, today.requests / 100)) : undefined}
-          trend={usage ? {
-            direction: 'up',
-            percentage: 12.5,
-            period: 'vs yesterday'
-          } : undefined}
+          trend={dailyTrend ? { ...dailyTrend, period: 'vs yesterday' } : undefined}
         />
 
         <MetricCard
@@ -248,35 +234,42 @@ export function EnhancedDashboardScreen() {
           icon={RtkIcon}
           status={usage ? 'healthy' : 'error'}
           description="Average cache efficiency this month"
-          sparklineData={usage && typeof month.avgCacheSavedPercent === 'number' ? generateSparklineData(month.avgCacheSavedPercent * 100) : undefined}
-          trend={usage ? {
-            direction: 'up',
-            percentage: 5.2,
-            period: 'vs last month'
-          } : undefined}
         />
       </div>
 
       {/* Data Visualization Section */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-5)', marginBottom: 'var(--space-6)' }}>
-        <SurfaceCard title="Cache Hit Rate Trend" description="24-hour cache performance overview">
-          <LineChart
-            data={mockTimeSeriesData}
-            title="Hit Rate %"
-            height={250}
-            color="var(--chart-primary)"
-            fill={true}
-            valueFormatter={(value) => `${value.toFixed(1)}%`}
-          />
+        <SurfaceCard title="Cache Hit Rate Trend" description="Daily cache hit rate over the last month.">
+          {cacheHitTrend.length > 0 ? (
+            <LineChart
+              data={cacheHitTrend}
+              title="Hit Rate %"
+              height={250}
+              color="#6366f1"
+              fill={true}
+              timeFormat="MMM d"
+              valueFormatter={(value) => `${value.toFixed(1)}%`}
+            />
+          ) : (
+            <p style={{ padding: 'var(--space-5)', color: 'var(--text-muted)' }}>
+              No usage telemetry yet. Send a request through the proxy to populate this chart.
+            </p>
+          )}
         </SurfaceCard>
 
-        <SurfaceCard title="Provider Performance" description="Response time comparison across providers">
-          <BarChart
-            data={mockProviderData}
-            title="Avg Response Time (ms)"
-            height={250}
-            valueFormatter={(value) => `${value.toFixed(1)}ms`}
-          />
+        <SurfaceCard title="Requests by Provider" description="Total requests routed to each provider this month.">
+          {providerVolume.length > 0 ? (
+            <BarChart
+              data={providerVolume}
+              title="Requests"
+              height={250}
+              valueFormatter={(value) => formatNumber(value)}
+            />
+          ) : (
+            <p style={{ padding: 'var(--space-5)', color: 'var(--text-muted)' }}>
+              No per-provider telemetry yet.
+            </p>
+          )}
         </SurfaceCard>
       </div>
 

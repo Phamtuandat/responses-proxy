@@ -43,6 +43,17 @@ export function BarChart({
   valueFormatter = (value) => value.toString(),
   className = '',
 }: BarChartProps) {
+  // Resolve CSS custom properties (var(--xxx)) to computed colors so they
+  // render on canvas. Chart.js cannot resolve CSS vars in canvas contexts.
+  const resolveCssColor = (input: string | undefined): string => {
+    const fallback = '#6366f1';
+    if (!input) return fallback;
+    if (!input.startsWith('var(')) return input;
+    const prop = input.slice(4, -1).trim();
+    const computed = getComputedStyle(document.documentElement).getPropertyValue(prop).trim();
+    return computed || fallback;
+  };
+
   // Guard against undefined or empty data
   if (!data || data.length === 0) {
     return (
@@ -66,24 +77,8 @@ export function BarChart({
       {
         label: title || 'Data',
         data: data.map(point => point.value),
-        backgroundColor: data.map(point => {
-          if (point.color) {
-            // If color ends with opacity suffix (like '20'), create transparent version
-            if (point.color.match(/[a-f0-9]{2}$/i)) {
-              return point.color;
-            }
-            // Add transparency to solid colors
-            return point.color + '20';
-          }
-          return 'var(--chart-primary)20';
-        }),
-        borderColor: data.map(point => {
-          if (point.color) {
-            // Remove opacity suffix if present to get solid color
-            return point.color.replace(/[a-f0-9]{2}$/i, '');
-          }
-          return 'var(--chart-primary)';
-        }),
+        backgroundColor: data.map(point => `${resolveCssColor(point.color)}33`),
+        borderColor: data.map(point => resolveCssColor(point.color)),
         borderWidth: 1,
         borderRadius: 4,
         borderSkipped: false,
@@ -99,7 +94,7 @@ export function BarChart({
       legend: {
         display: !!title,
         labels: {
-          color: 'var(--text-secondary)',
+          color: resolveCssColor('var(--text-secondary)'),
           font: {
             family: 'Inter, system-ui, sans-serif',
             size: 12,
@@ -107,10 +102,10 @@ export function BarChart({
         },
       },
       tooltip: {
-        backgroundColor: 'var(--surface-strong)',
-        titleColor: 'var(--text-primary)',
-        bodyColor: 'var(--text-secondary)',
-        borderColor: 'var(--line)',
+        backgroundColor: resolveCssColor('var(--surface-strong)'),
+        titleColor: resolveCssColor('var(--text-primary)'),
+        bodyColor: resolveCssColor('var(--text-secondary)'),
+        borderColor: resolveCssColor('var(--line)'),
         borderWidth: 1,
         cornerRadius: 8,
         displayColors: false,
@@ -126,10 +121,10 @@ export function BarChart({
       x: {
         grid: {
           display: showGrid,
-          color: 'var(--line)',
+          color: resolveCssColor('var(--line)'),
         },
         ticks: {
-          color: 'var(--text-muted)',
+          color: resolveCssColor('var(--text-muted)'),
           font: {
             family: 'Inter, system-ui, sans-serif',
             size: 11,
@@ -140,10 +135,10 @@ export function BarChart({
       y: {
         grid: {
           display: showGrid,
-          color: 'var(--line)',
+          color: resolveCssColor('var(--line)'),
         },
         ticks: {
-          color: 'var(--text-muted)',
+          color: resolveCssColor('var(--text-muted)'),
           font: {
             family: 'Inter, system-ui, sans-serif',
             size: 11,

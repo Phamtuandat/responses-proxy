@@ -52,6 +52,15 @@ export function LineChart({
   valueFormatter = (value) => value.toString(),
   className = '',
 }: LineChartProps) {
+  // Resolve CSS custom properties for canvas rendering
+  const resolveCss = (input: string, fallback = '#6366f1'): string => {
+    if (!input.startsWith('var(')) return input;
+    const prop = input.slice(4, -1).trim();
+    const computed = getComputedStyle(document.documentElement).getPropertyValue(prop).trim();
+    return computed || fallback;
+  };
+  const resolvedColor = resolveCss(color);
+
   // Guard against undefined or empty data
   if (!data || data.length === 0) {
     return (
@@ -79,14 +88,14 @@ export function LineChart({
       {
         label: title || 'Data',
         data: data.map(point => point.value),
-        borderColor: color,
-        backgroundColor: fill ? `${color}20` : 'transparent',
+        borderColor: resolvedColor,
+        backgroundColor: fill ? `${resolvedColor}33` : 'transparent',
         borderWidth: 2,
         fill,
         tension: 0.4,
         pointRadius: 3,
         pointHoverRadius: 5,
-        pointBackgroundColor: color,
+        pointBackgroundColor: resolvedColor,
         pointBorderColor: 'var(--surface-strong)',
         pointBorderWidth: 2,
       },
@@ -100,7 +109,7 @@ export function LineChart({
       legend: {
         display: !!title,
         labels: {
-          color: 'var(--text-secondary)',
+          color: resolveCss('var(--text-secondary)'),
           font: {
             family: 'Inter, system-ui, sans-serif',
             size: 12,
@@ -108,10 +117,10 @@ export function LineChart({
         },
       },
       tooltip: {
-        backgroundColor: 'var(--surface-strong)',
-        titleColor: 'var(--text-primary)',
-        bodyColor: 'var(--text-secondary)',
-        borderColor: 'var(--line)',
+        backgroundColor: resolveCss('var(--surface-strong)'),
+        titleColor: resolveCss('var(--text-primary)'),
+        bodyColor: resolveCss('var(--text-secondary)'),
+        borderColor: resolveCss('var(--line)'),
         borderWidth: 1,
         cornerRadius: 8,
         displayColors: false,
@@ -127,10 +136,10 @@ export function LineChart({
       x: {
         grid: {
           display: showGrid,
-          color: 'var(--line)',
+          color: resolveCss('var(--line)'),
         },
         ticks: {
-          color: 'var(--text-muted)',
+          color: resolveCss('var(--text-muted)'),
           font: {
             family: 'Inter, system-ui, sans-serif',
             size: 11,
@@ -140,10 +149,10 @@ export function LineChart({
       y: {
         grid: {
           display: showGrid,
-          color: 'var(--line)',
+          color: resolveCss('var(--line)'),
         },
         ticks: {
-          color: 'var(--text-muted)',
+          color: resolveCss('var(--text-muted)'),
           font: {
             family: 'Inter, system-ui, sans-serif',
             size: 11,
