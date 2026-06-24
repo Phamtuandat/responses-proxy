@@ -6305,13 +6305,94 @@ function sanitizeNormalizedRequestForProvider(
   request: Record<string, unknown>,
   provider: RuntimeProviderPreset,
 ): Record<string, unknown> {
-  if (provider.capabilities.accountPlatform !== "openai_codex") {
-    return request;
+  let sanitized = { ...request };
+
+  const transportMode = provider.capabilities.transportMode ?? "responses";
+  if (transportMode === "chat_completions") {
+    const input = sanitized.input;
+    let messages: any[] = [];
+    if (typeof input === "string") {
+      messages = [{ role: "user", content: input }];
+    } else if (Array.isArray(input)) {
+      for (const item of input) {
+        if (typeof item === "object" && item !== null) {
+          const role = (item as any).role;
+          const content = (item as any).content;
+          const type = (item as any).type;
+
+          if (type === "function_call") {
+            let lastMsg = messages[messages.length - 1];
+            if (!lastMsg || lastMsg.role !== "assistant") {
+              lastMsg = { role: "assistant", content: null, tool_calls: [] };
+              messages.push(lastMsg);
+            }
+            if (!lastMsg.tool_calls) {
+              lastMsg.tool_calls = [];
+            }
+            lastMsg.tool_calls.push({
+              id: (item as any).call_id,
+              type: "function",
+              function: {
+                name: (item as any).name,
+                arguments: (item as any).arguments || "{}",
+              },
+            });
+          } else if (type === "function_call_output") {
+            messages.push({
+              role: "tool",
+              tool_call_id: (item as any).call_id,
+              content: (item as any).output || "",
+            });
+          } else if (
+            role === "user" ||
+            role === "assistant" ||
+            role === "system" ||
+            role === "developer"
+          ) {
+            let finalContent = content;
+            if (Array.isArray(content)) {
+              finalContent = content.map((part: any) => {
+                if (typeof part === "object" && part !== null) {
+                  if (part.type === "input_text" || part.type === "output_text") {
+                    return { type: "text", text: part.text || "" };
+                  }
+                  if (part.type === "input_image") {
+                    return { type: "image_url", image_url: { url: part.image_url || "" } };
+                  }
+                }
+                return part;
+              });
+            }
+            messages.push({
+              role,
+              content: finalContent,
+            });
+          } else {
+            messages.push(item);
+          }
+        } else {
+          messages.push(item);
+        }
+      }
+    }
+
+    if (typeof sanitized.instructions === "string" && sanitized.instructions.trim()) {
+      messages.unshift({ role: "system", content: sanitized.instructions.trim() });
+    }
+
+    sanitized.messages = messages;
+    delete sanitized.input;
+    delete sanitized.instructions;
   }
-  const sanitized = { ...request };
-  delete sanitized.prompt_cache_key;
-  delete sanitized.prompt_cache_retention;
-  return sanitized;
+
+  if (provider.capabilities.accountPlatform !== "openai_codex") {
+    return sanitized;
+  }
+
+  const result = { ...sanitized };
+  delete result.prompt_cache_key;
+  delete result.prompt_cache_retention;
+  return result;
 }
 
 function ensureChatGptOAuthProvider(): RuntimeProviderPreset {
