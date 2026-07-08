@@ -163,6 +163,7 @@ async function openKiroStream(
           "X-Amz-User-Agent": "aws-sdk-js/3.0.0 kiro-ide/1.0.0",
           "Amz-Sdk-Request": `attempt=${attempt}; max=${maxAttempts}`,
           "Amz-Sdk-Invocation-Id": randomUUID(),
+          ...(credentials.authMethod === "external_idp" ? { TokenType: "EXTERNAL_IDP" } : {}),
         },
         body: JSON.stringify(cwRequest),
         signal: controller.signal,
