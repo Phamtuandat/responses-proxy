@@ -10,6 +10,8 @@ export type KiroProviderSpecificData = {
   region?: string | null;
   authMethod?: string | null;
   startUrl?: string | null;
+  tokenEndpoint?: string | null;
+  scopes?: string | null;
 };
 
 export type KiroAccount = {
@@ -248,6 +250,8 @@ function mapConnectionRow(row: ConnectionRow): KiroAccount | undefined {
       region: optionalString(psdRaw.region),
       authMethod: optionalString(psdRaw.authMethod),
       startUrl: optionalString(psdRaw.startUrl),
+      tokenEndpoint: optionalString(psdRaw.tokenEndpoint),
+      scopes: optionalString(psdRaw.scopes),
     },
     raw: data,
     createdAt: row.createdAt,
