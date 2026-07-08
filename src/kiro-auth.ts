@@ -41,7 +41,7 @@ export async function refreshKiroToken(
   options: { defaultRegion: string; fetchImpl?: FetchLike } = { defaultRegion: "us-east-1" },
 ): Promise<KiroTokenUpdate> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const { clientId, clientSecret, region, authMethod, tokenEndpoint } = account.providerSpecificData;
+  const { clientId, clientSecret, region, authMethod, tokenEndpoint, scopes } = account.providerSpecificData;
   const resolvedRegion = region?.trim() || options.defaultRegion;
   const isExternalIdp = authMethod === "external_idp" && !!tokenEndpoint;
 
@@ -52,6 +52,9 @@ export async function refreshKiroToken(
       grant_type: "refresh_token",
       refresh_token: account.refreshToken,
     });
+    if (scopes) {
+      bodyParams.append("scope", scopes);
+    }
     const response = await fetchImpl(tokenEndpoint!, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },

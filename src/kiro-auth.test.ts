@@ -146,6 +146,7 @@ test("refreshKiroToken uses the tokenEndpoint and URLSearchParams for external_i
       authMethod: "external_idp",
       tokenEndpoint: "https://login.microsoftonline.com/tenant-ext/oauth2/v2.0/token",
       startUrl: null,
+      scopes: "api://b59b6a0b-258a-49f6-bcc8-bcc2023a3cdb/Codewhisperer.Request",
     },
   });
   const update = await refreshKiroToken(account, { defaultRegion: "us-east-1", fetchImpl });
@@ -156,6 +157,7 @@ test("refreshKiroToken uses the tokenEndpoint and URLSearchParams for external_i
   assert.equal(params.get("client_id"), "client-ext");
   assert.equal(params.get("grant_type"), "refresh_token");
   assert.equal(params.get("refresh_token"), "refresh-a");
+  assert.equal(params.get("scope"), "api://b59b6a0b-258a-49f6-bcc8-bcc2023a3cdb/Codewhisperer.Request");
 
   assert.equal(update.accessToken, "ext-access");
   assert.equal(update.refreshToken, "ext-refresh");
