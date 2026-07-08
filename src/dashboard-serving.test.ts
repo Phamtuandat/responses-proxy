@@ -166,7 +166,7 @@ async function startDashboardServer(extraEnv: Record<string, string> = {}) {
         ...process.env,
         PORT: String(port),
         HOST: "127.0.0.1",
-        UPSTREAM_BASE_URL: "https://api.openai.com",
+        UPSTREAM_BASE_URL: "https://api.openai.com/v1",
         APP_DB_PATH: path.join(tempDir, "app.sqlite"),
         CUSTOMER_KEY_DB_PATH: path.join(tempDir, "customer.sqlite"),
         SESSION_LOG_DIR: path.join(tempDir, "sessions"),

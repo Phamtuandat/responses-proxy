@@ -18,6 +18,8 @@
     "bot:start": "node dist/telegram-bot/index.js",
     "kiro:import": "tsx src/kiro-import-cli.ts",
     "kiro:import:prod": "node dist/kiro-import-cli.js",
+    "kiro:import:json": "tsx src/kiro-json-import-cli.ts",
+    "kiro:import:json:prod": "node dist/kiro-json-import-cli.js",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test $(find src -name '*.test.ts' -print)",
     "app:install": "./scripts/install.sh",

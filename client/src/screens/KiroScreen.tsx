@@ -7,7 +7,7 @@ import {
   refreshKiroAccount,
   updateKiroAccount,
 } from "../api/client";
-import type { KiroAccount, KiroStatus } from "../api/types";
+import type { KiroAccount, KiroStatus, KiroImportResponse } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
@@ -72,6 +72,110 @@ export function KiroScreen({ accountId }: KiroScreenProps) {
   const [feedback, setFeedback] = useState<MutationFeedback | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importSourcePath, setImportSourcePath] = useState("");
+  const [importMethod, setImportMethod] = useState<"json" | "path">("json");
+  const [importJsonContent, setImportJsonContent] = useState("");
+  const [importShouldRefresh, setImportShouldRefresh] = useState(true);
+  const [isDragging, setIsDragging] = useState(false);
+  const [importResult, setImportResult] = useState<KiroImportResponse | null>(null);
+
+  const validation = useMemo(() => {
+    const val = importJsonContent.trim();
+    if (!val) return null;
+
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) {
+        return {
+          type: 'success',
+          title: 'Valid JSON Array',
+          message: `Detected ${parsed.length} Kiro account(s) in an array.`,
+          canBeFormatted: true,
+        };
+      }
+      if (parsed && typeof parsed === 'object') {
+        const parsedObj = parsed as Record<string, unknown>;
+        if (Array.isArray(parsedObj.providerConnections)) {
+          const count = parsedObj.providerConnections.length;
+          return {
+            type: 'success',
+            title: 'Valid 9router Backup JSON',
+            message: `Detected 9router backup configuration containing ${count} provider connection(s).`,
+            canBeFormatted: true,
+          };
+        }
+        if ('refreshToken' in parsedObj || 'refresh_token' in parsedObj) {
+          return {
+            type: 'success',
+            title: 'Valid Account JSON',
+            message: `Detected 1 Kiro account details configuration.`,
+            canBeFormatted: true,
+          };
+        }
+        return {
+          type: 'success',
+          title: 'Valid JSON Object',
+          message: `Detected generic JSON object.`,
+          canBeFormatted: true,
+        };
+      }
+    } catch (e) {
+      if (val.length > 30 && !val.includes('{') && !val.includes('[')) {
+        return {
+          type: 'info',
+          title: 'Plain Text Token',
+          message: `Will be imported as a raw Kiro refresh token.`,
+          canBeFormatted: false,
+        };
+      }
+      return {
+        type: 'error',
+        title: 'Invalid JSON format',
+        message: `Please paste valid JSON or a plain refresh token. Error: ${(e as Error).message}`,
+        canBeFormatted: false,
+      };
+    }
+    return null;
+  }, [importJsonContent]);
+
+  const handleFormatJson = () => {
+    try {
+      const parsed = JSON.parse(importJsonContent);
+      setImportJsonContent(JSON.stringify(parsed, null, 2));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    const file = e.dataTransfer.files[0];
+    if (file && (file.type === "application/json" || file.name.endsWith(".json"))) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setImportJsonContent(event.target.result as string);
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setImportJsonContent(event.target.result as string);
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleCloseImportDialog = () => {
+    setShowImportDialog(false);
+    setImportResult(null);
+  };
 
   const loadKiroData = useCallback(async () => {
     try {
@@ -188,12 +292,39 @@ export function KiroScreen({ accountId }: KiroScreenProps) {
   }
 
   async function handleImportAccounts() {
+    const trimmedContent = importJsonContent.trim();
     await runMutation(
       "kiro:import",
       async () => {
-        await importKiroAccounts(importSourcePath ? { sourcePath: importSourcePath } : undefined);
-        setShowImportDialog(false);
+        let result: KiroImportResponse;
+        if (importMethod === "json") {
+          if (!trimmedContent) {
+            throw new Error("Please paste your Kiro JSON or Refresh Token.");
+          }
+          let parsedJson: unknown = undefined;
+          try {
+            parsedJson = JSON.parse(trimmedContent);
+          } catch {
+            // Not JSON, treat as raw refresh token
+          }
+
+          if (parsedJson !== undefined) {
+            result = await importKiroAccounts({
+              json: parsedJson,
+              refresh: importShouldRefresh,
+            });
+          } else {
+            result = await importKiroAccounts({
+              refreshToken: trimmedContent,
+              refresh: importShouldRefresh,
+            });
+          }
+        } else {
+          result = await importKiroAccounts(importSourcePath ? { sourcePath: importSourcePath } : undefined);
+        }
+        setImportResult(result);
         setImportSourcePath("");
+        setImportJsonContent("");
       },
       "Successfully imported Kiro accounts",
     );
@@ -606,44 +737,302 @@ export function KiroScreen({ accountId }: KiroScreenProps) {
 
       {/* Import Dialog */}
       {showImportDialog && (
-        <div className="modal-backdrop" onClick={() => setShowImportDialog(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Import Kiro Accounts</h3>
-              <button className="modal-close" onClick={() => setShowImportDialog(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <p>Import Kiro accounts from 9router database.</p>
-              <div className="form-group">
-                <label htmlFor="import-source">Source Database Path (optional)</label>
-                <input
-                  id="import-source"
-                  type="text"
-                  value={importSourcePath}
-                  onChange={(e) => setImportSourcePath(e.target.value)}
-                  placeholder="Leave empty to use default path"
-                  className="form-input"
-                />
-                <small className="form-help">
-                  Default: ~/.9router/db/data.sqlite
-                </small>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button
-                className="button button-secondary"
-                onClick={() => setShowImportDialog(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="button button-primary"
-                onClick={handleImportAccounts}
-                disabled={pendingAction === "kiro:import"}
-              >
-                {pendingAction === "kiro:import" ? "Importing..." : "Import"}
-              </button>
-            </div>
+        <div className="modal-backdrop" onClick={handleCloseImportDialog}>
+          <div className="modal-card" style={{ maxWidth: "600px" }} onClick={(e) => e.stopPropagation()}>
+            {importResult ? (
+              <>
+                <div className="modal-header">
+                  <h3>Import Completed</h3>
+                  <button className="modal-close" onClick={handleCloseImportDialog}>×</button>
+                </div>
+                <div className="modal-body" style={{ textAlign: 'center', padding: 'var(--space-5) var(--space-4)' }}>
+                  <div style={{
+                    width: '56px',
+                    height: '56px',
+                    borderRadius: '50%',
+                    background: 'var(--success-soft)',
+                    color: 'var(--success)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    margin: '0 auto var(--space-4) auto',
+                  }}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
+                  
+                  <h3 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-2)' }}>Successfully Imported</h3>
+                  <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-5)', fontSize: 'var(--text-sm)' }}>
+                    Successfully imported and configured <strong>{importResult.imported}</strong> account{importResult.imported === 1 ? '' : 's'}.
+                  </p>
+
+                  {importResult.accounts && importResult.accounts.length > 0 && (
+                    <div style={{
+                      textAlign: 'left',
+                      background: 'var(--surface-muted)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 'var(--radius-md)',
+                      maxHeight: '220px',
+                      overflowY: 'auto',
+                      marginBottom: 'var(--space-4)'
+                    }}>
+                      <div style={{
+                        padding: 'var(--space-2) var(--space-3)',
+                        borderBottom: '1px solid var(--line)',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        color: 'var(--text-muted)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em'
+                      }}>
+                        Imported Accounts
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        {importResult.accounts.map((acc, idx) => (
+                          <div key={acc.id} style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: 'var(--space-3)',
+                            borderBottom: idx < importResult.accounts!.length - 1 ? '1px solid var(--line)' : 'none'
+                          }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <span style={{ fontWeight: '500', fontSize: 'var(--text-sm)' }}>{acc.name}</span>
+                              {acc.email && (
+                                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{acc.email}</span>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                              <span style={{
+                                fontSize: '10px',
+                                fontWeight: '600',
+                                padding: '2px 6px',
+                                borderRadius: 'var(--radius-pill)',
+                                background: 'var(--neutral-soft)',
+                                color: 'var(--text-secondary)',
+                                textTransform: 'uppercase'
+                              }}>
+                                {acc.authMethod}
+                              </span>
+                              {acc.refreshed ? (
+                                <span style={{
+                                  fontSize: '10px',
+                                  fontWeight: '600',
+                                  padding: '2px 6px',
+                                  borderRadius: 'var(--radius-pill)',
+                                  background: 'var(--success-soft)',
+                                  color: 'var(--success)'
+                                }}>
+                                  Refreshed
+                                </span>
+                              ) : (
+                                <span style={{
+                                  fontSize: '10px',
+                                  fontWeight: '600',
+                                  padding: '2px 6px',
+                                  borderRadius: 'var(--radius-pill)',
+                                  background: 'var(--warning-soft)',
+                                  color: 'var(--warning)'
+                                }}>
+                                  Saved
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="modal-footer">
+                  <button
+                    className="button button-primary"
+                    onClick={handleCloseImportDialog}
+                    style={{ width: '100%' }}
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="modal-header">
+                  <h3>Import Kiro Accounts</h3>
+                  <button className="modal-close" onClick={handleCloseImportDialog}>×</button>
+                </div>
+                <div className="modal-body">
+                  <div className="tab-navigation" style={{ marginBottom: "var(--space-4)" }}>
+                    <div className="tab-list" style={{ display: "flex", gap: "var(--space-2)", borderBottom: "1px solid var(--line)", paddingBottom: "var(--space-2)" }}>
+                      <button
+                        className={`tab-button ${importMethod === 'json' ? 'tab-button-active' : ''}`}
+                        onClick={() => setImportMethod('json')}
+                        style={{ background: 'none', border: 'none', padding: 'var(--space-2) var(--space-3)', cursor: 'pointer', borderBottom: importMethod === 'json' ? '2px solid var(--accent)' : 'none', fontWeight: importMethod === 'json' ? '600' : 'normal', color: importMethod === 'json' ? 'var(--accent)' : 'var(--muted)' }}
+                      >
+                        Paste JSON / Token
+                      </button>
+                      <button
+                        className={`tab-button ${importMethod === 'path' ? 'tab-button-active' : ''}`}
+                        onClick={() => setImportMethod('path')}
+                        style={{ background: 'none', border: 'none', padding: 'var(--space-2) var(--space-3)', cursor: 'pointer', borderBottom: importMethod === 'path' ? '2px solid var(--accent)' : 'none', fontWeight: importMethod === 'path' ? '600' : 'normal', color: importMethod === 'path' ? 'var(--accent)' : 'var(--muted)' }}
+                      >
+                        SQLite DB Path
+                      </button>
+                    </div>
+                  </div>
+
+                  {importMethod === 'json' ? (
+                    <div>
+                      {/* Drag & Drop Area */}
+                      <div
+                        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                        onDragLeave={() => setIsDragging(false)}
+                        onDrop={(e) => { e.preventDefault(); setIsDragging(false); handleFileDrop(e); }}
+                        onClick={() => document.getElementById('kiro-file-input')?.click()}
+                        style={{
+                          border: isDragging ? '2px dashed var(--accent)' : '2px dashed var(--line-strong)',
+                          borderRadius: 'var(--radius-md)',
+                          padding: 'var(--space-4)',
+                          textAlign: 'center',
+                          background: isDragging ? 'var(--accent-soft)' : 'var(--surface-muted)',
+                          cursor: 'pointer',
+                          transition: 'all var(--animation-fast) var(--animation-easing)',
+                          marginBottom: 'var(--space-4)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 'var(--space-1)'
+                        }}
+                      >
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: isDragging ? 'var(--accent)' : 'var(--text-secondary)', marginBottom: '4px' }}>
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="17 8 12 3 7 8" />
+                          <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                        <span style={{ fontWeight: '500', fontSize: 'var(--text-sm)' }}>
+                          Drag & drop JSON file here or click to browse
+                        </span>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          Supports .json containing Kiro accounts or 9router backups
+                        </span>
+                        <input
+                          id="kiro-file-input"
+                          type="file"
+                          accept=".json,application/json"
+                          onChange={handleFileSelect}
+                          style={{ display: 'none' }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--line)' }} />
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Or paste content</span>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--line)' }} />
+                      </div>
+
+                      <div className="form-group" style={{ marginBottom: 'var(--space-3)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
+                          <label htmlFor="import-json" style={{ fontWeight: '500', fontSize: 'var(--text-sm)' }}>JSON Credentials or Refresh Token</label>
+                          {validation?.canBeFormatted && (
+                            <button
+                              type="button"
+                              onClick={handleFormatJson}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--accent)',
+                                fontSize: 'var(--text-xs)',
+                                cursor: 'pointer',
+                                padding: '0',
+                                fontWeight: '500'
+                              }}
+                            >
+                              Beautify JSON
+                            </button>
+                          )}
+                        </div>
+                        <textarea
+                          id="import-json"
+                          value={importJsonContent}
+                          onChange={(e) => setImportJsonContent(e.target.value)}
+                          placeholder='{ "refreshToken": "..." } or raw refresh token string'
+                          className="form-input"
+                          rows={5}
+                          style={{ fontFamily: 'monospace', fontSize: '13px', width: '100%', padding: 'var(--space-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)', background: 'var(--surface-muted)' }}
+                        />
+                      </div>
+
+                      {/* Validation Message */}
+                      {validation && (
+                        <div style={{
+                          display: 'flex',
+                          gap: 'var(--space-2)',
+                          padding: 'var(--space-3)',
+                          borderRadius: 'var(--radius-sm)',
+                          fontSize: 'var(--text-xs)',
+                          lineHeight: '1.4',
+                          marginBottom: 'var(--space-4)',
+                          background: validation.type === 'success' ? 'var(--success-soft)' : validation.type === 'error' ? 'var(--danger-soft)' : 'var(--accent-soft)',
+                          color: validation.type === 'success' ? 'var(--success)' : validation.type === 'error' ? 'var(--danger)' : 'var(--accent)',
+                          border: `1px solid ${validation.type === 'success' ? 'rgba(52, 211, 153, 0.2)' : validation.type === 'error' ? 'rgba(248, 113, 113, 0.2)' : 'rgba(100, 168, 255, 0.2)'}`
+                        }}>
+                          <div style={{ fontWeight: 'bold' }}>{validation.title}:</div>
+                          <div>{validation.message}</div>
+                        </div>
+                      )}
+
+                      <div className="form-group" style={{ marginBottom: 'var(--space-2)' }}>
+                        <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer', fontSize: 'var(--text-sm)' }}>
+                          <input
+                            type="checkbox"
+                            checked={importShouldRefresh}
+                            onChange={(e) => setImportShouldRefresh(e.target.checked)}
+                          />
+                          Refresh tokens on import (recommended to validate)
+                        </label>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <p style={{ marginBottom: 'var(--space-3)', color: 'var(--muted)', fontSize: 'var(--text-sm)' }}>
+                        Import Kiro accounts from a local 9router SQLite database copy.
+                      </p>
+                      <div className="form-group">
+                        <label htmlFor="import-source" style={{ fontWeight: '500', fontSize: 'var(--text-sm)' }}>Source Database Path (optional)</label>
+                        <input
+                          id="import-source"
+                          type="text"
+                          value={importSourcePath}
+                          onChange={(e) => setImportSourcePath(e.target.value)}
+                          placeholder="Leave empty to use default path"
+                          className="form-input"
+                          style={{ background: 'var(--surface-muted)' }}
+                        />
+                        <small className="form-help">
+                          Default: ~/.9router/db/data.sqlite
+                        </small>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="modal-footer">
+                  <button
+                    className="button button-secondary"
+                    onClick={handleCloseImportDialog}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="button button-primary"
+                    onClick={handleImportAccounts}
+                    disabled={pendingAction === "kiro:import" || (importMethod === "json" && !importJsonContent.trim())}
+                  >
+                    {pendingAction === "kiro:import" ? "Importing..." : "Import"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

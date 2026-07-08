@@ -133,6 +133,35 @@ test("refreshKiroToken uses the regional OIDC endpoint for IDC accounts", async 
   assert.equal(body.grantType, "refresh_token");
 });
 
+test("refreshKiroToken uses the tokenEndpoint and URLSearchParams for external_idp accounts", async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({
+    body: { access_token: "ext-access", refresh_token: "ext-refresh", expires_in: 7200 },
+  }));
+  const account = makeAccount({
+    providerSpecificData: {
+      profileArn: null,
+      clientId: "client-ext",
+      clientSecret: null,
+      region: "us-east-1",
+      authMethod: "external_idp",
+      tokenEndpoint: "https://login.microsoftonline.com/tenant-ext/oauth2/v2.0/token",
+      startUrl: null,
+    },
+  });
+  const update = await refreshKiroToken(account, { defaultRegion: "us-east-1", fetchImpl });
+
+  assert.equal(calls[0].url, "https://login.microsoftonline.com/tenant-ext/oauth2/v2.0/token");
+  assert.equal((calls[0].init?.headers as any)?.["Content-Type"], "application/x-www-form-urlencoded");
+  const params = new URLSearchParams(calls[0].init?.body as string);
+  assert.equal(params.get("client_id"), "client-ext");
+  assert.equal(params.get("grant_type"), "refresh_token");
+  assert.equal(params.get("refresh_token"), "refresh-a");
+
+  assert.equal(update.accessToken, "ext-access");
+  assert.equal(update.refreshToken, "ext-refresh");
+  assert.equal(update.expiresIn, 7200);
+});
+
 test("refreshKiroToken throws KiroAuthError on a non-ok response", async () => {
   const { fetchImpl } = mockFetch(() => ({ status: 400, body: { error: "bad" } }));
   await assert.rejects(

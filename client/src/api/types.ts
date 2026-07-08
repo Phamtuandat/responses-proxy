@@ -527,13 +527,23 @@ export type KiroAccountDeleteResponse = {
 
 export type KiroImportInput = {
   sourcePath?: string;
+  json?: unknown;
+  refreshToken?: string;
+  refresh?: boolean;
 };
 
 export type KiroImportResponse = {
   ok: true;
   imported: number;
-  sourcePath: string;
+  sourcePath?: string;
   destPath: string;
+  accounts?: Array<{
+    id: string;
+    name: string;
+    email: string | null;
+    authMethod: string;
+    refreshed: boolean;
+  }>;
 };
 
 // Enhanced Provider Domain Model - 9Router-inspired types
