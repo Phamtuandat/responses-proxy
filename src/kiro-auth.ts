@@ -7,6 +7,7 @@ export type KiroResolvedCredentials = {
   accessToken: string;
   profileArn: string | null;
   region: string;
+  authMethod?: string | null;
 };
 
 export class KiroAuthError extends Error {
@@ -118,6 +119,7 @@ export async function resolveKiroCredentials(args: {
     accessToken: fresh.accessToken,
     profileArn: fresh.providerSpecificData.profileArn ?? null,
     region: fresh.providerSpecificData.region?.trim() || args.defaultRegion,
+    authMethod: fresh.providerSpecificData.authMethod ?? null,
   };
 }
 
