@@ -1982,12 +1982,71 @@ app.post("/api/kiro/import", async (request, reply) => {
 
   const body = request.body as {
     sourcePath?: string;
+    // JSON import (9router-style): a single account, an array of accounts, or a
+    // 9router backup ({ providerConnections: [...] }). `refresh` defaults to true.
+    json?: unknown;
+    accounts?: unknown;
+    providerConnections?: unknown;
+    refreshToken?: string;
+    refresh?: boolean;
   } | undefined;
+
+  const destPath = config.KIRO_DB_PATH;
+
+  // Auto-enable the Kiro provider once at least one account has been imported.
+  const autoEnableKiro = (imported: number) => {
+    if (imported <= 0) return;
+    try {
+      const kiroProvider = providerRepository.getProvider("account-kiro");
+      if (kiroProvider && !kiroProvider.enabled) {
+        providerRepository.updateProvider("account-kiro", { ...kiroProvider, enabled: true });
+      }
+    } catch { /* ignore */ }
+  };
+
+  // A JSON payload takes precedence over the SQLite copy path: the body carries
+  // account data directly (as 9router's dashboard import does) rather than a
+  // path to another 9router database.
+  const jsonPayload =
+    body?.json ??
+    (body?.accounts !== undefined
+      ? body.accounts
+      : body?.providerConnections !== undefined
+        ? { providerConnections: body.providerConnections }
+        : body?.refreshToken !== undefined
+          ? body
+          : undefined);
+
+  if (jsonPayload !== undefined) {
+    try {
+      const { importKiroAccountsFromJson } = await import("./kiro-json-import.js");
+      const result = await importKiroAccountsFromJson({
+        json: jsonPayload,
+        destDbPath: destPath,
+        defaultRegion: config.KIRO_DEFAULT_REGION,
+        refresh: body?.refresh,
+      });
+      autoEnableKiro(result.imported);
+      return reply.send({
+        ok: true,
+        imported: result.imported,
+        destPath: result.dest,
+        accounts: result.accounts,
+      });
+    } catch (error) {
+      return reply.code(400).send({
+        error: {
+          type: "import_error",
+          code: "KIRO_JSON_IMPORT_FAILED",
+          message: error instanceof Error ? error.message : "Import failed",
+        },
+      });
+    }
+  }
 
   try {
     const { importKiroAccounts } = await import("./kiro-import.js");
     const sourcePath = body?.sourcePath || process.env.KIRO_SOURCE_DB_PATH || `${process.env.HOME}/.9router/db/data.sqlite`;
-    const destPath = config.KIRO_DB_PATH;
 
     const result = await importKiroAccounts({
       sourceDbPath: sourcePath,
@@ -1995,15 +2054,7 @@ app.post("/api/kiro/import", async (request, reply) => {
       provider: 'kiro',
     });
 
-    // Auto-enable the Kiro provider after importing accounts
-    if (result.imported > 0) {
-      try {
-        const kiroProvider = providerRepository.getProvider("account-kiro");
-        if (kiroProvider && !kiroProvider.enabled) {
-          providerRepository.updateProvider("account-kiro", { ...kiroProvider, enabled: true });
-        }
-      } catch { /* ignore */ }
-    }
+    autoEnableKiro(result.imported);
 
     return reply.send({
       ok: true,
@@ -3931,7 +3982,12 @@ app.get("/v1/models", async (request, reply) => {
   });
 
   if (!response.ok) {
-    return reply.code(response.status).send(await response.text());
+    const text = await response.text();
+    try {
+      return reply.code(response.status).send(JSON.parse(text));
+    } catch {
+      return reply.code(response.status).send(text);
+    }
   }
 
   const payload = await response.json();

@@ -41,11 +41,33 @@ export async function refreshKiroToken(
   options: { defaultRegion: string; fetchImpl?: FetchLike } = { defaultRegion: "us-east-1" },
 ): Promise<KiroTokenUpdate> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const { clientId, clientSecret, region } = account.providerSpecificData;
+  const { clientId, clientSecret, region, authMethod, tokenEndpoint } = account.providerSpecificData;
   const resolvedRegion = region?.trim() || options.defaultRegion;
+  const isExternalIdp = authMethod === "external_idp" && !!tokenEndpoint;
 
   let payload: RefreshResponse;
-  if (clientId && clientSecret) {
+  if (isExternalIdp) {
+    const bodyParams = new URLSearchParams({
+      client_id: clientId || "",
+      grant_type: "refresh_token",
+      refresh_token: account.refreshToken,
+    });
+    const response = await fetchImpl(tokenEndpoint!, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: bodyParams.toString(),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new KiroAuthError("KIRO_TOKEN_REFRESH_FAILED", `Token refresh failed (${response.status}): ${text}`);
+    }
+    const data = (await response.json()) as any;
+    payload = {
+      accessToken: data.access_token ?? data.accessToken,
+      refreshToken: data.refresh_token ?? data.refreshToken,
+      expiresIn: data.expires_in ?? data.expiresIn,
+    };
+  } else if (clientId && clientSecret) {
     const url = `https://oidc.${resolvedRegion}.amazonaws.com/token`;
     const response = await fetchImpl(url, {
       method: "POST",
