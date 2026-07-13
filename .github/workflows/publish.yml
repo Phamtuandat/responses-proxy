@@ -1,0 +1,82 @@
+name: Publish to npm
+
+# Publishes the CLI package (cli/, name "responses-proxy") to npm.
+#
+# Auto-trigger: a push to main that changes cli/package.json — matching the
+# repo's "chore: bump version" commit convention. The job no-ops if the version
+# already exists on npm, so a push touching cli/package.json for other reasons
+# won't fail.
+#
+# Manual trigger: workflow_dispatch, for re-runs or out-of-band releases.
+#
+# Requires repository secret NPM_TOKEN — an npm automation token with publish
+# rights on "responses-proxy".
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cli/package.json"
+  workflow_dispatch:
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, verify & publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Gate the release on a green tree before touching the registry.
+      - name: Typecheck
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Read package version
+        id: pkg
+        run: echo "version=$(node -p "require('./cli/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Skip cleanly if this version is already on npm (idempotent re-runs and
+      # non-bump pushes to cli/package.json).
+      - name: Check if version already published
+        id: check
+        run: |
+          if npm view "responses-proxy@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "responses-proxy@${{ steps.pkg.outputs.version }} already on npm — skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # prepublishOnly runs the CLI build (bundles server + client into cli/dist).
+      - name: Publish
+        if: steps.check.outputs.exists == 'false'
+        working-directory: cli
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.check.outputs.exists }}" = "true" ]; then
+            echo "### Skipped — responses-proxy@${{ steps.pkg.outputs.version }} already published" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Published responses-proxy@${{ steps.pkg.outputs.version }} to npm" >> "$GITHUB_STEP_SUMMARY"
+          fi

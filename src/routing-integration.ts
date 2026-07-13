@@ -41,6 +41,20 @@ export type RoutingResult = {
 };
 
 /**
+ * A combo-selected provider must be one the request's API key is entitled to.
+ * `allowed` is the set already resolved by resolveCustomerRoutingAccess (+ the
+ * open-routing fallback, which fills the playground case). An empty set here means
+ * an unauthenticated/invalid key, so nothing is allowed — the caller falls through
+ * to resolveProviderForRequest, which returns the proper 401.
+ */
+function isProviderAllowed(
+  provider: RuntimeProviderPreset,
+  allowed: RuntimeProviderPreset[],
+): boolean {
+  return allowed.some((candidate) => candidate.id === provider.id);
+}
+
+/**
  * Enhanced provider resolution that uses routing combos when available,
  * falling back to the original simple provider selection logic.
  */
@@ -87,18 +101,27 @@ export async function resolveProviderWithRouting(
         });
 
         if (routingResult.success && routingResult.provider) {
-          return {
-            provider: routingResult.provider,
-            matchReason: "routing_combo",
-            routingComboId: combo.id,
-            tierName: routingResult.tier,
-            selectionTime: routingResult.selectionTime,
-            fallbackCount: routingResult.fallbackCount
-          };
+          // Entitlement guard: a combo is a preference WITHIN the set of providers
+          // this API key may use, never an override of it. If the engine picked a
+          // provider outside request.providers, drop to the simple selection path
+          // (which enforces membership) instead of leaking access.
+          if (isProviderAllowed(routingResult.provider, providers)) {
+            return {
+              provider: routingResult.provider,
+              matchReason: "routing_combo",
+              routingComboId: combo.id,
+              tierName: routingResult.tier,
+              selectionTime: routingResult.selectionTime,
+              fallbackCount: routingResult.fallbackCount
+            };
+          }
+          console.warn(
+            `Routing combo ${assignedComboId} selected provider ${routingResult.provider.id} not permitted for client route ${clientRoute}; falling back to allowed providers`,
+          );
+        } else {
+          // If routing combo failed, fall back to simple selection
+          console.warn(`Routing combo ${assignedComboId} failed for client route ${clientRoute}: ${routingResult.error}`);
         }
-
-        // If routing combo failed, fall back to simple selection
-        console.warn(`Routing combo ${assignedComboId} failed for client route ${clientRoute}: ${routingResult.error}`);
       }
     }
 
@@ -115,14 +138,22 @@ export async function resolveProviderWithRouting(
         });
 
         if (routingResult.success && routingResult.provider) {
-          return {
-            provider: routingResult.provider,
-            matchReason: "routing_combo",
-            routingComboId: defaultCombo.id,
-            tierName: routingResult.tier,
-            selectionTime: routingResult.selectionTime,
-            fallbackCount: routingResult.fallbackCount
-          };
+          if (isProviderAllowed(routingResult.provider, providers)) {
+            return {
+              provider: routingResult.provider,
+              matchReason: "routing_combo",
+              routingComboId: defaultCombo.id,
+              tierName: routingResult.tier,
+              selectionTime: routingResult.selectionTime,
+              fallbackCount: routingResult.fallbackCount
+            };
+          }
+          console.warn(
+            `Default routing combo ${defaultCombo.id} selected provider ${routingResult.provider.id} not permitted for client route ${clientRoute}; falling back to allowed providers`,
+          );
+        } else {
+          // Match the assigned-combo path: make default-combo failures visible.
+          console.warn(`Default routing combo ${defaultCombo.id} failed for client route ${clientRoute}: ${routingResult.error}`);
         }
       }
     }

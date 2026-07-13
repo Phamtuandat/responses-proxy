@@ -3496,9 +3496,17 @@ const modelComboRoundRobinCounters = new Map<string, number>();
 // Returns null if no such combo exists or it has no models.
 function pickFromModelCombo(
   idOrName: string,
-): { providerId: string | null; model: string; comboId: string; comboName: string } | null {
-  const combo = modelComboRepository.getById(idOrName) || modelComboRepository.getByName(idOrName);
+): { providerId: string | null; model: string; comboId: string; comboName: string; matchedBy: "id" | "name" } | null {
+  // Lookup by id first (combo ids are UUIDs, so no collision with model names),
+  // then by name. NOTE: a combo NAME shares the model-id namespace — naming a combo
+  // after a real model id (e.g. "gpt-4o") will shadow that model for requests that
+  // reach this resolver. The rewrite is always surfaced via the x-proxy-model-combo
+  // response header and re-validated downstream through providerHint, so it cannot
+  // escalate provider access; callers should still avoid model-id combo names.
+  const byId = modelComboRepository.getById(idOrName);
+  const combo = byId ?? modelComboRepository.getByName(idOrName);
   if (!combo) return null;
+  const matchedBy: "id" | "name" = byId ? "id" : "name";
   const models = combo.models.filter((m) => typeof m === "string" && m.trim());
   if (models.length === 0) return null;
 
@@ -3513,7 +3521,7 @@ function pickFromModelCombo(
 
   const providers = providerRepository.listProviders().map((p) => ({ id: p.id, name: p.name }));
   const resolved = resolveProxyModel(providers, pick);
-  return { providerId: resolved.providerId, model: resolved.model, comboId: combo.id, comboName: combo.name };
+  return { providerId: resolved.providerId, model: resolved.model, comboId: combo.id, comboName: combo.name, matchedBy };
 }
 
 // Resolve a model combo to a concrete { providerId, model } pick.
@@ -4148,6 +4156,14 @@ async function handleResponsesRequest(
         providerHint.providerId = comboPick.providerId;
       }
       reply.header("x-proxy-model-combo", comboPick.comboName);
+      // Surface a name-matched combo so an operator can spot a combo name that
+      // shadows a real model id (id matches are unambiguous UUIDs).
+      if (comboPick.matchedBy === "name") {
+        request.log.info(
+          { requestId, requestedModel, comboId: comboPick.comboId, comboName: comboPick.comboName },
+          "request model resolved to a model combo by name",
+        );
+      }
     }
   }
 
@@ -4186,9 +4202,14 @@ async function handleResponsesRequest(
   if (routingResult.fallbackCount !== undefined && routingResult.fallbackCount > 0) {
     reply.header("x-proxy-routing-fallbacks", routingResult.fallbackCount.toString());
   }
+  // A combo selection acquired an in-flight connection count inside the routing
+  // engine; release it on EVERY exit (Kiro branch, cache hit, throws, stream/JSON)
+  // via this finally. releaseConnection is a safe no-op when nothing was acquired
+  // (non-combo paths), so the unconditional release is correct for all requests.
+  try {
   if (selectedProvider.authMode === "kiro") {
     const kiroModelOverride = providerRepository.getModelOverride(clientRoute);
-    return handleKiroResponsesRequest({
+    return await handleKiroResponsesRequest({
       reply,
       logger: request.log,
       requestId,
@@ -4430,7 +4451,6 @@ async function handleResponsesRequest(
         Date.now() - startedAt,
         false // not an error
       );
-      routingEngine.releaseConnection(selectedProvider.id);
 
       request.log.info(
         {
@@ -4610,7 +4630,6 @@ async function handleResponsesRequest(
       Date.now() - startedAt,
       false // not an error
     );
-    routingEngine.releaseConnection(selectedProvider.id);
 
     reply.send(payload);
   } catch (error) {
@@ -4657,7 +4676,6 @@ async function handleResponsesRequest(
       Date.now() - startedAt,
       true // is an error
     );
-    routingEngine.releaseConnection(selectedProvider.id);
     const resolvedError = resolveProxyError({
       statusCode,
       message: error instanceof Error ? error.message : "Unknown proxy error",
@@ -4685,6 +4703,11 @@ async function handleResponsesRequest(
     reply.header("x-proxy-error-code", resolvedError.errorCode);
     reply.header("x-proxy-retryable", resolvedError.retryable ? "1" : "0");
     return reply.code(statusCode).send(resolvedError.envelope);
+  }
+  } finally {
+    // Balance the acquireConnection done during combo selection. No-op when the
+    // request did not go through a combo (nothing was acquired).
+    routingEngine.releaseConnection(selectedProvider.id);
   }
 }
 

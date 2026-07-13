@@ -452,6 +452,12 @@ export const routerFunctionalNavGroups: FunctionalNavGroup[] = [
         description: "Manage AI provider connections"
       },
       {
+        route: "clients",
+        label: "Client Routes",
+        icon: ClientsIcon,
+        description: "Bind client API keys to providers and model overrides"
+      },
+      {
         route: "combos",
         label: "Combos",
         icon: CombosIcon,

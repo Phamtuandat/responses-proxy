@@ -55,6 +55,8 @@ export type AccountStatusResolver = (
 export class RoutingEngine {
   /** Live in-flight request counts per provider, for least-connections balancing. */
   private readonly activeConnections = new Map<string, number>();
+  /** Monotonic round-robin counters keyed by `${comboId}:${tierName}`. */
+  private readonly roundRobinCounters = new Map<string, number>();
   /** Optional real account-status source (wired to ProviderHealthService). */
   private accountStatusResolver?: AccountStatusResolver;
 
@@ -121,12 +123,15 @@ export class RoutingEngine {
         // Get eligible providers for this tier
         const eligibleProviders = await this.getEligibleProviders(tier, request);
 
-        if (eligibleProviders.length > 0) {
-          // Select provider based on load balancing strategy
+        const hadEligibleProviders = eligibleProviders.length > 0;
+        if (hadEligibleProviders) {
+          // Select provider based on load balancing strategy. The rotation key
+          // scopes round-robin state to this combo+tier so counters don't collide.
           const selectedProvider = await this.selectFromTier(
             eligibleProviders,
             combo.policies.loadBalancing,
-            request
+            request,
+            `${combo.id}:${tier.name}`
           );
 
           if (selectedProvider) {
@@ -143,10 +148,13 @@ export class RoutingEngine {
           }
         }
 
-        // If this isn't the last tier, wait for fallback delay
+        // Move on to the next tier. Only pay the configured fallback delay when
+        // this tier actually had eligible providers but selection failed (e.g. a
+        // rate-limited tier we want to back off from) — an empty/misconfigured
+        // tier should fall through immediately, not inject latency.
         if (tierIndex < enabledTiers.length - 1) {
           fallbackCount++;
-          if (tier.fallbackDelay > 0) {
+          if (hadEligibleProviders && tier.fallbackDelay > 0) {
             await new Promise(resolve => setTimeout(resolve, tier.fallbackDelay));
           }
         }
@@ -217,7 +225,8 @@ export class RoutingEngine {
   private async selectFromTier(
     eligibleProviders: EligibleProvider[],
     strategy: RoutingCombo['policies']['loadBalancing'],
-    request: RoutingRequest
+    request: RoutingRequest,
+    rotationKey: string
   ): Promise<EligibleProvider | null> {
     if (eligibleProviders.length === 0) {
       return null;
@@ -238,7 +247,7 @@ export class RoutingEngine {
         return this.selectByCost(eligibleProviders);
 
       case 'round_robin':
-        return this.selectRoundRobin(eligibleProviders, request);
+        return this.selectRoundRobin(eligibleProviders, rotationKey);
 
       case 'least_connections':
         return this.selectLeastConnections(eligibleProviders);
@@ -504,10 +513,13 @@ export class RoutingEngine {
     return 2;
   }
 
-  private selectRoundRobin(providers: EligibleProvider[], request: RoutingRequest): EligibleProvider {
-    // Simple round-robin based on request hash
-    const hash = this.hashString(request.route + (request.clientRoute || ''));
-    const index = hash % providers.length;
+  private selectRoundRobin(providers: EligibleProvider[], rotationKey: string): EligibleProvider {
+    // True round-robin: advance a per-(combo,tier) counter each call so successive
+    // requests cycle through the eligible providers evenly, rather than hashing the
+    // route (which pins every request for a route to one provider).
+    const current = this.roundRobinCounters.get(rotationKey) ?? 0;
+    const index = current % providers.length;
+    this.roundRobinCounters.set(rotationKey, current + 1);
     return providers[index];
   }
 
@@ -531,16 +543,6 @@ export class RoutingEngine {
   private selectRandom(providers: EligibleProvider[]): EligibleProvider {
     const index = Math.floor(Math.random() * providers.length);
     return providers[index];
-  }
-
-  private hashString(str: string): number {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32-bit integer
-    }
-    return Math.abs(hash);
   }
 
   /**

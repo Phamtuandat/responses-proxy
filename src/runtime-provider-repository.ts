@@ -572,6 +572,11 @@ export class RuntimeProviderRepository {
     return this.getClientTokenUsage(clientRoute, now);
   }
 
+  /**
+   * Resolve a client API key to its route. Invariant: a key belongs to at most one
+   * route (enforced by ensureClientRouteApiKeysUnique on write), so the first match
+   * is the only match — the iteration order does not affect correctness.
+   */
   findClientRouteByApiKey(apiKey?: string): ClientRouteKey | undefined {
     const normalizedApiKey = typeof apiKey === "string" ? apiKey.trim() : "";
     if (!normalizedApiKey) {
@@ -651,6 +656,7 @@ export class RuntimeProviderRepository {
   setClientRouteApiKeys(client: ClientRouteKey, apiKeys?: string[]): string[] {
     const routeKey = normalizeClientRouteKey(client);
     const normalized = normalizeApiKeys(apiKeys ?? []);
+    this.ensureClientRouteApiKeysUnique(routeKey, normalized);
     if (normalized.length > 0) {
       this.clientRouteApiKeys[routeKey] = normalized;
     } else {
@@ -658,6 +664,35 @@ export class RuntimeProviderRepository {
     }
     this.persistRuntimeState();
     return this.getClientRouteApiKeys(routeKey);
+  }
+
+  /**
+   * A client-route API key must resolve to exactly one route, and must not collide
+   * with a provider API key (which routes differently, via findProvidersByAccessKey).
+   * Reject either collision so key → route → provider stays deterministic.
+   */
+  private ensureClientRouteApiKeysUnique(routeKey: string, apiKeys: string[]): void {
+    for (const apiKey of apiKeys) {
+      for (const [otherRoute, keys] of Object.entries(this.clientRouteApiKeys)) {
+        if (otherRoute !== routeKey && keys.includes(apiKey)) {
+          throw new RuntimeProviderError(409, {
+            type: "validation_error",
+            code: "CLIENT_ROUTE_API_KEY_ALREADY_EXISTS",
+            message: `A client API key is already assigned to the "${otherRoute}" route`,
+          });
+        }
+      }
+      const providerWithKey = this.providerPresets.find((provider) =>
+        provider.providerApiKeys.includes(apiKey),
+      );
+      if (providerWithKey) {
+        throw new RuntimeProviderError(409, {
+          type: "validation_error",
+          code: "CLIENT_ROUTE_API_KEY_CONFLICTS_PROVIDER",
+          message: `This key is already a provider API key for "${providerWithKey.name}"; use a distinct client API key`,
+        });
+      }
+    }
   }
 
   addClientRoute(client: ClientRouteKey, providerId?: string): string {
@@ -669,7 +704,11 @@ export class RuntimeProviderRepository {
         message: "Client route already exists",
       });
     }
-    return this.setClientRoute(routeKey, providerId || this.activeProviderId);
+    // Do not silently copy the active provider into the new route. When no
+    // provider is chosen the route stays unbound and falls through to the active
+    // provider at request time (getProviderIdForClient), which the UI can show as
+    // "uses active/default" instead of pinning to whatever happens to be active now.
+    return this.setClientRoute(routeKey, providerId);
   }
 
   deleteClientRoute(client: ClientRouteKey): void {
@@ -719,9 +758,10 @@ export class RuntimeProviderRepository {
   }
 
   private resolveClientRouteApiKeys(value?: ClientRouteApiKeyMap): ClientRouteApiKeyMap {
-    const next = sanitizeClientRouteApiKeys(value);
-    delete next.default;
-    return next;
+    // Keep keys bound to the `default` route: they are persisted to the DB
+    // (persistRuntimeState) and resolve like any other route, so dropping them
+    // on load silently broke default-route routing across restarts.
+    return sanitizeClientRouteApiKeys(value);
   }
 
   listProviders(): RuntimeProviderPreset[] {

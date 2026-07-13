@@ -1342,3 +1342,190 @@ test("hides system-managed providers from CRUD list while keeping client selecto
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+function clientKeyCaps(): RuntimeProviderPreset["capabilities"] {
+  return {
+    usageCheckEnabled: false,
+    stripMaxOutputTokens: false,
+    requestParameterPolicy: {},
+    sanitizeReasoningSummary: false,
+    stripModelPrefixes: [],
+  };
+}
+
+function twoProviderRepo(dbFile: string, legacyStateFile: string) {
+  return RuntimeProviderRepository.create({
+    dbFile,
+    legacyStateFile,
+    baseProviders: [
+      {
+        id: "provider-a",
+        name: "provider-a",
+        baseUrl: "https://provider-a.example/v1",
+        responsesUrl: "https://provider-a.example/v1/responses",
+        providerApiKeys: ["provider-a-key"],
+        clientApiKeys: [],
+        capabilities: clientKeyCaps(),
+      },
+      {
+        id: "provider-b",
+        name: "provider-b",
+        baseUrl: "https://provider-b.example/v1",
+        responsesUrl: "https://provider-b.example/v1/responses",
+        providerApiKeys: ["provider-b-key"],
+        clientApiKeys: [],
+        capabilities: clientKeyCaps(),
+      },
+    ],
+  });
+}
+
+test("client API key bound to the default route survives a reload", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await twoProviderRepo(dbFile, legacyStateFile);
+    repository.setClientRoute("default", "provider-a");
+    repository.setClientRouteApiKeys("default", ["sk-default-client"]);
+
+    assert.equal(repository.findClientRouteByApiKey("sk-default-client"), "default");
+
+    const reloaded = await RuntimeProviderRepository.create({
+      dbFile,
+      legacyStateFile,
+      baseProviders: [],
+    });
+
+    // Regression: default-route keys used to be dropped on load.
+    assert.equal(reloaded.findClientRouteByApiKey("sk-default-client"), "default");
+    assert.deepEqual(reloaded.getClientRouteApiKeys("default"), ["sk-default-client"]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("two client keys route to their own providers", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await twoProviderRepo(dbFile, legacyStateFile);
+    repository.setClientRoute("route-a", "provider-a");
+    repository.setClientRouteApiKeys("route-a", ["sk-a"]);
+    repository.setClientRoute("route-b", "provider-b");
+    repository.setClientRouteApiKeys("route-b", ["sk-b"]);
+
+    assert.deepEqual(
+      repository.findProvidersByAccessKey("sk-a").map((p) => p.id),
+      ["provider-a"],
+    );
+    assert.deepEqual(
+      repository.findProvidersByAccessKey("sk-b").map((p) => p.id),
+      ["provider-b"],
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("rejects a client key already assigned to another route", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await twoProviderRepo(dbFile, legacyStateFile);
+    repository.setClientRoute("route-a", "provider-a");
+    repository.setClientRouteApiKeys("route-a", ["sk-shared"]);
+    repository.setClientRoute("route-b", "provider-b");
+
+    assert.throws(
+      () => repository.setClientRouteApiKeys("route-b", ["sk-shared"]),
+      (error: unknown) =>
+        error instanceof Error &&
+        (error as { body?: { code?: string } }).body?.code === "CLIENT_ROUTE_API_KEY_ALREADY_EXISTS",
+    );
+    // The original binding is untouched.
+    assert.equal(repository.findClientRouteByApiKey("sk-shared"), "route-a");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("rejects a client key that collides with a provider API key", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await twoProviderRepo(dbFile, legacyStateFile);
+    repository.setClientRoute("route-a", "provider-a");
+
+    assert.throws(
+      () => repository.setClientRouteApiKeys("route-a", ["provider-b-key"]),
+      (error: unknown) =>
+        error instanceof Error &&
+        (error as { body?: { code?: string } }).body?.code === "CLIENT_ROUTE_API_KEY_CONFLICTS_PROVIDER",
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("re-assigning the same key to the same route is allowed (idempotent)", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await twoProviderRepo(dbFile, legacyStateFile);
+    repository.setClientRoute("route-a", "provider-a");
+    repository.setClientRouteApiKeys("route-a", ["sk-a"]);
+    // Same route + same key must not trip the cross-route guard.
+    assert.deepEqual(repository.setClientRouteApiKeys("route-a", ["sk-a", "sk-a2"]), ["sk-a", "sk-a2"]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("addClientRoute without a provider does not pin the active provider", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await twoProviderRepo(dbFile, legacyStateFile);
+    // provider-a is active (first provider). A new route with no explicit provider
+    // must not copy it into the stored route binding. Mirror the /api/clients flow,
+    // which also assigns a key so the route is registered.
+    repository.addClientRoute("route-x");
+    repository.setClientRouteApiKeys("route-x", ["sk-x"]);
+    const view = repository.getClientRoutesForUi().find((r) => r.key === "route-x");
+    assert.ok(view);
+    // Unbound: falls through to the active provider at request time, but the stored
+    // route does not pin provider-a.
+    assert.equal(view.providerId, null);
+    assert.equal(repository.getProviderIdForClient("route-x"), "provider-a");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("addClientRoute with an explicit provider still binds it", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "responses-proxy-provider-repo-"));
+  const dbFile = path.join(tempDir, "app.sqlite");
+  const legacyStateFile = path.join(tempDir, "providers.json");
+
+  try {
+    const repository = await twoProviderRepo(dbFile, legacyStateFile);
+    repository.addClientRoute("route-y", "provider-b");
+    const view = repository.getClientRoutesForUi().find((r) => r.key === "route-y");
+    assert.ok(view);
+    assert.equal(view.providerId, "provider-b");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});

@@ -458,8 +458,10 @@ export class RoutingComboRepository {
 
   // Get default combo
   async getDefaultCombo(): Promise<RoutingCombo | null> {
+    // Only an ACTIVE default combo should be used for routing. Filtering here
+    // (not just at the call site) keeps the getter honest for all callers.
     const row = this.db.prepare(`
-      SELECT id FROM routing_combos WHERE is_default = 1 LIMIT 1
+      SELECT id FROM routing_combos WHERE is_default = 1 AND is_active = 1 LIMIT 1
     `).get() as { id: string } | undefined;
 
     if (!row) {
@@ -488,11 +490,18 @@ export class RoutingComboRepository {
       throw new Error(`Routing combo ${comboId} not found`);
     }
 
-    // Use INSERT OR REPLACE to handle both new assignments and updates
-    this.db.prepare(`
-      INSERT OR REPLACE INTO routing_combo_client_routes (combo_id, client_route)
-      VALUES (?, ?)
-    `).run(comboId, clientRoute);
+    // A client route maps to at most one combo. The table PK is
+    // (combo_id, client_route), so INSERT OR REPLACE would only replace the exact
+    // pair and leave any prior route→otherCombo row in place — making
+    // getClientRouteCombo nondeterministic. Clear existing rows for this route
+    // first, then insert, inside a transaction.
+    const replace = this.db.transaction((route: string, combo: string) => {
+      this.db.prepare(`DELETE FROM routing_combo_client_routes WHERE client_route = ?`).run(route);
+      this.db.prepare(
+        `INSERT INTO routing_combo_client_routes (combo_id, client_route) VALUES (?, ?)`,
+      ).run(combo, route);
+    });
+    replace(clientRoute, comboId);
   }
 
   // Remove routing combo assignment from client route

@@ -75,13 +75,10 @@ test("returns a clear error when a shared API key is ambiguous", () => {
     providers,
   });
 
-  assert.deepEqual(result, {
-    error: {
-      statusCode: 409,
-      type: "validation_error",
-      code: "AMBIGUOUS_PROVIDER_SELECTION",
-      message:
-        "This API key is assigned to multiple providers. Set metadata.provider_id, metadata.provider, x-provider-id, or x-provider-name.",
-    },
-  });
+  assert.ok("error" in result);
+  assert.equal(result.error.statusCode, 409);
+  assert.equal(result.error.type, "validation_error");
+  assert.equal(result.error.code, "AMBIGUOUS_PROVIDER_SELECTION");
+  // Message guides the user to bind the key to a client route.
+  assert.match(result.error.message, /client route/i);
 });

@@ -61,7 +61,7 @@ export function resolveProviderForRequest(args: {
         type: "authentication_error",
         code: "INVALID_ROUTING_API_KEY",
         message:
-          "Authorization Bearer token must match one of the configured client or provider API keys",
+          "Authorization Bearer token did not match any configured API key. Bind this key to a client route (with a provider) under Client Routes, or use a provider API key.",
       },
     };
   }
@@ -91,7 +91,7 @@ export function resolveProviderForRequest(args: {
       type: "validation_error",
       code: "AMBIGUOUS_PROVIDER_SELECTION",
       message:
-        "This API key is assigned to multiple providers. Set metadata.provider_id, metadata.provider, x-provider-id, or x-provider-name.",
+        "This API key is assigned to multiple providers. Disambiguate by binding the key to a single client route (Client Routes), or set metadata.provider_id, metadata.provider, x-provider-id, or x-provider-name.",
     },
   };
 }
