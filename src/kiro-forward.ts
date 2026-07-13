@@ -418,6 +418,7 @@ function openAnthropicStream(args: RunKiroAnthropicArgs): Promise<OpenedKiroStre
       buildCodeWhispererRequestFromTurns({
         turns: args.parsed.turns,
         modelId,
+        system: args.parsed.system,
         tools: args.parsed.tools,
         profileArn,
         maxTokens: args.parsed.maxTokens,

@@ -5,6 +5,7 @@ import {
   type CodeWhispererToolUse,
   type StructuredTurn,
   type ToolUseDelta,
+  type TurnImage,
   estimateTokens,
 } from "./kiro-codewhisperer.js";
 
@@ -21,6 +22,12 @@ const ANTHROPIC_MAX_TOKENS_DEFAULT = 32000;
 
 export type ParsedAnthropicRequest = {
   model: string;
+  /**
+   * The system prompt, preserved separately from the turns. The Kiro request
+   * builder folds this into the first user turn (CodeWhisperer has no system
+   * slot); the OpenAI builders map it to a `system` message / `instructions`.
+   */
+  system?: string;
   turns: StructuredTurn[];
   tools: CodeWhispererToolSpec[];
   maxTokens?: number;
@@ -83,11 +90,35 @@ type ParsedMessageContent = {
   text: string;
   toolUses: CodeWhispererToolUse[];
   toolResults: CodeWhispererToolResultInput[];
+  images: TurnImage[];
 };
+
+/**
+ * Convert an Anthropic `image` block's `source` into a URL usable by the OpenAI
+ * `image_url` content part: base64 sources become a `data:` URL, `url` sources
+ * pass through. Returns undefined for shapes we can't represent.
+ */
+function anthropicImageToUrl(source: unknown): string | undefined {
+  if (typeof source !== "object" || source === null) {
+    return undefined;
+  }
+  const record = source as Record<string, unknown>;
+  if (record.type === "url" && typeof record.url === "string") {
+    return record.url;
+  }
+  if (
+    record.type === "base64" &&
+    typeof record.media_type === "string" &&
+    typeof record.data === "string"
+  ) {
+    return `data:${record.media_type};base64,${record.data}`;
+  }
+  return undefined;
+}
 
 /** Parse an Anthropic message `content` (string or block array) into its parts. */
 function parseMessageContent(content: unknown): ParsedMessageContent {
-  const result: ParsedMessageContent = { text: "", toolUses: [], toolResults: [] };
+  const result: ParsedMessageContent = { text: "", toolUses: [], toolResults: [], images: [] };
   if (typeof content === "string") {
     result.text = content;
     return result;
@@ -107,6 +138,13 @@ function parseMessageContent(content: unknown): ParsedMessageContent {
           textParts.push(record.text);
         }
         break;
+      case "image": {
+        const url = anthropicImageToUrl(record.source);
+        if (url) {
+          result.images.push({ url });
+        }
+        break;
+      }
       case "tool_use":
         result.toolUses.push({
           toolUseId: readString(record.id),
@@ -125,7 +163,7 @@ function parseMessageContent(content: unknown): ParsedMessageContent {
         });
         break;
       default:
-        // image / other blocks are not translated in v1.
+        // other block types are not translated in v1.
         break;
     }
   }
@@ -189,27 +227,19 @@ export function parseAnthropicRequest(body: Record<string, unknown>): ParsedAnth
         role: "user",
         content: parsed.text,
         ...(parsed.toolResults.length > 0 ? { toolResults: parsed.toolResults } : {}),
+        ...(parsed.images.length > 0 ? { images: parsed.images } : {}),
       });
     }
   }
 
-  if (systemText) {
-    const firstUserIndex = turns.findIndex((turn) => turn.role === "user");
-    if (firstUserIndex >= 0) {
-      const existing = turns[firstUserIndex];
-      turns[firstUserIndex] = {
-        ...existing,
-        content: existing.content ? `${systemText}\n\n${existing.content}` : systemText,
-      } as StructuredTurn;
-    } else {
-      turns.unshift({ role: "user", content: systemText });
-    }
-  }
-
+  // Keep the system prompt separate from the turns. Each request builder decides
+  // how to place it: the Kiro builder folds it into the first user turn, the
+  // OpenAI builders emit a `system` message / `instructions`.
   const inputText = [systemText, ...turns.map((turn) => turn.content)].filter(Boolean).join("\n");
 
   return {
     model: readString(body.model),
+    ...(systemText ? { system: systemText } : {}),
     turns,
     tools: parseTools(body.tools),
     maxTokens: readNumber(body.max_tokens) ?? ANTHROPIC_MAX_TOKENS_DEFAULT,

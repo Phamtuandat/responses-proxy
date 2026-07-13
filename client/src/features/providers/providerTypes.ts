@@ -67,6 +67,9 @@ export interface Provider {
   models?: ProviderModel[];
   providerApiKeys?: string[];
 
+  /** Upstream wire format (custom providers). Drives API-compatibility badges. */
+  transportMode?: "responses" | "chat_completions" | "codewhisperer";
+
   riskNotice?: ProviderRiskNotice;
 
   createdAt?: string;

@@ -155,9 +155,23 @@ export type CodeWhispererToolUse = {
   input: Record<string, unknown>;
 };
 
+/**
+ * An image attached to a user turn. `url` is a value directly usable by the
+ * OpenAI `image_url` content part (a remote URL or a `data:` URL). The
+ * CodeWhisperer path ignores images; the OpenAI Chat/Responses builders emit them.
+ */
+export type TurnImage = {
+  url: string;
+};
+
 /** A structured conversation turn that may carry tool calls / tool results. */
 export type StructuredTurn =
-  | { role: "user"; content: string; toolResults?: CodeWhispererToolResultInput[] }
+  | {
+      role: "user";
+      content: string;
+      toolResults?: CodeWhispererToolResultInput[];
+      images?: TurnImage[];
+    }
   | { role: "assistant"; content: string; toolUses?: CodeWhispererToolUse[] };
 
 function readNumber(value: unknown): number | undefined {
@@ -370,6 +384,31 @@ function toolResultContext(results: CodeWhispererToolResultInput[]): Record<stri
 }
 
 /**
+ * Fold a system prompt into the turn list. CodeWhisperer has no separate system
+ * slot, so the prompt is prepended to the first user turn (or a fresh leading
+ * user turn when none exists). Returns the input unchanged when there is no system
+ * text. Does not mutate the input array.
+ */
+function foldSystemIntoTurns(turns: StructuredTurn[], system?: string): StructuredTurn[] {
+  const systemText = typeof system === "string" ? system.trim() : "";
+  if (!systemText) {
+    return turns;
+  }
+  const next = [...turns];
+  const firstUserIndex = next.findIndex((turn) => turn.role === "user");
+  if (firstUserIndex >= 0) {
+    const existing = next[firstUserIndex];
+    next[firstUserIndex] = {
+      ...existing,
+      content: existing.content ? `${systemText}\n\n${existing.content}` : systemText,
+    };
+  } else {
+    next.unshift({ role: "user", content: systemText });
+  }
+  return next;
+}
+
+/**
  * Lower-level builder shared by the Responses and Anthropic Messages paths. Takes
  * already-structured turns (optionally carrying tool calls / tool results), splits
  * out the final user turn as the current message, and assembles the CodeWhisperer
@@ -379,6 +418,7 @@ function toolResultContext(results: CodeWhispererToolResultInput[]): Record<stri
 export function buildCodeWhispererRequestFromTurns(args: {
   turns: StructuredTurn[];
   modelId: string;
+  system?: string;
   tools?: CodeWhispererToolSpec[];
   profileArn?: string | null;
   conversationId?: string;
@@ -387,7 +427,9 @@ export function buildCodeWhispererRequestFromTurns(args: {
   temperature?: number;
   topP?: number;
 }): CodeWhispererRequest {
-  const { turns } = args;
+  // CodeWhisperer has no system slot, so fold any system prompt into the first
+  // user turn (or prepend a user turn when there is none).
+  const turns = foldSystemIntoTurns(args.turns, args.system);
 
   // The final user turn is the "current" message; everything before is history.
   let lastUserIndex = -1;

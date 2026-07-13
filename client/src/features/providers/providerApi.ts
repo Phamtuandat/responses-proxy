@@ -236,6 +236,7 @@ export function mapBackendToFrontendProvider(
     accounts,
     quota,
     providerApiKeys: backend.providerApiKeys,
+    transportMode: backend.capabilities?.transportMode,
     models: [], // Will be populated separately if needed
     createdAt: backend.createdAt,
     updatedAt: backend.updatedAt

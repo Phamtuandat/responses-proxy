@@ -12,6 +12,19 @@ type ForwardJsonArgs = {
   onEvent?: (entry: Record<string, unknown>) => Promise<void> | void;
 };
 
+/**
+ * Optional stateful transform applied to each complete upstream SSE frame before
+ * it is written to the client. `frame` receives one upstream frame and returns
+ * zero or more client-facing frames (a translator may buffer and emit later).
+ * `finish` is called once the upstream stream ends, to flush any trailing frames.
+ * When omitted, upstream frames pass through unchanged. A transform bypasses the
+ * malformed-null-frame filter, so it owns framing entirely.
+ */
+export type SseFrameTransform = {
+  frame(frame: string): string[];
+  finish(): string[];
+};
+
 type ForwardSseArgs = ForwardJsonArgs & {
   responseRaw: NodeJS.WritableStream & {
     setHeader(name: string, value: string): void;
@@ -20,6 +33,7 @@ type ForwardSseArgs = ForwardJsonArgs & {
     destroy(error?: Error): void;
   };
   idleTimeoutMs: number;
+  transform?: SseFrameTransform;
 };
 
 export async function forwardJson({
@@ -76,6 +90,7 @@ export async function forwardSse({
   responseRaw,
   logger,
   onEvent,
+  transform,
 }: ForwardSseArgs): Promise<void> {
   const startedAt = Date.now();
   const controller = new AbortController();
@@ -141,6 +156,28 @@ export async function forwardSse({
     }, idleTimeoutMs);
   };
 
+  // Apply a single upstream frame: when a transform is configured it owns framing
+  // (translation to another format); otherwise we filter malformed null frames and
+  // capture usage as before. Returns the client-facing frames to write.
+  const applyFrame = (frame: string): string[] => {
+    if (transform) {
+      return transform.frame(frame);
+    }
+    const filtered = filterMalformedSseFrame(frame);
+    if (!filtered) {
+      filteredNullFrames += 1;
+      return [];
+    }
+    if (!usageCaptured) {
+      const usageEvent = extractSseUsageEvent(filtered, requestId);
+      if (usageEvent) {
+        usageCaptured = true;
+        void onEvent?.(usageEvent);
+      }
+    }
+    return [filtered];
+  };
+
   resetIdleTimer();
 
   try {
@@ -157,18 +194,11 @@ export async function forwardSse({
         sseBuffer = frames.remaining;
 
         for (const frame of frames.complete) {
-          const filtered = filterMalformedSseFrame(frame);
-          if (filtered) {
-            if (!usageCaptured) {
-              const usageEvent = extractSseUsageEvent(filtered, requestId);
-              if (usageEvent) {
-                usageCaptured = true;
-                await onEvent?.(usageEvent);
-              }
-            }
+          const outputs = applyFrame(frame);
+          for (const out of outputs) {
             if (firstForwardedAt === undefined) {
               firstForwardedAt = Date.now();
-              firstEventType = extractSseEventType(filtered);
+              firstEventType = extractSseEventType(out);
               logger.info(
                 {
                   requestId,
@@ -185,10 +215,8 @@ export async function forwardSse({
               });
             }
             forwardedFrames += 1;
-            forwardedBytes += Buffer.byteLength(filtered);
-            responseRaw.write(filtered);
-          } else {
-            filteredNullFrames += 1;
+            forwardedBytes += Buffer.byteLength(out);
+            responseRaw.write(out);
           }
         }
       } else {
@@ -196,18 +224,10 @@ export async function forwardSse({
       }
     }
     if (sseBuffer.length > 0) {
-      const filtered = filterMalformedSseFrame(sseBuffer);
-      if (filtered) {
-        if (!usageCaptured) {
-          const usageEvent = extractSseUsageEvent(filtered, requestId);
-          if (usageEvent) {
-            usageCaptured = true;
-            await onEvent?.(usageEvent);
-          }
-        }
+      for (const out of applyFrame(sseBuffer)) {
         if (firstForwardedAt === undefined) {
           firstForwardedAt = Date.now();
-          firstEventType = extractSseEventType(filtered);
+          firstEventType = extractSseEventType(out);
           logger.info(
             {
               requestId,
@@ -224,10 +244,15 @@ export async function forwardSse({
           });
         }
         forwardedFrames += 1;
-        forwardedBytes += Buffer.byteLength(filtered);
-        responseRaw.write(filtered);
-      } else {
-        filteredNullFrames += 1;
+        forwardedBytes += Buffer.byteLength(out);
+        responseRaw.write(out);
+      }
+    }
+    if (transform) {
+      for (const out of transform.finish()) {
+        forwardedFrames += 1;
+        forwardedBytes += Buffer.byteLength(out);
+        responseRaw.write(out);
       }
     }
     logger.info(

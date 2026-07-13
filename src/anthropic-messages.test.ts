@@ -9,15 +9,16 @@ import {
 } from "./anthropic-messages.js";
 import type { ToolUseDelta } from "./kiro-codewhisperer.js";
 
-test("parseAnthropicRequest folds system into the first user turn", () => {
+test("parseAnthropicRequest keeps system separate from the user turns", () => {
   const parsed = parseAnthropicRequest({
     model: "claude-sonnet-4",
     system: "You are helpful.",
     messages: [{ role: "user", content: "Hi" }],
   });
+  assert.equal(parsed.system, "You are helpful.");
   assert.equal(parsed.turns.length, 1);
   assert.equal(parsed.turns[0].role, "user");
-  assert.equal(parsed.turns[0].content, "You are helpful.\n\nHi");
+  assert.equal(parsed.turns[0].content, "Hi");
   assert.equal(parsed.model, "claude-sonnet-4");
 });
 
@@ -30,7 +31,35 @@ test("parseAnthropicRequest handles system as text-block array", () => {
     ],
     messages: [{ role: "user", content: "Q" }],
   });
-  assert.equal(parsed.turns[0].content, "Part one.\n\nPart two.\n\nQ");
+  assert.equal(parsed.system, "Part one.\n\nPart two.");
+  assert.equal(parsed.turns[0].content, "Q");
+});
+
+test("parseAnthropicRequest extracts image blocks onto the user turn", () => {
+  const parsed = parseAnthropicRequest({
+    model: "claude-sonnet-4",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "what is this?" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: "AAAA" },
+          },
+          { type: "image", source: { type: "url", url: "https://example.com/x.png" } },
+        ],
+      },
+    ],
+  });
+  const turn = parsed.turns[0];
+  assert.equal(turn.role, "user");
+  if (turn.role === "user") {
+    assert.equal(turn.content, "what is this?");
+    assert.equal(turn.images?.length, 2);
+    assert.equal(turn.images?.[0].url, "data:image/png;base64,AAAA");
+    assert.equal(turn.images?.[1].url, "https://example.com/x.png");
+  }
 });
 
 test("parseAnthropicRequest parses tools (input_schema → inputSchema)", () => {

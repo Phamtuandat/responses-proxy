@@ -12,6 +12,11 @@ import type {
   ProviderTier,
 } from "../features/providers/providerTypes";
 import {
+  TRANSPORT_LABELS,
+  clientApisForTransport,
+  normalizeTransportMode,
+} from "../features/providers/transportCompat";
+import {
   useProviders,
   useProviderTest,
 } from "../features/providers/providerHooks";
@@ -93,12 +98,16 @@ function SmallProviderCard({
   onToggle: () => void; 
   onClick: () => void; 
 }) {
-  const statusInfo = isDisabled 
+  const statusInfo = isDisabled
     ? { label: "Disabled", dotClass: "not_configured" }
     : getProviderStatus(provider);
   const gradient = getProviderGradient(provider.id);
   const initials = getProviderInitials(provider.displayName);
-  
+  // Custom providers expose a transport mode; surface what it serves so users know
+  // a single endpoint covers both OpenAI clients and Claude Code.
+  const transport = provider.tier === "custom" ? normalizeTransportMode(provider.transportMode) : null;
+  const servedApis = transport ? clientApisForTransport(transport) : [];
+
   return (
     <div className="provider-small-card" onClick={onClick}>
       <div className="provider-small-logo-container" style={{ background: gradient }}>
@@ -107,7 +116,7 @@ function SmallProviderCard({
       <div className="provider-small-info">
         <div className="provider-small-name-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-2)" }}>
           <h4 className="provider-small-name" title={provider.displayName}>{provider.displayName}</h4>
-          <div 
+          <div
             className={`custom-switch ${isDisabled ? 'off' : 'on'}`}
             onClick={(e) => {
               e.stopPropagation();
@@ -122,6 +131,18 @@ function SmallProviderCard({
           <span className={`provider-small-status-dot ${statusInfo.dotClass}`} />
           <span>{statusInfo.label}</span>
         </div>
+        {transport ? (
+          <div className="provider-small-compat" title={`Transport: ${TRANSPORT_LABELS[transport]}`}>
+            <span className="provider-transport-chip">{TRANSPORT_LABELS[transport]}</span>
+            <span className="provider-compat-chips">
+              {servedApis.map((api) => (
+                <span className="provider-compat-chip" key={api.endpoint} title={api.endpoint}>
+                  {api.label}
+                </span>
+              ))}
+            </span>
+          </div>
+        ) : null}
       </div>
     </div>
   );

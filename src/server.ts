@@ -38,7 +38,17 @@ import {
   buildCodexConfigFiles,
   buildCodexConfigSetupScript,
 } from "./codex-setup.js";
-import { buildUpstreamError, forwardJson, forwardSse } from "./forward.js";
+import {
+  buildUpstreamError,
+  forwardJson,
+  forwardSse,
+  type SseFrameTransform,
+} from "./forward.js";
+import {
+  ChatToResponsesStreamTranslator,
+  translateChatCompletionToResponsesJson,
+} from "./openai-translate.js";
+import { collectInputText } from "./kiro-codewhisperer.js";
 import {
   OPENAI_ORGANIZATION_USAGE_COMPLETIONS_URL,
   ProviderUsageLimitError,
@@ -106,6 +116,11 @@ import {
   forwardKiroAnthropicJson,
   forwardKiroAnthropicSse,
 } from "./kiro-forward.js";
+import {
+  GenericAnthropicUpstreamError,
+  forwardGenericAnthropicJson,
+  forwardGenericAnthropicSse,
+} from "./openai-anthropic-forward.js";
 import { fetchKiroUsage } from "./kiro-usage.js";
 import { consoleLogBuffer } from "./console-log-buffer.js";
 import {
@@ -3091,6 +3106,10 @@ app.post("/api/providers/:providerId/transport-mode", async (request, reply) => 
   const providerId = typeof params.providerId === "string" ? params.providerId.trim() : "";
   const body = request.body as { mode?: unknown } | undefined;
   const mode = typeof body?.mode === "string" ? body.mode.trim().toLowerCase() : "";
+  // Only the two user-selectable OpenAI transports are settable here. The third
+  // schema value, `codewhisperer`, is reserved for system-managed Kiro providers
+  // (it requires authMode `kiro` + a 9router token store) and is set at seed time,
+  // not via this endpoint.
   if (mode !== "responses" && mode !== "chat_completions") {
     return reply.code(400).send({
       error: {
@@ -4364,6 +4383,7 @@ async function handleResponsesRequest(
         providerId: activeProviderId,
         routingApiKey,
         body: normalized,
+        clientExpects: clientResponseFormatForRoute(routePath),
         responseRaw: reply.raw,
         logger: request.log,
         sessionLog,
@@ -4434,8 +4454,12 @@ async function handleResponsesRequest(
       return reply;
     }
 
+    // Scope the response cache by client format: the same provider+content can be
+    // served to a Responses client and a Chat client, and the stored payload is in
+    // the client's format, so the two must not share a cache entry.
+    const responseCacheScope = `${activeProviderId}#${clientResponseFormatForRoute(routePath)}`;
     if (config.RESPONSE_CACHE_ENABLED && traceContext.requestKey && !isStream) {
-      const cachedPayload = responseCacheStore.get(String(traceContext.requestKey), activeProviderId);
+      const cachedPayload = responseCacheStore.get(String(traceContext.requestKey), responseCacheScope);
       if (cachedPayload) {
         request.log.info(
           { requestId, requestKey: traceContext.requestKey },
@@ -4472,7 +4496,7 @@ async function handleResponsesRequest(
       });
     }
 
-    const { payload, target, upstreamStatus } = await runJsonRequestWithInflightDedupe(
+    const { payload: rawPayload, target, upstreamStatus } = await runJsonRequestWithInflightDedupe(
       dedupeKey,
       {
         requestId,
@@ -4486,6 +4510,21 @@ async function handleResponsesRequest(
       },
       dedupeEnabled,
     );
+    // A chat_completions provider returns Chat-shaped JSON; translate it back to
+    // Responses format when the client asked for Responses (`/v1/responses`).
+    const targetProvider = providerRepository.getProvider(target.name);
+    const payload =
+      targetProvider &&
+      (targetProvider.capabilities.transportMode ?? "responses") === "chat_completions" &&
+      clientResponseFormatForRoute(routePath) === "responses" &&
+      upstreamStatus === 200 &&
+      typeof rawPayload === "object" &&
+      rawPayload !== null
+        ? translateChatCompletionToResponsesJson(rawPayload, {
+            model: typeof normalized.model === "string" ? normalized.model : "",
+            inputText: collectInputText(normalized),
+          })
+        : rawPayload;
     if (
       config.RESPONSE_CACHE_ENABLED &&
       traceContext.requestKey &&
@@ -4497,7 +4536,7 @@ async function handleResponsesRequest(
       if (payloadStr.length <= config.RESPONSE_CACHE_MAX_PAYLOAD_BYTES) {
         responseCacheStore.set(
           String(traceContext.requestKey),
-          activeProviderId,
+          responseCacheScope,
           payload,
           config.RESPONSE_CACHE_TTL_MS,
         );
@@ -4761,17 +4800,7 @@ async function handleAnthropicMessagesRequest(
       .send(buildAnthropicError("authentication_error", routingResult.error.message));
   }
   const provider = routingResult.provider;
-  if (provider.authMode !== "kiro") {
-    reply.header("x-proxy-request-id", requestId);
-    return reply
-      .code(400)
-      .send(
-        buildAnthropicError(
-          "invalid_request_error",
-          "The /v1/messages endpoint is only available for the Kiro provider.",
-        ),
-      );
-  }
+  const isKiroProvider = provider.authMode === "kiro";
 
   const modelOverride = providerRepository.getModelOverride(clientRoute);
   const parsed = parseAnthropicRequest(modelOverride ? { ...body, model: modelOverride } : body);
@@ -4784,7 +4813,8 @@ async function handleAnthropicMessagesRequest(
   // Short-circuit Claude Code CLI housekeeping requests (title/warmup/count/
   // topic-naming) locally so they never reach the Kiro account — this is the
   // main driver of upstream 429 throttling. Mirrors 9router's bypass handler.
-  if (config.KIRO_CLI_BYPASS_ENABLED) {
+  // Kiro-only: generic providers are metered/paid differently and don't need it.
+  if (isKiroProvider && config.KIRO_CLI_BYPASS_ENABLED) {
     const userAgent = readHeaderString(request.headers["user-agent"]) ?? "";
     const bypass = detectAnthropicBypass(body, userAgent, {
       namingEnabled: config.KIRO_CLI_BYPASS_NAMING,
@@ -4817,7 +4847,7 @@ async function handleAnthropicMessagesRequest(
     }
   }
 
-  if (!kiroTokenStore) {
+  if (isKiroProvider && !kiroTokenStore) {
     reply.header("x-proxy-request-id", requestId);
     return reply
       .code(503)
@@ -4829,19 +4859,45 @@ async function handleAnthropicMessagesRequest(
       );
   }
 
+  // Generic (non-Kiro) providers speak OpenAI upstream; only Responses and Chat
+  // Completions transports can be translated to/from Anthropic Messages.
+  const transportMode = provider.capabilities.transportMode ?? "responses";
+  if (!isKiroProvider && transportMode !== "responses" && transportMode !== "chat_completions") {
+    reply.header("x-proxy-request-id", requestId);
+    return reply
+      .code(400)
+      .send(
+        buildAnthropicError(
+          "invalid_request_error",
+          `The /v1/messages endpoint cannot serve a provider with transport mode '${transportMode}'.`,
+        ),
+      );
+  }
+
   const isStream = parsed.stream;
   try {
     if (isStream) {
       reply.hijack();
-      const usage = await forwardKiroAnthropicSse({
-        store: kiroTokenStore,
-        provider,
-        config,
-        requestId,
-        parsed,
-        logger: request.log,
-        responseRaw: reply.raw,
-      });
+      const usage = isKiroProvider
+        ? await forwardKiroAnthropicSse({
+            store: kiroTokenStore!,
+            provider,
+            config,
+            requestId,
+            parsed,
+            logger: request.log,
+            responseRaw: reply.raw,
+          })
+        : await forwardGenericAnthropicSse({
+            transportMode,
+            target: await buildForwardTarget(provider),
+            parsed,
+            requestId,
+            logger: request.log,
+            idleTimeoutMs: config.STREAM_IDLE_TIMEOUT_MS,
+            requestTimeoutMs: config.REQUEST_TIMEOUT_MS,
+            responseRaw: reply.raw,
+          });
       recordClientTokenUsageFromPayload(clientRoute, usage);
       recordCustomerUsageFromPayload({
         billingRepository,
@@ -4850,19 +4906,29 @@ async function handleAnthropicMessagesRequest(
       });
       request.log.info(
         { requestId, clientRoute, provider: provider.id, totalMs: Date.now() - startedAt },
-        "kiro anthropic messages stream completed",
+        "anthropic messages stream completed",
       );
       return reply;
     }
 
-    const { payload, usage } = await forwardKiroAnthropicJson({
-      store: kiroTokenStore,
-      provider,
-      config,
-      requestId,
-      parsed,
-      logger: request.log,
-    });
+    const { payload, usage } = isKiroProvider
+      ? await forwardKiroAnthropicJson({
+          store: kiroTokenStore!,
+          provider,
+          config,
+          requestId,
+          parsed,
+          logger: request.log,
+        })
+      : await forwardGenericAnthropicJson({
+          transportMode,
+          target: await buildForwardTarget(provider),
+          parsed,
+          requestId,
+          logger: request.log,
+          idleTimeoutMs: config.STREAM_IDLE_TIMEOUT_MS,
+          requestTimeoutMs: config.REQUEST_TIMEOUT_MS,
+        });
     recordClientTokenUsageFromPayload(clientRoute, usage);
     recordCustomerUsageFromPayload({
       billingRepository,
@@ -4871,7 +4937,7 @@ async function handleAnthropicMessagesRequest(
     });
     request.log.info(
       { requestId, clientRoute, provider: provider.id, totalMs: Date.now() - startedAt },
-      "kiro anthropic messages JSON completed",
+      "anthropic messages JSON completed",
     );
     reply.header("x-proxy-request-id", requestId);
     reply.header("x-proxy-provider-id", provider.id);
@@ -4883,17 +4949,19 @@ async function handleAnthropicMessagesRequest(
         ? error.statusCode
         : error instanceof KiroUpstreamError
           ? error.statusCode
-          : 502;
+          : error instanceof GenericAnthropicUpstreamError
+            ? error.statusCode
+            : 502;
     const errorType =
       statusCode === 401 || statusCode === 403
         ? "authentication_error"
         : statusCode >= 500
           ? "api_error"
           : "invalid_request_error";
-    const message = error instanceof Error ? error.message : "Unknown Kiro proxy error";
+    const message = error instanceof Error ? error.message : "Unknown proxy error";
     request.log.error(
       { err: error, requestId, clientRoute, provider: provider.id, totalMs: Date.now() - startedAt },
-      "kiro anthropic messages request failed",
+      "anthropic messages request failed",
     );
 
     if (isStream) {
@@ -5861,10 +5929,75 @@ async function buildForwardTarget(provider: RuntimeProviderPreset): Promise<Forw
     };
   }
 
+  const apiKey = getDefaultProviderApiKey(provider);
+  // Fail fast when an api_key provider pointed at a remote host has no key: we'd
+  // otherwise forward with no Authorization header and leak the request while
+  // getting an opaque upstream 401. Local providers (ollama/LM Studio) legitimately
+  // need no key, so loopback/localhost hosts are exempt.
+  if (provider.authMode === "api_key" && !apiKey && isRemoteUpstreamHost(transportUrl)) {
+    throw new RuntimeProviderError(401, {
+      type: "authentication_error",
+      code: "PROVIDER_API_KEY_MISSING",
+      message: `Provider '${provider.id}' has no API key configured; refusing to forward unauthenticated to a remote upstream.`,
+    });
+  }
+
   return {
     name: provider.id,
     url: transportUrl,
-    apiKey: getDefaultProviderApiKey(provider),
+    apiKey,
+  };
+}
+
+/** True when the URL's host is not a loopback/localhost address. */
+function isRemoteUpstreamHost(url: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+  return !(
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]" ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".localhost")
+  );
+}
+
+/** The response format a data-plane client expects, inferred from the route. */
+type ClientResponseFormat = "responses" | "chat_completions";
+
+function clientResponseFormatForRoute(routePath: string): ClientResponseFormat {
+  return routePath === "/v1/chat/completions" ? "chat_completions" : "responses";
+}
+
+/**
+ * When a `chat_completions` provider serves a client that expects Responses
+ * format, we must translate the upstream Chat response back. Returns a stateful
+ * SSE transform, or undefined when the upstream already matches the client format
+ * (pass-through). The `/v1/chat/completions` → chat upstream case needs no work.
+ */
+function buildResponseTranslationTransform(
+  provider: RuntimeProviderPreset,
+  clientExpects: ClientResponseFormat,
+  body: Record<string, unknown>,
+): SseFrameTransform | undefined {
+  const transportMode = provider.capabilities.transportMode ?? "responses";
+  if (transportMode !== "chat_completions" || clientExpects !== "responses") {
+    return undefined;
+  }
+  const model = typeof body.model === "string" ? body.model : "";
+  const translator = new ChatToResponsesStreamTranslator(
+    model,
+    collectInputText(body),
+    Math.floor(Date.now() / 1000),
+  );
+  return {
+    frame: (frame) => translator.pushFrame(frame),
+    finish: () => translator.finish(),
   };
 }
 
@@ -6129,6 +6262,7 @@ async function forwardSseWithFallback(args: {
   providerId?: string;
   routingApiKey?: string;
   body: Record<string, unknown>;
+  clientExpects: ClientResponseFormat;
   responseRaw: NodeJS.WritableStream & {
     headersSent?: boolean;
     setHeader(name: string, value: string): void;
@@ -6154,6 +6288,7 @@ async function forwardSseWithFallback(args: {
     extendHermesSummaryTimeout: config.HERMES_EXTEND_SUMMARY_TIMEOUT,
   });
 
+  const primaryProvider = providerRepository.getProvider(primaryTarget.name);
   try {
     await forwardSse({
       requestId: args.requestId,
@@ -6165,6 +6300,9 @@ async function forwardSseWithFallback(args: {
       idleTimeoutMs: config.STREAM_IDLE_TIMEOUT_MS,
       responseRaw: args.responseRaw,
       logger: args.logger,
+      transform: primaryProvider
+        ? buildResponseTranslationTransform(primaryProvider, args.clientExpects, args.body)
+        : undefined,
       onEvent: (entry) => {
         args.onEvent?.(entry);
         return args.sessionLog.write({
@@ -6187,16 +6325,22 @@ async function forwardSseWithFallback(args: {
 
     await logFallbackAttempt(args, "request", error);
     const fallbackTarget = await buildForwardTarget(fallbackProvider);
+    const fallbackBody = rewriteBodyForProvider(args.body, fallbackProvider);
     await forwardSse({
       requestId: args.requestId,
       url: fallbackTarget.url,
-      body: rewriteBodyForProvider(args.body, fallbackProvider),
+      body: fallbackBody,
       apiKey: fallbackTarget.apiKey,
       headers: fallbackTarget.headers,
       timeoutMs,
       idleTimeoutMs: config.STREAM_IDLE_TIMEOUT_MS,
       responseRaw: args.responseRaw,
       logger: args.logger,
+      transform: buildResponseTranslationTransform(
+        fallbackProvider,
+        args.clientExpects,
+        fallbackBody,
+      ),
       onEvent: (entry) => {
         args.onEvent?.(entry);
         return args.sessionLog.write({

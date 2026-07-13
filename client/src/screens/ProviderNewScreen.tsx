@@ -6,40 +6,44 @@ import { ProviderForm } from "../components/ProviderForm";
 import type { ProviderFormData } from "../components/ProviderForm";
 import { ProvidersIcon } from "../components/icons";
 
-type ProviderPreset = "anthropic" | "openai";
+type ProviderPreset = "openai_responses" | "openai_chat";
+
+const BASE_PRESET: Partial<ProviderFormData> = {
+  name: "",
+  baseUrl: "",
+  authMode: "api_key",
+  chatgptAccountId: "",
+  providerApiKeysText: "",
+};
 
 const PRESETS: Record<
   ProviderPreset,
-  { label: string; description: string; initialData: Partial<ProviderFormData> }
+  {
+    label: string;
+    tagline: string;
+    description: string;
+    examples: string;
+    initialData: Partial<ProviderFormData>;
+  }
 > = {
-  anthropic: {
-    label: "Anthropic Compatible",
-    description: "Claude-style upstream using the Responses API transport.",
-    initialData: {
-      name: "",
-      baseUrl: "",
-      authMode: "api_key",
-      chatgptAccountId: "",
-      providerApiKeysText: "",
-      transportMode: "responses",
-    },
+  openai_responses: {
+    label: "Responses API",
+    tagline: "Modern OpenAI protocol",
+    description: "For upstreams that speak the OpenAI Responses API (Codex-style, GPT-5).",
+    examples: "OpenAI, Azure OpenAI, LiteLLM",
+    initialData: { ...BASE_PRESET, transportMode: "responses" },
   },
-  openai: {
-    label: "OpenAI Compatible",
-    description: "OpenAI-style upstream using the Chat Completions transport.",
-    initialData: {
-      name: "",
-      baseUrl: "",
-      authMode: "api_key",
-      chatgptAccountId: "",
-      providerApiKeysText: "",
-      transportMode: "chat_completions",
-    },
+  openai_chat: {
+    label: "Chat Completions",
+    tagline: "Classic OpenAI protocol",
+    description: "For upstreams that speak the OpenAI Chat Completions API. Most compatible.",
+    examples: "OpenRouter, DeepSeek, Groq, vLLM, Ollama",
+    initialData: { ...BASE_PRESET, transportMode: "chat_completions" },
   },
 };
 
 export function ProviderNewScreen() {
-  const [preset, setPreset] = useState<ProviderPreset>("openai");
+  const [preset, setPreset] = useState<ProviderPreset>("openai_chat");
 
   const initialData = useMemo(() => PRESETS[preset].initialData, [preset]);
 
@@ -87,12 +91,13 @@ export function ProviderNewScreen() {
 
       <div className="provider-new-layout">
         <SurfaceCard
-          title="Provider Type"
-          description="Pick the upstream protocol this provider speaks"
+          title="Upstream protocol"
+          description="Pick the wire format your upstream speaks. Either way, the proxy translates so this provider serves OpenAI clients and Claude Code."
         >
           <div className="provider-preset-grid">
             {(Object.keys(PRESETS) as ProviderPreset[]).map((key) => {
               const active = preset === key;
+              const item = PRESETS[key];
               return (
                 <button
                   key={key}
@@ -101,8 +106,12 @@ export function ProviderNewScreen() {
                   onClick={() => setPreset(key)}
                   aria-pressed={active}
                 >
-                  <span className="provider-preset-name">{PRESETS[key].label}</span>
-                  <span className="provider-preset-desc">{PRESETS[key].description}</span>
+                  <span className="provider-preset-head">
+                    <span className="provider-preset-name">{item.label}</span>
+                    <span className="provider-preset-tag">{item.tagline}</span>
+                  </span>
+                  <span className="provider-preset-desc">{item.description}</span>
+                  <span className="provider-preset-examples">e.g. {item.examples}</span>
                 </button>
               );
             })}
