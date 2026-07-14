@@ -22,6 +22,7 @@
     "kiro:import:json:prod": "node dist/kiro-json-import-cli.js",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test $(find src -name '*.test.ts' -print)",
+    "test:ci": "tsx --test --test-concurrency=1 $(find src -name '*.test.ts' -print)",
     "app:install": "./scripts/install.sh",
     "app:start": "./scripts/start.sh",
     "app:stop": "./scripts/stop.sh",

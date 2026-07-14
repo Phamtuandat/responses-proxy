@@ -45,8 +45,10 @@ jobs:
       - name: Typecheck
         run: npm run check
 
+      # Serial run: several suites boot a full Fastify app; on a 2-core runner the
+      # default parallel run causes resource contention and flaky billing 403s.
       - name: Test
-        run: npm test
+        run: npm run test:ci
 
       - name: Read package version
         id: pkg
