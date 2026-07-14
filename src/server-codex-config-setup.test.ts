@@ -21,8 +21,10 @@ process.env.LOG_LEVEL = "silent";
 process.env.RESPONSES_PROXY_DEFAULT_MODEL = "gpt-5.4";
 process.env.BOT_PUBLIC_RESPONSES_BASE_URL = "https://proxy.example.com/v1";
 
-const { app } = await import("./server.js");
-
+// Seed billing/customer data BEFORE importing the server. The server opens its
+// own SQLite connection to this file at import time; seeding first guarantees the
+// customer key + entitlement are committed and visible to that connection on any
+// filesystem (the prior order was flaky on slow CI runners → 403).
 const billing = BillingRepository.create(dbFile);
 const customerKeys = CustomerKeyRepository.create(dbFile);
 const workspaces = CustomerWorkspaceRepository.create(dbFile);
@@ -53,6 +55,8 @@ const { apiKey } = customerKeys.createKey({
   clientRoute: "default",
   apiKey: "sk-customer-test-secret",
 });
+
+const { app } = await import("./server.js");
 
 test.after(async () => {
   await app.close();
