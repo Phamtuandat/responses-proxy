@@ -13,10 +13,19 @@ const dbFile = path.join(tempDir, "app.sqlite");
 process.env.RESPONSES_PROXY_DISABLE_LISTEN = "true";
 process.env.APP_DB_PATH = dbFile;
 process.env.CUSTOMER_KEY_DB_PATH = dbFile;
-process.env.UPSTREAM_BASE_URL = "https://upstream.example/v1";
+// Isolate the session-log dir to the temp dir: the server derives its legacy
+// state file as `${SESSION_LOG_DIR}/../runtime-state.json`, and without this it
+// would load the developer's real logs/runtime-state.json (gitignored, absent on
+// CI) — seeding providers locally but not on CI, which flipped the default-route
+// binding and caused a CI-only 403 (CUSTOMER_CLIENT_ROUTE_UNBOUND).
+process.env.SESSION_LOG_DIR = path.join(tempDir, "sessions");
+// A non-placeholder upstream host so a builtin provider is seeded and bound to the
+// default route (reserved .example/.invalid/.test hosts seed zero providers).
+process.env.UPSTREAM_BASE_URL = "https://upstream.internal/v1";
 process.env.UPSTREAM_API_KEY = "provider-key";
 process.env.PROVIDER_USAGE_CHECK_ENABLED = "false";
 process.env.CHATGPT_OAUTH_ENABLED = "false";
+process.env.KIRO_ENABLED = "false";
 process.env.LOG_LEVEL = "silent";
 process.env.RESPONSES_PROXY_DEFAULT_MODEL = "gpt-5.4";
 process.env.BOT_PUBLIC_RESPONSES_BASE_URL = "https://proxy.example.com/v1";
