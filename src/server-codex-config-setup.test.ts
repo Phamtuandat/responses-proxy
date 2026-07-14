@@ -82,7 +82,13 @@ test("customer Codex setup script returns patch script with customer key and pub
     },
   });
 
-  assert.equal(response.statusCode, 200);
+  // Diagnostic: on a non-200, surface the error code + body so a CI-only failure
+  // reveals which branch fired (missing key vs entitlement/token-lot).
+  assert.equal(
+    response.statusCode,
+    200,
+    `expected 200, got ${response.statusCode}: ${response.body}`,
+  );
   assert.match(response.headers["content-type"] ?? "", /^text\/x-shellscript/);
   assert.equal(response.headers["cache-control"], "no-store");
   assert.match(response.body, /model = "gpt-5\.4"/);
